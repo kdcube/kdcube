@@ -159,3 +159,19 @@ async def test_the_published_event_clears_exactly_that_entry_through_the_proc_li
     assert config_cache.get_secret_cache(mine) == (False, None)
     assert config_cache.get_secret_cache(other) == (True, "kept")
     config_cache.clear_secret_cache()
+
+
+@pytest.mark.asyncio
+async def test_a_bundle_less_user_secret_is_broadcast_with_an_empty_bundle(wired, monkeypatch):
+    manager, redis = wired
+    monkeypatch.setattr(comm_ctx, "get_current_request_context", lambda: ExternalEventPayload(
+        routing=ExternalEventRouting(bundle_id="", session_id="s-1"),
+        actor=ExternalEventActor(tenant_id="ctx-tenant", project_id="ctx-project"),
+        user=ExternalEventUser(user_type="registered", user_id="user-1"),
+    ))
+    monkeypatch.setattr(sdk_config, "_resolve_current_bundle_id", lambda: None)
+    await sdk_config.set_user_secret("oauth.refresh", VALUE, bundle_id=None)
+    events = [event for _channel, event in redis.published]
+    assert [(e["scope"], e["bundle_id"], e["user_id"], e["keys"]) for e in events] == [
+        ("user", "", "user-1", ["users.user-1.secrets.oauth.refresh"])]
+    assert redis.deleted == []  # no per-bundle inventory projection

@@ -346,12 +346,11 @@ async def _publish_secret_write(
     Operator (2026-10-09): the per-process secret cache must not stay stale on a cloud deployment, and "in
     proc we have the config changes listener". The SDK write helpers now publish the same event the admin
     REST paths do (infra.secrets.projections.publish_bundle_secret_update: identifiers only, never a value),
-    so each process's config listener clears exactly that key. The write already succeeded: a missing
-    bundle id, Redis or publish failure never fails it and is logged once, without values.
+    so each process's config listener clears exactly that key (a bundle-less user key goes out with an empty
+    bundle_id). The write already succeeded: a Redis or publish failure never fails it and is logged once,
+    without values.
     """
     global _PUBLISH_FAILURE_LOGGED
-    if not bundle_id:
-        return
     try:
         from kdcube_ai_app.infra.redis.client import get_async_redis_client
         from kdcube_ai_app.infra.secrets.projections import (
@@ -363,14 +362,15 @@ async def _publish_secret_write(
         if not tenant or not project:
             return
         redis = get_async_redis_client(get_settings().REDIS_URL)
-        await invalidate_bundle_secret_inventory(
-            redis, tenant=tenant, project=project, bundle_id=bundle_id, user_id=user_id or None,
-        )
+        if bundle_id:  # the inventory projection is per bundle
+            await invalidate_bundle_secret_inventory(
+                redis, tenant=tenant, project=project, bundle_id=bundle_id, user_id=user_id or None,
+            )
         await publish_bundle_secret_update(
             redis,
             tenant=tenant,
             project=project,
-            bundle_id=bundle_id,
+            bundle_id=bundle_id or "",
             scope=scope,
             mode=mode,
             keys={key},
