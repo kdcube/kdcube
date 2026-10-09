@@ -6,7 +6,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 _RUNTIME_NAMESPACE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
@@ -304,17 +304,33 @@ def compose_environment(config: HostVaultRuntimeConfig) -> dict[str, str]:
     return values
 
 
-def runtime_compose_environment(assembly: Mapping[str, object]) -> dict[str, str]:
-    """W670 F1: the assembly's ``secrets.runtime`` folder and namespaces for Compose, on EVERY provider.
+CONTAINER_CONFIG_DIR = PurePosixPath("/config")
+DEFAULT_CONTAINER_RUNTIME_ROOT = CONTAINER_CONFIG_DIR / "secrets"
 
-    The secrets-file backend keeps runtime records in that folder (one private file per namespace); the
-    processors and the secrets service mount the host folder at the same path. Empty when not configured.
+
+def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_dir: str | Path) -> dict[str, str]:
+    """W670 K2: the runtime-secrets folder for Compose, on every provider.
+
+    Operator, 2026-10-09: the folder lives "in config folder. make the folder secrets". The container root is
+    ``secrets.runtime.root`` or, when absent, ``/config/secrets``; it must lie inside the container config
+    folder ``/config``. The host root is the matching folder under the host config folder (the descriptor's
+    location), never the container path. Processors already mount ``/config``; only the secrets service
+    binds the host root, at the container root.
     """
     runtime = _runtime_configuration(_mapping(assembly.get("secrets")))
-    root = str(runtime.get("runtime_root") or "")
+    container_root = PurePosixPath(str(runtime.get("runtime_root") or DEFAULT_CONTAINER_RUNTIME_ROOT))
+    try:
+        relative = container_root.relative_to(CONTAINER_CONFIG_DIR)
+    except ValueError:
+        relative = None
+    if relative is None or not relative.parts:
+        raise HostVaultConfigurationError("secrets.runtime.root must be a folder inside the config folder /config")
+    host_config = Path(host_config_dir).expanduser()
+    if not host_config.is_absolute():
+        raise HostVaultConfigurationError("the host config folder must be an absolute path")
     return {
-        "KDCUBE_SECRETS_RUNTIME_ROOT": root,
-        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": root,
+        "KDCUBE_SECRETS_RUNTIME_ROOT": str(container_root),
+        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": str(host_config.joinpath(*relative.parts)),
         "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(runtime.get("runtime_namespaces") or ()),
                                                         separators=(",", ":")),
         "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": str(runtime.get("runtime_scope_policy") or ""),

@@ -4867,17 +4867,20 @@ def gather_configuration(
 
     update_env_value(env_main, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_main, "HOST_BUNDLES_PATH", host_bundles)
-    # W670 F1: the secrets-file runtime-record folder, on every provider (the host folder is mounted at the
-    # same path in the processors and the secrets service, so it persists across container replacement).
+    # W670 K2: the runtime-secrets folder, on every provider: /config/secrets in the containers (or the
+    # declared secrets.runtime.root inside /config), <host config folder>/secrets on the host.
     from . import host_vault as _host_vault
 
-    runtime_env = _host_vault.runtime_compose_environment(assembly_data)
-    if runtime_env["KDCUBE_SECRETS_RUNTIME_ROOT"]:
-        # Created private (0700), as the runtime store requires; an existing folder is never re-moded here.
-        runtime_root = Path(runtime_env["KDCUBE_SECRETS_RUNTIME_ROOT"])
-        if runtime_root.exists() and not runtime_root.is_dir():
-            raise ValueError(f"Host runtime secrets root must be a directory path, got existing file: {runtime_root}")
-        runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        runtime_env = _host_vault.runtime_compose_environment(
+            assembly_data, host_config_dir=Path(ctx.config_dir).expanduser().resolve())
+    except HostVaultConfigurationError as exc:
+        raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
+    # Created private (0700), as the runtime store requires; an existing folder is never re-moded here.
+    host_runtime_root = Path(runtime_env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"])
+    if host_runtime_root.exists() and not host_runtime_root.is_dir():
+        raise ValueError(f"Host runtime secrets root must be a directory path, got existing file: {host_runtime_root}")
+    host_runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     for key, value in runtime_env.items():
         update_env_value(env_main, key, value)
     update_env_value(env_main, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
