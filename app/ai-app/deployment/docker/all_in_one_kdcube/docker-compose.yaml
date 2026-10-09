@@ -102,6 +102,7 @@ services:
       - path: ${KDCUBE_CONFIG_DIR:-./config}/.env
         required: false
     environment:
+      - KDCUBE_SECRETS_OWNER_UID=${KDCUBE_SECRETS_OWNER_UID:-1000}  # W677: one owner uid for the secrets folder
       - SECRETS_ADMIN_TOKEN=${SECRETS_ADMIN_TOKEN:-}
       - SECRETS_READ_TOKENS=${SECRETS_READ_TOKENS:-}
       - KDCUBE_SECRETS_SERVICE_BACKEND=${KDCUBE_SECRETS_SERVICE_BACKEND:-ephemeral}
@@ -261,6 +262,7 @@ services:
       - path: ${KDCUBE_CONFIG_DIR:-./config}/.env.ingress
         required: false
     environment:
+      - KDCUBE_SECRETS_OWNER_UID=${KDCUBE_SECRETS_OWNER_UID:-1000}  # W677: one owner uid for the secrets folder
       - REDIS_HOST=redis
       - POSTGRES_HOST=postgres-db
       - APP_NEO4J_URI=bolt://neo4j:7687
@@ -313,6 +315,8 @@ services:
       - path: ${KDCUBE_CONFIG_DIR:-./config}/.env.proc
         required: false
     environment:
+      - KDCUBE_SECRETS_OWNER_UID=${KDCUBE_SECRETS_OWNER_UID:-1000}  # W677: one owner uid for the secrets folder
+      - KDCUBE_SECRETS_RUNTIME_ROOT=${KDCUBE_SECRETS_RUNTIME_ROOT:-}  # W677: entrypoint ownership repair
       - REDIS_HOST=redis
       - POSTGRES_HOST=postgres-db
       - APP_NEO4J_URI=bolt://neo4j:7687

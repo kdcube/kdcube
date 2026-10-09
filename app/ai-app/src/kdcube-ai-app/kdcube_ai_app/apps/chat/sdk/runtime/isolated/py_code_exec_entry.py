@@ -267,6 +267,9 @@ def _materialize_runtime_descriptor_payloads(logger: AgentLogger) -> pathlib.Pat
     )
     # Taken first, so the records never stay in the environment of user code, whatever happens below.
     secret_records = os.environ.pop("KDCUBE_RUNTIME_SECRET_RECORDS_B64", None)
+    # The sandbox's secrets folder is its own private copy: it is owned by this process, whatever owner
+    # uid the host deployment uses for its shared folder (W677).
+    os.environ["KDCUBE_SECRETS_OWNER_UID"] = str(os.geteuid())
     payload_values = [
         (payload_env, filename, target_env, (os.environ.get(payload_env) or "").strip())
         for payload_env, filename, target_env in descriptor_specs

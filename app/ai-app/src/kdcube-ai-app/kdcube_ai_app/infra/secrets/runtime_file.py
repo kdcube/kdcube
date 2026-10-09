@@ -46,6 +46,36 @@ class RuntimeFileError(RuntimeError):
     """Finite failure without secret material or filesystem paths."""
 
 
+# One canonical owner for every entry under the secrets root (W677). Containers of one deployment run as
+# different uids (the apps as appuser 1000; docker exec sessions, the migration and kdcube-secrets as root),
+# so every process checks entries against this uid instead of its own. Unset: the process euid, as before.
+OWNER_UID_ENV = "KDCUBE_SECRETS_OWNER_UID"
+
+
+def secrets_owner_uid() -> int:
+    raw = str(os.environ.get(OWNER_UID_ENV) or "").strip()
+    if not raw:
+        return os.geteuid()
+    if not raw.isdigit():
+        raise RuntimeFileError("runtime_secret_storage_unavailable")
+    return int(raw)
+
+
+def require_writer(owner: int) -> None:
+    """Only the owner, or root acting for it, may create or change entries; anyone else is refused."""
+    if os.geteuid() not in (owner, 0):
+        raise RuntimeFileError("runtime_secret_storage_unavailable")
+
+
+def adopt(target, owner: int) -> None:
+    """Root hands what it just created to the owner before publishing it (path or open descriptor)."""
+    if os.geteuid() == 0 and owner != 0:
+        if isinstance(target, int):
+            os.fchown(target, owner, -1)
+        else:
+            os.chown(target, owner, -1, follow_symlinks=False)
+
+
 class _Incomplete(ValueError):
     pass
 
@@ -96,7 +126,7 @@ class RuntimeFileStore:
     def _private_file(descriptor: int) -> int:
         info = os.fstat(descriptor)
         mode = stat.S_IMODE(info.st_mode)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != secrets_owner_uid()
                 or mode not in (_LIVE_MODE, _TOMBSTONE_MODE) or info.st_nlink != 1):
             raise RuntimeFileError("runtime_secret_storage_unavailable")
         return mode
@@ -105,20 +135,23 @@ class RuntimeFileStore:
         # Each level is created 0700 when absent (a concurrent creator is fine) and then verified;
         # a configured broad/public directory or a symlink is refused, never chmod-ed or followed.
         try:
+            owner = secrets_owner_uid()
+            require_writer(owner)
             for folder in (self._root, self._root / self._owner, self._folder):
                 try:
                     folder.mkdir(mode=0o700)
                     created = True
                 except FileExistsError:
                     created = False
-                if created:  # a new entry is durable in its parent before anything is published inside it
+                if created:  # owned by the owner and durable in its parent before anything is published in it
+                    adopt(folder, owner)
                     parent = os.open(folder.parent, os.O_RDONLY | os.O_DIRECTORY)
                     try:
                         os.fsync(parent)
                     finally:
                         os.close(parent)
                 info = folder.lstat()
-                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != owner
                         or stat.S_IMODE(info.st_mode) != 0o700):
                     raise RuntimeFileError("runtime_secret_storage_unavailable")
             if self._folder.resolve() != self._folder:
@@ -201,6 +234,7 @@ class RuntimeFileStore:
             descriptor, temporary = tempfile.mkstemp(prefix=".tombstone-", dir=self._folder)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
+                    adopt(stream.fileno(), secrets_owner_uid())
                     stream.write(encoded)
                     stream.flush()
                     os.fchmod(stream.fileno(), _TOMBSTONE_MODE)
@@ -237,6 +271,7 @@ class RuntimeFileStore:
             descriptor, temporary = tempfile.mkstemp(prefix=".record-", dir=self._folder)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
+                    adopt(stream.fileno(), secrets_owner_uid())
                     self._private_file(stream.fileno())
                     stream.write(encoded)
                     stream.flush()

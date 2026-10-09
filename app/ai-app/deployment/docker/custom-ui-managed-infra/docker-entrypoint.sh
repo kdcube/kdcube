@@ -57,6 +57,16 @@ echo "[entrypoint] Switching to user $APPUSER (UID $APPUSER_UID)"
 # Ensure appuser owns the exec workspace (volume overrides image ownership)
 chown -R appuser:appuser /exec-workspace || true
 
+# W677: the secrets folder has ONE owner uid (KDCUBE_SECRETS_OWNER_UID, appuser by default). Entries created
+# by root (docker exec sessions, the one-time migration, kdcube-secrets, a host-side copy shown as uid 0) are
+# handed to that owner here, before the app starts. Only root-owned entries are re-owned and modes are not
+# touched; an entry owned by any other uid stays refused by the application.
+SECRETS_ROOT="${KDCUBE_SECRETS_RUNTIME_ROOT:-/config/secrets}"
+SECRETS_OWNER_UID="${KDCUBE_SECRETS_OWNER_UID:-$APPUSER_UID}"
+if [ -d "$SECRETS_ROOT" ] && [ ! -L "$SECRETS_ROOT" ]; then
+    find "$SECRETS_ROOT" -xdev -uid 0 ! -type l \( -type d -o -type f \) -exec chown "$SECRETS_OWNER_UID" {} + 2>/dev/null || true
+fi
+
 # Ensure appuser can create managed bundle cache entries without recursively
 # walking the shared cache on every start. Recursive repair is expensive on EFS
 # and can block the HTTP server from binding long enough for service discovery
