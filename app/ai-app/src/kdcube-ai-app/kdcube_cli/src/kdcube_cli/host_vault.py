@@ -11,6 +11,11 @@ from urllib.parse import urlsplit
 
 _RUNTIME_NAMESPACE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _CREDENTIAL_DIGEST = re.compile(r"[0-9a-f]{64}")
+# W673: the platform's own runtime-record purposes, enrolled when secrets.runtime is absent. kdcube-cli is a
+# standalone distribution, so this mirrors kdcube_ai_app.infra.secrets.runtime_contract.DEFAULT_RUNTIME_NAMESPACES;
+# a consumer-contract test keeps the two equal.
+DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refresh-tokens")
+RUNTIME_SCOPE_SCHEMA = "kdcube.runtime_secret_scopes.v1"
 
 EPHEMERAL_BACKEND = "ephemeral"
 HOST_VAULT_BACKEND = "host-vault"
@@ -40,6 +45,9 @@ class HostVaultRuntimeConfig:
     runtime_root: str = ""
     runtime_namespaces: tuple[str, ...] = ()
     runtime_scope_policy: str = ""
+    # W673: True when secrets.runtime is absent; the per-run token overlay then grants the default
+    # namespaces to this deployment's own proc reader/writer credentials only (default_runtime_scope_policy).
+    runtime_defaulted: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -114,7 +122,8 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
     # credentials. Consumer-contract tests keep the two boundaries aligned.
     runtime = secrets.get("runtime")
     if runtime is None:
-        return {}
+        # W673: no runtime configuration enrolls the platform's own purposes; any declaration wins whole.
+        return {"runtime_namespaces": DEFAULT_RUNTIME_NAMESPACES, "runtime_defaulted": True}
     if not isinstance(runtime, Mapping) or set(runtime) - {"root", "namespaces", "scope_policy"}:
         raise HostVaultConfigurationError("secrets.runtime must contain only root, namespaces and scope_policy")
     root = runtime.get("root", "")
@@ -270,6 +279,7 @@ def compose_environment(config: HostVaultRuntimeConfig) -> dict[str, str]:
         "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": config.runtime_root,
         "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(config.runtime_namespaces), separators=(",", ":")),
         "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": config.runtime_scope_policy,
+        "KDCUBE_SECRETS_RUNTIME_DEFAULTED": "1" if config.runtime_defaulted else "",
     }
     if not config.enabled:
         return values
@@ -334,3 +344,22 @@ __all__ = [
     "validate_assembly_for_start",
     "validate_configuration",
 ]
+
+
+def default_runtime_scope_policy(*, read_token: str, write_token: str, namespaces: tuple[str, ...]) -> str:
+    """W673: the scope policy for a deployment without secrets.runtime (Infra contract, 2026-10-09).
+
+    Exactly the given namespaces, read for this deployment's own proc read credential and write for its own
+    writer credential, each identified by SHA-256 only. No wildcard, no other credential (ingress gets
+    nothing). An empty or unusable token or namespace list grants nothing.
+    """
+    if (type(read_token) is not str or not read_token or type(write_token) is not str or not write_token
+            or not namespaces or any(type(value) is not str or _RUNTIME_NAMESPACE.fullmatch(value) is None
+                                     for value in namespaces)):
+        return ""
+    import hashlib
+    granted = list(namespaces)
+    policy = {"schema": RUNTIME_SCOPE_SCHEMA,
+              "read": {hashlib.sha256(read_token.encode("utf-8")).hexdigest(): granted},
+              "write": {hashlib.sha256(write_token.encode("utf-8")).hexdigest(): granted}}
+    return json.dumps(policy, sort_keys=True, separators=(",", ":"))

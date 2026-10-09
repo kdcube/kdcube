@@ -1050,8 +1050,10 @@ class Settings(PLATFORM_CONFIG):
         # Runtime custody roots and grants are operator descriptor policy;
         # ambient environment must not create or override that authority.
         self.SECRETS_RUNTIME_ROOT = self._assembly_str("secrets.runtime.root")
-        namespaces = _load_assembly_plain("secrets.runtime.namespaces")
-        self.SECRETS_RUNTIME_NAMESPACES = tuple(namespaces) if isinstance(namespaces, (list, tuple)) else ()
+        # W673: no declared namespaces enrolls the platform's own purposes; a declaration wins.
+        from kdcube_ai_app.infra.secrets.runtime_contract import default_runtime_namespaces
+        self.SECRETS_RUNTIME_NAMESPACES = default_runtime_namespaces(
+            _load_assembly_plain("secrets.runtime.namespaces"))
         if not self._env_present("SECRETS_TOKEN") and not self.SECRETS_TOKEN:
             self.SECRETS_TOKEN = self._assembly_str("secrets.token")
         if not self._env_present("SECRETS_ADMIN_TOKEN") and not self.SECRETS_ADMIN_TOKEN:
