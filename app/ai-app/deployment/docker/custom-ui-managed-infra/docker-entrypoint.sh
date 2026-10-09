@@ -63,7 +63,15 @@ chown -R appuser:appuser /exec-workspace || true
 # touched; an entry owned by any other uid stays refused by the application.
 SECRETS_ROOT="${KDCUBE_SECRETS_RUNTIME_ROOT:-/config/secrets}"
 SECRETS_OWNER_UID="${KDCUBE_SECRETS_OWNER_UID:-$APPUSER_UID}"
-if [ -d "$SECRETS_ROOT" ] && [ ! -L "$SECRETS_ROOT" ]; then
+SECRETS_ROOT="${SECRETS_ROOT%/}"
+# The target must be an explicit secrets directory: absolute, canonical (no symlink or ".." on the path),
+# not "/", at least two levels deep; anything else is skipped before any traversal (review P1).
+case "$SECRETS_ROOT" in
+    /*/*) SECRETS_ROOT_OK=1 ;;
+    *) SECRETS_ROOT_OK=0 ;;
+esac
+if [ "$SECRETS_ROOT_OK" = "1" ] && [ -d "$SECRETS_ROOT" ] && [ ! -L "$SECRETS_ROOT" ] \
+        && [ "$(readlink -f "$SECRETS_ROOT")" = "$SECRETS_ROOT" ]; then
     find "$SECRETS_ROOT" -xdev -uid 0 ! -type l \( -type d -o -type f \) -exec chown "$SECRETS_OWNER_UID" {} + 2>/dev/null || true
 fi
 

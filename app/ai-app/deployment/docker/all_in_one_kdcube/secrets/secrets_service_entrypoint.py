@@ -35,6 +35,20 @@ def selected_server_path(raw_backend: Optional[str] = None) -> str:
         ) from exc
 
 
+def safe_repair_root(root: str) -> bool:
+    """The repair target must be an explicit secrets directory: absolute, canonical (no symlink anywhere on
+    the path, no ".."), not the filesystem root, at least two levels deep, and an existing directory.
+    Anything else is refused before any traversal or chown (review P1)."""
+    if not isinstance(root, str) or not root.startswith("/"):
+        return False
+    normal = os.path.normpath(root)
+    if normal == "/" or normal != root.rstrip("/") or len([part for part in normal.split("/") if part]) < 2:
+        return False
+    if os.path.realpath(normal) != normal or not os.path.isdir(normal) or os.path.islink(normal):
+        return False
+    return True
+
+
 def adopt_root_owned_entries(root: Optional[str] = None, owner: Optional[str] = None) -> int:
     """W677: hand root-owned entries under the secrets folder to the one owner uid before serving.
 
@@ -46,8 +60,9 @@ def adopt_root_owned_entries(root: Optional[str] = None, owner: Optional[str] = 
     owner = owner if owner is not None else (os.environ.get("KDCUBE_SECRETS_OWNER_UID") or "").strip()
     if not root or not owner.isdigit() or int(owner) == 0 or os.geteuid() != 0:
         return 0
-    if not os.path.isdir(root) or os.path.islink(root):
+    if not safe_repair_root(root):
         return 0
+    root = os.path.normpath(root)
     device, changed = os.lstat(root).st_dev, 0
     paths = [root]
     for current, dirs, files in os.walk(root, followlinks=False):
