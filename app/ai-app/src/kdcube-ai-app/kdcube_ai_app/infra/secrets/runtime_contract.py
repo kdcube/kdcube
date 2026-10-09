@@ -16,6 +16,20 @@ SCHEMA = "kdcube.runtime_secret_contract.v1"
 POLICY_SCHEMA = "kdcube.runtime_secret_scopes.v1"
 _NAMESPACE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+# W673 (W670 regression, operator 2026-10-09: "it simply must work regardless of the backend"): the
+# platform's own runtime-record purposes, enrolled when a deployment declares no secrets.runtime.namespaces.
+# An explicit list, an empty one included, is the operator's choice and wins. "users" is reserved for
+# per-user secret folders and is never a purpose here.
+DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refresh-tokens")
+
+
+def default_runtime_namespaces(configured: object) -> tuple[str, ...]:
+    """The enrolled namespaces: the defaults when none are declared (None), else exactly the declaration."""
+    if configured is None:
+        return DEFAULT_RUNTIME_NAMESPACES
+    return tuple(configured) if isinstance(configured, (list, tuple)) else ()
+
+
 GUARANTEES = frozenset({
     "create_only", "restart_persistent", "expiry_enforced",
     "bounded_atomic_purge", "scope_authorized",
