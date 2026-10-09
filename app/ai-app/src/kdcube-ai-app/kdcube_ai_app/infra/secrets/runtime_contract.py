@@ -24,17 +24,19 @@ DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refre
 
 
 def runtime_section_namespaces(section: object) -> tuple[str, ...]:
-    """The enrolled namespaces from the whole assembly ``secrets.runtime`` section.
+    """The enrolled namespaces from the assembly ``secrets.runtime`` section, the CLI projection's rule.
 
-    Absent (None): the platform defaults. A declared mapping wins whole: exactly its ``namespaces`` list,
-    and nothing when it omits them (a root-only or empty section enrolls nothing), the same rule as the
-    CLI projection (kdcube_cli.host_vault). Anything else is malformed and enrolls nothing.
+    Absent section, or a section whose ``namespaces`` is omitted or null: the platform defaults (Main,
+    2026-10-09: "omitted namespaces => the 3 defaults in BOTH, explicit [] => none in both"). An explicit
+    list, the empty one included, is exact. Anything malformed enrolls nothing.
     """
     if section is None:
         return DEFAULT_RUNTIME_NAMESPACES
     if not isinstance(section, dict):
         return ()
     namespaces = section.get("namespaces")
+    if namespaces is None:
+        return DEFAULT_RUNTIME_NAMESPACES
     return tuple(namespaces) if isinstance(namespaces, (list, tuple)) else ()
 
 

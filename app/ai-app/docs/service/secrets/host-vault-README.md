@@ -549,7 +549,7 @@ The CLI validates and projects these descriptor values into the internal
 `KDCUBE_SECRETS_RUNTIME_ROOT`, `KDCUBE_SECRETS_RUNTIME_NAMESPACES` and
 `KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY` service inputs.
 
-Defaults when `secrets.runtime` is absent (W673, operator 2026-10-09: "it
+Defaults when `secrets.runtime` or its `namespaces` is absent (W673, operator 2026-10-09: "it
 simply must work regardless of the backend"). The platform's own runtime-record
 purposes are enrolled: `login-attempts`, `card-credentials` and
 `oauth-refresh-tokens` (`runtime_contract.DEFAULT_RUNTIME_NAMESPACES`, selected by `runtime_section_namespaces` from the whole section; the SDK
@@ -560,9 +560,11 @@ install or refresh (`write_env_overlay`) carries a scope policy granting exactly
 those namespaces to this run's own proc credentials: `read` for the proc read
 token (`SECRETS_TOKEN_PROC`) and `write` for the writer token
 (`SECRETS_ADMIN_TOKEN`), by SHA-256 identifier only. The ingress door token and
-any other credential get nothing, and there is no wildcard. A declared
-`secrets.runtime` (an explicit empty namespace list included) wins whole: its
-namespaces and policy are projected unchanged and no default grant is added.
+any other credential get nothing, and there is no wildcard. The same rule
+applies when a declared `secrets.runtime` omits `namespaces` (for example a
+root-only section). An explicit namespace list, the empty one included, is
+exact; declared namespaces without a `scope_policy` get no default grant, and a
+declared `scope_policy` is projected unchanged.
 The file runtime root default is the secrets-file manager's own rule
 (`resolve_runtime_secrets_root`). Ambient inputs do not
 override the descriptor during projection. A server snapshots those inputs at

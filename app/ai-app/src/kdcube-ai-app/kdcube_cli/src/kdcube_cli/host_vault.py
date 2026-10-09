@@ -122,7 +122,7 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
     # credentials. Consumer-contract tests keep the two boundaries aligned.
     runtime = secrets.get("runtime")
     if runtime is None:
-        # W673: no runtime configuration enrolls the platform's own purposes; any declaration wins whole.
+        # W673: no runtime configuration enrolls the platform's own purposes, granted per run.
         return {"runtime_namespaces": DEFAULT_RUNTIME_NAMESPACES, "runtime_defaulted": True}
     if not isinstance(runtime, Mapping) or set(runtime) - {"root", "namespaces", "scope_policy"}:
         raise HostVaultConfigurationError("secrets.runtime must contain only root, namespaces and scope_policy")
@@ -136,7 +136,10 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
             or root != root.strip() or any(value in root for value in ("\n", "\r", "\0", "$"))
             or ".." in Path(root).parts))):
         raise HostVaultConfigurationError("secrets.runtime.root must be a dedicated absolute path")
-    namespaces = runtime.get("namespaces", [])
+    # W673 (Main, 2026-10-09): omitted (or null) namespaces enroll the platform's own purposes, as the SDK
+    # does (runtime_contract.runtime_section_namespaces); an explicit list, [] included, is exact.
+    namespaces_defaulted = runtime.get("namespaces") is None
+    namespaces = list(DEFAULT_RUNTIME_NAMESPACES) if namespaces_defaulted else runtime.get("namespaces")
     if (type(namespaces) is not list or len(namespaces) > 64
             or any(type(value) is not str or _RUNTIME_NAMESPACE.fullmatch(value) is None
                    for value in namespaces)
@@ -151,8 +154,11 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
         policy = runtime["scope_policy"]
         if not _valid_runtime_policy(policy, namespaces=namespaces, encoded=raw_policy):
             raise HostVaultConfigurationError("secrets.runtime.scope_policy must grant only declared namespaces")
+    # The per-run own-credential grant applies only to defaulted namespaces without a declared policy;
+    # declared namespaces without a policy stay closed, and a declared policy is projected as it is.
     return {"runtime_root": root, "runtime_namespaces": tuple(namespaces),
-            "runtime_scope_policy": raw_policy}
+            "runtime_scope_policy": raw_policy,
+            "runtime_defaulted": namespaces_defaulted and "scope_policy" not in runtime}
 
 
 def _valid_runtime_policy(policy: object, *, namespaces: list[str], encoded: str) -> bool:
