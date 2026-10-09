@@ -1,4 +1,5 @@
 import os
+import shutil
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -78,8 +79,15 @@ def test_missing_physical_store_never_reads_or_moves_legacy_encoded_sibling(tmp_
     target = tmp_path / name / "synthetic.yaml"
     encoded_path = Path(urlparse(target.as_uri()).path)
     assert encoded_path != target
-    encoded_path.parent.mkdir()
-    encoded_path.write_text("fixture: synthetic misplaced value\n")
-    assert _load_yaml_mapping_from_storage(target.as_uri(), missing_ok=True) == {}
-    assert not target.exists()
-    assert encoded_path.read_text() == "fixture: synthetic misplaced value\n"
+    # When tmp_path itself needs encoding (a workspace folder like "agent@host"), the encoded sibling's
+    # ancestors lie outside tmp_path: create only the missing ones and remove exactly those afterwards.
+    created = [path for path in (encoded_path.parent, *encoded_path.parent.parents) if not path.exists()]
+    encoded_path.parent.mkdir(parents=True)
+    try:
+        encoded_path.write_text("fixture: synthetic misplaced value\n")
+        assert _load_yaml_mapping_from_storage(target.as_uri(), missing_ok=True) == {}
+        assert not target.exists()
+        assert encoded_path.read_text() == "fixture: synthetic misplaced value\n"
+    finally:
+        if created:
+            shutil.rmtree(created[-1])
