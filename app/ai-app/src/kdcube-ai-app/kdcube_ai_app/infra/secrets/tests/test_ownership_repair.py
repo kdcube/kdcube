@@ -36,8 +36,10 @@ def _present(monkeypatch, tmp_path, attrs):
     monkeypatch.setattr(repair.os, "stat", lambda *a, **k: shape(real_stat(*a, **k)))
     monkeypatch.setattr(repair.os, "fstat", lambda fd: shape(real_fstat(fd)))
     monkeypatch.setattr(repair.os, "geteuid", lambda: 0)
+    # Portable (no /proc on macOS): the descriptor's inode names the path that would change owner.
+    path_of = {os.lstat(path).st_ino: str(path) for path in tmp_path.rglob("*")}
     changed = []
-    monkeypatch.setattr(repair.os, "fchown", lambda fd, uid, gid: changed.append(os.readlink(f"/proc/self/fd/{fd}")))
+    monkeypatch.setattr(repair.os, "fchown", lambda fd, uid, gid: changed.append(path_of[real_fstat(fd).st_ino]))
     return changed
 
 
