@@ -27,7 +27,10 @@ from urllib.parse import unquote
 from kdcube_ai_app.infra.secrets.runtime_file import PLATFORM_OWNER
 
 USERS_FOLDER = "users"
-_SAFE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._@-")
+# Lowercase only: the host share can be case-insensitive (APFS), so every on-disk name must stay unique
+# under case folding. Uppercase letters are percent-encoded (escapes use uppercase hex and a literal "%"
+# is always escaped, so two encoded names never differ only by case).
+_SAFE = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._@-")
 _MAX_SEGMENT_CHARS = 200
 _MAX_VALUE_BYTES = 65536
 _MAX_FILE_BYTES = 6 * _MAX_VALUE_BYTES + 64
@@ -39,7 +42,7 @@ _MIGRATION_REASONS = frozenset({
     "user_secret_storage_unavailable", "user_secret_bundle_invalid", "user_secret_bundle_required",
     "user_secret_key_invalid", "user_secret_value_invalid", "runtime_secret_storage_must_be_separate",
 })
-_BUNDLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,127}")
+_BUNDLE = re.compile(r"[a-z0-9][a-z0-9._@-]{0,127}")  # lowercase: case-insensitive host shares
 
 
 class UserSecretFileError(RuntimeError):

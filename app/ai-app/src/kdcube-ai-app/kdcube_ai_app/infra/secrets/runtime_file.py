@@ -29,7 +29,8 @@ from typing import Iterable
 
 _NAMESPACE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 # One path segment: no separator, no dot (so no traversal and no ambiguity in dotted provider keys).
-_OWNER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_@-]{0,127}")
+# Lowercase only: the folder may live on a case-insensitive host share (APFS).
+_OWNER = re.compile(r"[a-z0-9][a-z0-9_@-]{0,127}")
 _REF = re.compile(r"[0-9a-f]{32}")
 _RECORD_FILE = re.compile(r"[0-9a-f]{32}\.json")
 PLATFORM_OWNER = "platform"

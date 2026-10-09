@@ -145,7 +145,7 @@ async def test_colliding_looking_names_stay_separate_records(tmp_path):
     for index, (user, key) in enumerate(NAMES):
         assert await manager.get_secret(_key(user=user, key=key)) == f"synthetic-{index}"
     assert sorted(os.listdir(_root(tmp_path) / HUB / "users")) == sorted(
-        ["a%2Fb", "a%252Fb", USER, "%C3%A9", "100%25"])
+        ["a%2Fb", "a%252%46b", USER, "%C3%A9", "100%25"])
     with pytest.raises(SecretsManagerError):  # a ".." in a provider key is refused before any storage
         await manager.set_secret(_key(user=".."), "synthetic")
 
@@ -463,3 +463,54 @@ def test_the_host_command_prints_only_enumerated_reasons(tmp_path, capsys, monke
     monkeypatch.setattr(SecretsFileSecretsManager, "migrate_user_secrets", conflict)
     assert main(["migrate", "--config-dir", str(tmp_path / "config")]) == 1
     assert json.loads(capsys.readouterr().out)["reason"] == "user_secret_migration_destination_conflict"
+
+
+# The live share is the host's case-insensitive APFS: names must stay unique under case folding (review F1).
+
+@pytest.mark.parametrize("left,right", [("Token", "token"), ("Alice", "alice"), ("ABC", "abc"), ("aB", "Ab"),
+                                        ("J", "%4a"), ("%4A", "j")])
+def test_encoded_names_are_unique_under_case_folding(left, right):
+    assert encode_segment(left).casefold() != encode_segment(right).casefold()
+    for text in (left, right):
+        assert decode_segment(encode_segment(text)) == text
+
+
+@pytest.mark.asyncio
+async def test_case_differing_keys_and_users_stay_separate_files(tmp_path):
+    manager = _manager(tmp_path)
+    await manager.set_secret(_app_key(key="Token"), "synthetic-upper")
+    await manager.set_secret(_app_key(key="token"), "synthetic-lower")
+    await manager.set_secret(_key(user="Alice", key="k"), "synthetic-alice-upper")
+    await manager.set_secret(_key(user="alice", key="k"), "synthetic-alice-lower")
+    assert await manager.get_secret(_app_key(key="Token")) == "synthetic-upper"
+    assert await manager.get_secret(_app_key(key="token")) == "synthetic-lower"
+    assert await manager.get_secret(_key(user="Alice", key="k")) == "synthetic-alice-upper"
+    assert await manager.get_secret(_key(user="alice", key="k")) == "synthetic-alice-lower"
+    for folder in (_root(tmp_path) / HUB, _root(tmp_path) / HUB / "users"):
+        names = [name for name in os.listdir(folder)]
+        assert len({name.casefold() for name in names}) == len(names)
+
+
+@pytest.mark.parametrize("bundle", ["Hub@1-0", "CONNECTION-HUB@1-0"])
+def test_uppercase_bundle_ids_are_refused(tmp_path, bundle):
+    with pytest.raises(Exception, match="user_secret_bundle_invalid"):
+        UserSecretFileStore(root=tmp_path / "secrets").set_app(bundle_id=bundle, key="k", value="v")
+    with pytest.raises(RuntimeFileError, match="runtime_secret_owner_invalid"):
+        RuntimeFileStore(root=tmp_path / "r", namespace="card-credentials",
+                         authorized_namespaces=("card-credentials",), owner=bundle)
+    assert not (tmp_path / "secrets").exists()
+
+
+@pytest.mark.asyncio
+async def test_migration_keeps_case_differing_keys_and_users_apart(tmp_path):
+    _yaml_with_users(tmp_path, {
+        "Alice": {"bundles": {HUB: {"secrets": {"Token": "synthetic-1", "token": "synthetic-2"}}}},
+        "alice": {"bundles": {HUB: {"secrets": {"Token": "synthetic-3"}}}},
+    })
+    manager = _manager(tmp_path)
+    counts = await manager.migrate_user_secrets()
+    assert counts["written"] == 3
+    fresh = _manager(tmp_path)
+    assert await fresh.get_secret(_key(user="Alice", key="Token")) == "synthetic-1"
+    assert await fresh.get_secret(_key(user="Alice", key="token")) == "synthetic-2"
+    assert await fresh.get_secret(_key(user="alice", key="Token")) == "synthetic-3"
