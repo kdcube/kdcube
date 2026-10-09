@@ -29,12 +29,16 @@ RESIDENT_CARD_SECRET_NAMESPACE = "resident-card-credentials"
 
 def resident_card_secret_store(
     settings: Any | None = None,
+    *,
+    bundle_id: str | None = None,
 ) -> KDCubeEphemeralSecretStore:
-    """Compose the deployment-selected resident Card secret custody."""
+    """Compose the deployment-selected resident Card secret custody for the owner bundle."""
 
     return ephemeral_secret_store(
         namespace=RESIDENT_CARD_SECRET_NAMESPACE,
         settings=settings,
+        # Only when given: the default is the current bundle, resolved by the secrets layer.
+        **({"bundle_id": bundle_id} if bundle_id else {}),
     )
 
 

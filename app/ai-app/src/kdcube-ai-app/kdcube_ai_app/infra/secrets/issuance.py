@@ -169,12 +169,14 @@ class KDCubeIssuanceSecretCustody:
 
 def issuance_secret_custody(
     *, namespace: str, settings: Any | None = None, manager: ISecretsManager | None = None,
+    bundle_id: str | None = None,
 ) -> KDCubeIssuanceSecretCustody:
-    """Select durable-provider custody; host authorization still needs proof."""
+    """Select durable-provider custody for the owner bundle; host authorization still needs proof."""
 
     return KDCubeIssuanceSecretCustody(
         ephemeral_secret_store(
             namespace=namespace, settings=settings, manager=manager, durability_required=True,
+            **({"bundle_id": bundle_id} if bundle_id else {}),
         ), settings=settings,
     )
 
