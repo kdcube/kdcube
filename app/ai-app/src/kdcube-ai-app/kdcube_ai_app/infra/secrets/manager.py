@@ -64,16 +64,31 @@ def _ephemeral_secret_parts(namespace: str, secret_ref: str) -> tuple[str, str]:
     return clean_namespace, clean_ref
 
 
-def _ephemeral_provider_key(namespace: str, secret_ref: str) -> str:
+def _runtime_owner(bundle_id: str | None) -> str:
+    """The owner bundle of runtime records, or ``platform`` for a bundle-less caller (W670)."""
+    from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileError, runtime_owner
+
+    try:
+        return runtime_owner(bundle_id)
+    except RuntimeFileError:
+        raise SecretsManagerError("runtime_secret_owner_invalid") from None
+
+
+def _runtime_owner_segment(bundle_id: str | None, separator: str) -> str:
+    """A bundle-owned record gains its owner as one segment; a platform record keeps its existing key."""
+    return "" if bundle_id is None else f"{_runtime_owner(bundle_id)}{separator}"
+
+
+def _ephemeral_provider_key(namespace: str, secret_ref: str, bundle_id: str | None = None) -> str:
     clean_namespace, clean_ref = _ephemeral_secret_parts(namespace, secret_ref)
-    return f"platform.runtime.{clean_namespace}.{clean_ref}"
+    return f"platform.runtime.{_runtime_owner_segment(bundle_id, '.')}{clean_namespace}.{clean_ref}"
 
 
-def _ephemeral_inventory_key(namespace: str) -> str:
+def _ephemeral_inventory_key(namespace: str, bundle_id: str | None = None) -> str:
     clean_namespace = str(namespace or "").strip().lower()
     if not _EPHEMERAL_SECRET_NAMESPACE.fullmatch(clean_namespace):
         raise SecretsManagerError("Ephemeral secret namespace is invalid")
-    return f"platform.runtime.{clean_namespace}.__keys"
+    return f"platform.runtime.{_runtime_owner_segment(bundle_id, '.')}{clean_namespace}.__keys"
 
 
 def _ephemeral_expires_at(value: str | None) -> int:
@@ -283,7 +298,7 @@ class SecretsManagerConfig:
 class ISecretsManager(ABC):
     provider_type: str
 
-    async def qualify_runtime_custody(self, *, namespace: str) -> bool:
+    async def qualify_runtime_custody(self, *, namespace: str, bundle_id: str | None = None) -> bool:
         """Qualify the namespace-bound common contract, never a provider label.
 
         Unknown/transient adapters cannot advertise production guarantees.
@@ -349,10 +364,11 @@ class ISecretsManager(ABC):
         for key in keys:
             await self.delete_secret(key)
 
-    def _claim_ephemeral_purge(self, namespace: str) -> bool:
-        """Throttle cleanup per manager and namespace in this host process."""
+    def _claim_ephemeral_purge(self, namespace: str, bundle_id: str | None = None) -> bool:
+        """Throttle cleanup per manager, owner and namespace in this host process."""
 
         clean_namespace, _ = _ephemeral_secret_parts(namespace, "0" * 32)
+        clean_namespace = f"{_runtime_owner(bundle_id)}/{clean_namespace}"
         moment = time.monotonic()
         with _EPHEMERAL_PURGE_LOCK:
             due_by_namespace = getattr(self, "_ephemeral_purge_after", None)
@@ -373,6 +389,7 @@ class ISecretsManager(ABC):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
         value: str,
         expires_at: int,
@@ -380,19 +397,20 @@ class ISecretsManager(ABC):
         """Create one short-lived runtime secret outside tracked descriptors."""
 
         del expires_at
-        await self.set_secret(_ephemeral_provider_key(namespace, secret_ref), value)
+        await self.set_secret(_ephemeral_provider_key(namespace, secret_ref, bundle_id), value)
 
     async def create_ephemeral_secret(
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
         value: str,
         expires_at: int,
     ) -> bool:
         """Atomically create one runtime secret without replacing a record."""
 
-        del namespace, secret_ref, value, expires_at
+        del namespace, bundle_id, secret_ref, value, expires_at
         raise SecretsManagerWriteError(
             f"{self.provider_type} provider does not support create-only runtime secrets"
         )
@@ -401,39 +419,42 @@ class ISecretsManager(ABC):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
     ) -> Optional[str]:
         return await self.get_secret_strict(
-            _ephemeral_provider_key(namespace, secret_ref)
+            _ephemeral_provider_key(namespace, secret_ref, bundle_id)
         )
 
     async def delete_ephemeral_secret(
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
     ) -> None:
-        await self.delete_secret(_ephemeral_provider_key(namespace, secret_ref))
+        await self.delete_secret(_ephemeral_provider_key(namespace, secret_ref, bundle_id))
 
     async def purge_expired_ephemeral_secrets(
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         now: int,
         limit: int = 100,
     ) -> int:
         """Delete expired host-vault records without exposing their values."""
 
         clean_namespace, _ = _ephemeral_secret_parts(namespace, "0" * 32)
-        if not self._claim_ephemeral_purge(clean_namespace):
+        if not self._claim_ephemeral_purge(clean_namespace, bundle_id):
             return 0
-        prefix = f"platform.runtime.{clean_namespace}."
-        keys = await self.list_secret_keys(_ephemeral_inventory_key(namespace))
+        prefix = f"platform.runtime.{_runtime_owner_segment(bundle_id, '.')}{clean_namespace}."
+        keys = await self.list_secret_keys(_ephemeral_inventory_key(namespace, bundle_id))
         removed = 0
         for key in keys:
             if removed >= max(1, int(limit)):
                 break
-            if not key.startswith(prefix):
+            if not key.startswith(prefix) or not _EPHEMERAL_SECRET_REF.fullmatch(key[len(prefix):]):
                 continue
             raw = await self.get_secret_strict(key)
             if raw is None or _ephemeral_expires_at(raw) > int(now):
@@ -499,12 +520,13 @@ class InMemorySecretsManager(ISecretsManager):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
         value: str,
         expires_at: int,
     ) -> bool:
         del expires_at
-        key = _ephemeral_provider_key(namespace, secret_ref)
+        key = _ephemeral_provider_key(namespace, secret_ref, bundle_id)
         with self._lock:
             if key in self._data:
                 return False
@@ -1038,7 +1060,7 @@ class SecretsFileSecretsManager(ISecretsManager):
             "secrets-file cannot store short-lived runtime secrets in tracked descriptors"
         )
 
-    def _runtime_store(self, namespace: str):
+    def _runtime_store(self, namespace: str, bundle_id: str | None):
         from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileStore
 
         if not self._runtime_secrets_root:
@@ -1048,26 +1070,28 @@ class SecretsFileSecretsManager(ISecretsManager):
             parsed = urlparse(uri or "")
             if parsed.scheme == "file" and runtime_root == Path(parsed.path).resolve().parent:
                 raise SecretsManagerWriteError("runtime_secret_storage_must_be_separate")
+        # <root>/<owner bundle or platform>/<namespace>/<ref>.json (W670).
         return RuntimeFileStore(
             root=self._runtime_secrets_root,
             namespace=namespace,
             authorized_namespaces=self._runtime_secret_namespaces,
+            owner=bundle_id,
         )
 
-    async def _runtime_file_call(self, namespace: str, operation: str, **kwargs):
+    async def _runtime_file_call(self, namespace: str, owner: str | None, operation: str, **kwargs):
         from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileError
 
         try:
-            store = self._runtime_store(namespace)
+            store = self._runtime_store(namespace, owner)
             return await _run_blocking_critical_section(
                 lambda: getattr(store, operation)(**kwargs)
             )
         except RuntimeFileError as exc:
             raise SecretsManagerWriteError(str(exc)) from None
 
-    async def qualify_runtime_custody(self, *, namespace: str) -> bool:
+    async def qualify_runtime_custody(self, *, namespace: str, bundle_id: str | None = None) -> bool:
         try:
-            await self._runtime_file_call(namespace, "qualify")
+            await self._runtime_file_call(namespace, bundle_id, "qualify")
             return True
         except SecretsManagerError:
             return False
@@ -1076,6 +1100,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
         value: str,
         expires_at: int,
@@ -1083,7 +1108,8 @@ class SecretsFileSecretsManager(ISecretsManager):
         # File runtime records are immutable, including the compatibility set
         # operation. A collision must never overwrite another original.
         created = await self.create_ephemeral_secret(
-            namespace=namespace, secret_ref=secret_ref, value=value, expires_at=expires_at,
+            namespace=namespace, bundle_id=bundle_id, secret_ref=secret_ref, value=value,
+            expires_at=expires_at,
         )
         if not created:
             raise SecretsManagerWriteError("runtime_secret_create_conflict")
@@ -1092,38 +1118,42 @@ class SecretsFileSecretsManager(ISecretsManager):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
         value: str,
         expires_at: int,
     ) -> bool:
         return await self._runtime_file_call(
-            namespace, "create", secret_ref=secret_ref, value=value, expires_at=expires_at,
+            namespace, bundle_id, "create", secret_ref=secret_ref, value=value, expires_at=expires_at,
         )
 
     async def get_ephemeral_secret(
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
     ) -> Optional[str]:
-        return await self._runtime_file_call(namespace, "get", secret_ref=secret_ref)
+        return await self._runtime_file_call(namespace, bundle_id, "get", secret_ref=secret_ref)
 
     async def delete_ephemeral_secret(
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
     ) -> None:
-        await self._runtime_file_call(namespace, "delete", secret_ref=secret_ref)
+        await self._runtime_file_call(namespace, bundle_id, "delete", secret_ref=secret_ref)
 
     async def purge_expired_ephemeral_secrets(
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         now: int,
         limit: int = 100,
     ) -> int:
-        return await self._runtime_file_call(namespace, "purge_expired", now=now, limit=limit)
+        return await self._runtime_file_call(namespace, bundle_id, "purge_expired", now=now, limit=limit)
 
     async def set_many(self, values: Mapping[str, str]) -> None:
         normalized_values = {
@@ -1259,8 +1289,11 @@ class SecretsServiceSecretsManager(ISecretsManager):
             raise SecretsManagerWriteError("runtime_secret_storage_unavailable")
         return f"{self._url}/runtime-secrets/{quote(namespace, safe='')}/{suffix}"
 
-    async def _runtime_request(self, *, namespace: str, operation: str,
+    async def _runtime_request(self, *, namespace: str, operation: str, bundle_id: str | None = None,
                                secret_ref: str | None = None, payload: dict | None = None):
+        # The owner bundle is validated here but not sent: the service authorizes and stores by the exact
+        # enrolled namespace, so its records keep their current service-side location (W670).
+        _runtime_owner(bundle_id)
         if operation in {"get", "delete", "create"} and (type(secret_ref) is not str
                 or _EPHEMERAL_SECRET_REF.fullmatch(secret_ref) is None):
             raise SecretsManagerWriteError("runtime_secret_reference_invalid")
@@ -1314,10 +1347,14 @@ class SecretsServiceSecretsManager(ISecretsManager):
             raise SecretsManagerWriteError("runtime_secret_response_invalid") from None
         return None
 
-    async def qualify_runtime_custody(self, *, namespace: str) -> bool:
+    async def qualify_runtime_custody(self, *, namespace: str, bundle_id: str | None = None) -> bool:
         from kdcube_ai_app.infra.secrets.runtime_contract import qualified, valid_namespace
 
         if not self._url or not self._token or not self._admin_token or not valid_namespace(namespace):
+            return False
+        try:
+            _runtime_owner(bundle_id)
+        except SecretsManagerError:
             return False
         try:
             async with _get_httpx().AsyncClient(timeout=self._read_timeout) as client:
@@ -1468,6 +1505,7 @@ class SecretsServiceSecretsManager(ISecretsManager):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
         value: str,
         expires_at: int,
@@ -1478,25 +1516,30 @@ class SecretsServiceSecretsManager(ISecretsManager):
                 raise ValueError
         except (ValueError, UnicodeError):
             raise SecretsManagerWriteError("runtime_secret_value_invalid") from None
-        return await self._runtime_request(namespace=namespace, operation="create", secret_ref=secret_ref,
-            payload={"secret_ref": secret_ref, "value": value, "expires_at": expires_at})
+        return await self._runtime_request(namespace=namespace, operation="create", bundle_id=bundle_id,
+            secret_ref=secret_ref, payload={"secret_ref": secret_ref, "value": value, "expires_at": expires_at})
 
     async def set_ephemeral_secret(self, *, namespace: str, secret_ref: str,
-                                   value: str, expires_at: int) -> None:
-        if not await self.create_ephemeral_secret(namespace=namespace, secret_ref=secret_ref,
+                                   value: str, expires_at: int, bundle_id: str | None = None) -> None:
+        if not await self.create_ephemeral_secret(namespace=namespace, bundle_id=bundle_id, secret_ref=secret_ref,
                                                   value=value, expires_at=expires_at):
             raise SecretsManagerWriteError("runtime_secret_conflict")
 
-    async def get_ephemeral_secret(self, *, namespace: str, secret_ref: str) -> str | None:
-        return await self._runtime_request(namespace=namespace, operation="get", secret_ref=secret_ref)
+    async def get_ephemeral_secret(self, *, namespace: str, secret_ref: str,
+                                   bundle_id: str | None = None) -> str | None:
+        return await self._runtime_request(namespace=namespace, operation="get", bundle_id=bundle_id,
+                                           secret_ref=secret_ref)
 
-    async def delete_ephemeral_secret(self, *, namespace: str, secret_ref: str) -> None:
-        await self._runtime_request(namespace=namespace, operation="delete", secret_ref=secret_ref)
+    async def delete_ephemeral_secret(self, *, namespace: str, secret_ref: str,
+                                      bundle_id: str | None = None) -> None:
+        await self._runtime_request(namespace=namespace, operation="delete", bundle_id=bundle_id,
+                                    secret_ref=secret_ref)
 
-    async def purge_expired_ephemeral_secrets(self, *, namespace: str, now: int, limit: int = 100) -> int:
+    async def purge_expired_ephemeral_secrets(self, *, namespace: str, now: int, limit: int = 100,
+                                               bundle_id: str | None = None) -> int:
         if (type(now) is not int or now <= 0 or type(limit) is not int or not 1 <= limit <= 1000):
             raise SecretsManagerWriteError("runtime_secret_purge_invalid")
-        return await self._runtime_request(namespace=namespace, operation="purge",
+        return await self._runtime_request(namespace=namespace, operation="purge", bundle_id=bundle_id,
                                            payload={"now": now, "limit": limit})
 
     async def delete_secret(self, key: str) -> None:
@@ -1543,10 +1586,14 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         self._write_lock = asyncio.Lock()
         self._runtime_secret_namespaces = config.runtime_secret_namespaces
 
-    async def qualify_runtime_custody(self, *, namespace: str) -> bool:
+    async def qualify_runtime_custody(self, *, namespace: str, bundle_id: str | None = None) -> bool:
         from kdcube_ai_app.infra.secrets.runtime_contract import valid_namespace
 
         if not valid_namespace(namespace) or namespace not in self._runtime_secret_namespaces:
+            return False
+        try:
+            owner = _runtime_owner_segment(bundle_id, "/")
+        except SecretsManagerError:
             return False
         # A signed, read-only provider request checks actual availability and
         # authentication. Per-operation IAM remains authoritative; deployment
@@ -1554,7 +1601,7 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         try:
             async with self._client_cm() as client:
                 result = await client.list_secrets(
-                    Filters=[{"Key": "name", "Values": [f"{self._prefix}/runtime/{namespace}/"]}],
+                    Filters=[{"Key": "name", "Values": [f"{self._prefix}/runtime/{owner}{namespace}/"]}],
                     MaxResults=1,
                 )
             if not isinstance(result, Mapping) or not isinstance(result.get("SecretList"), list):
@@ -1604,10 +1651,11 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
     def _inventory_secret_id(self) -> str:
         return f"{self._prefix}/inventory"
 
-    def _ephemeral_secret_id(self, namespace: str, secret_ref: str) -> str:
+    def _ephemeral_secret_id(self, namespace: str, secret_ref: str, bundle_id: str | None = None) -> str:
         clean_namespace, clean_ref = _ephemeral_secret_parts(namespace, secret_ref)
         self._require_runtime_scope(clean_namespace)
-        return f"{self._prefix}/runtime/{clean_namespace}/{clean_ref}"
+        # <prefix>/runtime/[<owner bundle>/]<namespace>/<ref> (W670).
+        return f"{self._prefix}/runtime/{_runtime_owner_segment(bundle_id, '/')}{clean_namespace}/{clean_ref}"
 
     def _doc_lock_key(self, secret_id: str) -> str:
         safe = str(secret_id or "").replace("/", ":")
@@ -1772,11 +1820,12 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
         value: str,
         expires_at: int,
     ) -> None:
-        secret_id = self._ephemeral_secret_id(namespace, secret_ref)
+        secret_id = self._ephemeral_secret_id(namespace, secret_ref, bundle_id)
         try:
             async with self._client_cm() as client:
                 await client.create_secret(
@@ -1796,12 +1845,13 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
         value: str,
         expires_at: int,
     ) -> bool:
         _clean_namespace, clean_ref = _ephemeral_secret_parts(namespace, secret_ref)
-        secret_id = self._ephemeral_secret_id(namespace, clean_ref)
+        secret_id = self._ephemeral_secret_id(namespace, clean_ref, bundle_id)
         try:
             async with self._client_cm() as client:
                 await client.create_secret(
@@ -1827,10 +1877,11 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
     ) -> Optional[str]:
         return await self._get_secret_string_by_id(
-            self._ephemeral_secret_id(namespace, secret_ref),
+            self._ephemeral_secret_id(namespace, secret_ref, bundle_id),
             strict=True,
         )
 
@@ -1838,23 +1889,26 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         secret_ref: str,
     ) -> None:
-        secret_id = self._ephemeral_secret_id(namespace, secret_ref)
+        secret_id = self._ephemeral_secret_id(namespace, secret_ref, bundle_id)
         await self._delete_secret_by_id(secret_id, key="ephemeral runtime secret")
 
     async def purge_expired_ephemeral_secrets(
         self,
         *,
         namespace: str,
+        bundle_id: str | None = None,
         now: int,
         limit: int = 100,
     ) -> int:
         clean_namespace, _ = _ephemeral_secret_parts(namespace, "0" * 32)
         self._require_runtime_scope(clean_namespace)
-        if not self._claim_ephemeral_purge(clean_namespace):
+        owner = _runtime_owner_segment(bundle_id, "/")
+        if not self._claim_ephemeral_purge(clean_namespace, bundle_id):
             return 0
-        name_prefix = f"{self._prefix}/runtime/{clean_namespace}/"
+        name_prefix = f"{self._prefix}/runtime/{owner}{clean_namespace}/"
         removed = 0
         next_token: str | None = None
         pages = 0
@@ -1884,7 +1938,9 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
                         except (TypeError, ValueError):
                             expires_at = 0
                         name = str(item.get("Name") or "")
-                        if not name.startswith(name_prefix) or expires_at <= 0 or expires_at > int(now):
+                        if (not name.startswith(name_prefix)
+                                or not _EPHEMERAL_SECRET_REF.fullmatch(name[len(name_prefix):])
+                                or expires_at <= 0 or expires_at > int(now)):
                             continue
                         await client.delete_secret(
                             SecretId=name,

@@ -16,8 +16,8 @@ def test_postgres_handle_store_binds_metadata_to_host_secret_custody(
     settings = object()
     captured: dict[str, object] = {}
 
-    def fake_ephemeral_secret_store(*, namespace, settings):
-        captured.update(namespace=namespace, settings=settings)
+    def fake_ephemeral_secret_store(*, namespace, settings, bundle_id):
+        captured.update(namespace=namespace, settings=settings, bundle_id=bundle_id)
         return secret_store
 
     monkeypatch.setattr(
@@ -42,6 +42,7 @@ def test_postgres_handle_store_binds_metadata_to_host_secret_custody(
     assert captured == {
         "namespace": credential_handles.RESIDENT_CARD_SECRET_NAMESPACE,
         "settings": settings,
+        "bundle_id": credential_handles.RESIDENT_CARD_SECRET_OWNER,
     }
 
 

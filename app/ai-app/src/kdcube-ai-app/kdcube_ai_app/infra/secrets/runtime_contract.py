@@ -51,20 +51,34 @@ def persistent_filesystem(root: Path) -> bool:
 
     Linux's closest mount and macOS's actual volume determine this check. A
     deployment must still prove its volume survives container/host replacement.
+
+    Docker Desktop shows a folder shared from the host as mount type
+    ``fakeowner`` with a source under ``/run/host_mark/``; the host's disk
+    backs it. Exactly that pairing is accepted. A ``fakeowner`` mount from any
+    other source, and a transient mount nested inside a host share, are not.
     """
     durable_types = {"apfs", "hfs", "ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "ufs"}
+
+    def unescape(field: str) -> str:
+        for old, new in (("\\040", " "), ("\\011", "\t"), ("\\134", "\\")):
+            field = field.replace(old, new)
+        return field
+
     try:
         if os.uname().sysname == "Linux":
             matches = []
             target = str(root.resolve())
             for line in Path("/proc/self/mountinfo").read_text().splitlines():
                 left, right = line.split(" - ", 1)
-                mount = left.split()[4]
-                for old, new in (("\\040", " "), ("\\011", "\t"), ("\\134", "\\")):
-                    mount = mount.replace(old, new)
+                mount = unescape(left.split()[4])
                 if target == mount or target.startswith(mount.rstrip("/") + "/"):
-                    matches.append((len(mount), right.split()[0]))
-            return bool(matches) and max(matches)[1] in durable_types
+                    fs_type, source = right.split()[:2]
+                    matches.append((len(mount), fs_type, unescape(source)))
+            if not matches:
+                return False
+            _, fs_type, source = max(matches)
+            return fs_type in durable_types or (
+                fs_type == "fakeowner" and source.startswith("/run/host_mark/"))
         if os.uname().sysname == "Darwin":
             disk = subprocess.run(["/bin/df", "-P", str(root)], capture_output=True, timeout=2, check=True)
             device = disk.stdout.decode().splitlines()[1].split()[0]

@@ -24,7 +24,9 @@ from kdcube_ai_app.infra.secrets.ephemeral import (
     ephemeral_secret_store,
 )
 
-RESIDENT_CARD_SECRET_NAMESPACE = "resident-card-credentials"
+# W670 (operator layout): config/secrets/connection-hub@1-0/card-credentials/ on the file backend.
+RESIDENT_CARD_SECRET_NAMESPACE = "card-credentials"
+RESIDENT_CARD_SECRET_OWNER = "connection-hub@1-0"
 
 
 def resident_card_secret_store(
@@ -35,6 +37,7 @@ def resident_card_secret_store(
     return ephemeral_secret_store(
         namespace=RESIDENT_CARD_SECRET_NAMESPACE,
         settings=settings,
+        bundle_id=RESIDENT_CARD_SECRET_OWNER,
     )
 
 
@@ -69,6 +72,7 @@ def postgres_card_credential_handle_store(
 
 __all__ = [
     "RESIDENT_CARD_SECRET_NAMESPACE",
+    "RESIDENT_CARD_SECRET_OWNER",
     "postgres_card_credential_handle_store",
     "resident_card_secret_store",
 ]

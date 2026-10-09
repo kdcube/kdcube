@@ -83,6 +83,7 @@ from connection_hub.delegated_credentials.oauth.metadata import (
     protected_resource_metadata_url,
 )
 from connection_hub.hub.resolver import (
+    IDENTITY_SCOPE_GRANTOR,
     delegated_primary_user_id,
     normalize_delegated_identity_scope,
     resolve_delegated_authority_projection,
@@ -94,6 +95,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.named_service_admis
     store_managed_named_service_admission_snapshot,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import (
+    PRIVILEGED_ROLES,
     delegated_role_projection,
 )
 from kdcube_ai_app.apps.chat.sdk.application_operations import (
@@ -676,9 +678,19 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
         provider: {account_id: list(claims) for account_id, claims in accounts.items()}
         for provider, accounts in card.account_scope.items()
     }
+    # Whose identities' data the session reaches is Card authority too: it
+    # follows the card, and a card that names none gets the narrowest scope,
+    # never the (possibly wider) value stored at issuance (W653).
+    attrs["identity_scope"] = str(card.identity_scope or "").strip() or IDENTITY_SCOPE_GRANTOR
+    # The single issuance-time resource only synthesizes a grant map when none
+    # is carried; the card's map is always carried here, so drop it (W653).
+    attrs.pop("resource", None)
     credential["subject"] = card.delegate_subject
     credential["attrs"] = attrs
     resolved["credential"] = credential
+    # Every reader of the record sees the card's map, not the issuance-time one.
+    resolved["resource_grants"] = dict(attrs["resource_grants"])
+    resolved.pop("resource", None)
     resolved["registry_access_id"] = card.access_id
     resolved["client_id"] = card.client_id
     resolved["grantor_subject"] = card.grantor_subject
@@ -866,11 +878,37 @@ def _delegated_runtime_projection(
                 "resource_operations": resource_operations,
             }
         )
-    fallback_roles = (
+    # The grantor's consent-time roles/permissions, as the economics projection
+    # carries them (resolver: from grantor_authority) or directly.
+    consent_roles = (
         _as_list(identity_authority.get("roles"))
         or _as_list(grantor_authority.get("grantor_roles"))
-        or _as_list(user.get("roles"))
     )
+    consent_permissions = (
+        _as_list(identity_authority.get("permissions"))
+        or _as_list(grantor_authority.get("grantor_permissions"))
+    )
+    def _unprivileged(values):
+        return tuple(
+            value for value in values
+            if not authority_has_platform_privilege((value,)) and value not in PRIVILEGED_ROLES
+        )
+
+    live_record = bool(str(grant_record.get("registry_access_id") or "").strip())
+    privileged_consent = len(_unprivileged(consent_roles)) != len(consent_roles)
+    if live_record:
+        # A live Card is the authority (W653). A Card that selects no role keeps
+        # the grantor's non-privileged consent tier and ambient permissions
+        # (legacy), but privilege is projected only when the Card as it is now
+        # selects it: a privileged consent carries neither its roles nor its admin
+        # edge's permissions.
+        consent_roles = _unprivileged(consent_roles)
+        if privileged_consent:
+            consent_permissions = ()
+    fallback_roles = consent_roles or _as_list(user.get("roles"))
+    if live_record:
+        # The issuance-time token's roles are not tied to the consent either.
+        fallback_roles = _unprivileged(fallback_roles)
     role_projection = delegated_role_projection(
         grants,
         fallback_roles=fallback_roles,
@@ -883,10 +921,10 @@ def _delegated_runtime_projection(
         permissions = tuple(grants)
     else:
         permissions = (
-            _as_list(identity_authority.get("permissions"))
-            or _as_list(grantor_authority.get("grantor_permissions"))
-            or _as_list(user.get("permissions"))
-            or tuple(grants)
+            # For a live record the issuance-time token's permissions are no
+            # fallback: the consent's ambient permissions, else the Card's grants.
+            consent_permissions or tuple(grants) if live_record
+            else consent_permissions or _as_list(user.get("permissions")) or tuple(grants)
         )
     identity_authority.update(
         {
