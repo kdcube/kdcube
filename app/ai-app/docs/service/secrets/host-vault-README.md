@@ -552,7 +552,7 @@ The CLI validates and projects these descriptor values into the internal
 Defaults when `secrets.runtime` is absent (W673, operator 2026-10-09: "it
 simply must work regardless of the backend"). The platform's own runtime-record
 purposes are enrolled: `login-attempts`, `card-credentials` and
-`oauth-refresh-tokens` (`runtime_contract.DEFAULT_RUNTIME_NAMESPACES`; the SDK
+`oauth-refresh-tokens` (`runtime_contract.DEFAULT_RUNTIME_NAMESPACES`, selected by `runtime_section_namespaces` from the whole section; the SDK
 settings and the CLI projection use the same list, and `users` is reserved for
 per-user secret folders). The CLI marks the projection
 `KDCUBE_SECRETS_RUNTIME_DEFAULTED=1`, and every fresh token set written at
