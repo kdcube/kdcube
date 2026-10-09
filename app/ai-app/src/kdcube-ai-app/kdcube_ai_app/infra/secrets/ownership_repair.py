@@ -19,15 +19,19 @@ Entries are adopted only when ALL of these hold, otherwise they are left untouch
   O_NOFOLLOW, its inode and attributes are re-checked on the open descriptor, and ownership changes with
   fchown on that descriptor.
 
-Nothing is created or removed, and modes are not changed, with one exception: a tombstone (0400) whose
-ownership change is refused with a permission error is made 0600 on its open descriptor for the change and set
-back to 0400 on the same descriptor. A file-sharing layer that keeps container ownership as an extended
-attribute of the host file can refuse that change on a read-only file. Every deferral is reported by stage and
-errno, never by path. Stdlib only (the secrets image carries no SDK).
+Modes are never changed and nothing is removed, with one exception. A file-sharing layer may refuse to re-own
+a read-only file: Docker Desktop on macOS keeps container ownership as an extended attribute of the host file.
+For a tombstone (0400) refused that way, the original is never modified. A replacement with the same
+value-free content is written beside it: created 0600 with O_EXCL, re-owned while still writable, made 0400
+and fsynced. It then replaces the original atomically, and only if the name still points to the checked
+inode. Any failure before that leaves the root-owned original exactly as it was, so the entry is deferred
+again on every pass and every start. Content that is not a value-free tombstone is never copied. Every
+deferral is reported by stage and errno, never by path. Stdlib only (the secrets image carries no SDK).
 """
 from __future__ import annotations
 
 import errno
+import json
 import os
 import stat
 import sys
@@ -35,6 +39,7 @@ import sys
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 _FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
 _FILE_MODES = (0o600, 0o400)
+_MAX_TOMBSTONE_BYTES = 256
 
 
 def safe_repair_root(root: object) -> bool:
@@ -67,27 +72,83 @@ class _Tally:
         self.deferred = 0  # eligible-looking entries this pass could not safely finish (I/O error or a change)
         self.reasons: dict[str, int] = {}  # "<stage>:<errno name>" -> count, for the log line (no paths)
 
-    def defer(self, stage: str, exc: OSError | None = None) -> None:
+    def defer(self, stage: str, exc: OSError | str | None = None) -> None:
         self.deferred += 1
-        cause = "changed" if exc is None else errno.errorcode.get(exc.errno or 0, "OSError")
+        if isinstance(exc, OSError):
+            cause = errno.errorcode.get(exc.errno or 0, "OSError")
+        else:
+            cause = exc or "changed"
         reason = f"{stage}:{cause}"
         self.reasons[reason] = self.reasons.get(reason, 0) + 1
 
 
-def _adopt_file(handle: int, info: os.stat_result, owner: int) -> None:
-    """fchown on the open descriptor; a read-only tombstone the filesystem would not re-own is lifted to 0600
-    for the change and set back to 0400, both on the same descriptor."""
+class _Deferred(Exception):
+    def __init__(self, stage: str, cause: OSError | str | None = None) -> None:
+        super().__init__(stage)
+        self.stage, self.cause = stage, cause
+
+
+def _is_tombstone(raw: bytes) -> bool:
     try:
-        os.fchown(handle, owner, -1)
-        return
-    except PermissionError:
-        if stat.S_IMODE(info.st_mode) != 0o400:
-            raise
-    os.fchmod(handle, 0o600)
+        record = json.loads(raw.decode("ascii"))
+    except (UnicodeError, ValueError):
+        return False
+    return (type(record) is dict and set(record) == {"value", "expires_at"} and record["value"] is None
+            and type(record["expires_at"]) is int and record["expires_at"] > 0)
+
+
+def _read_small(handle: int) -> bytes:
+    chunks, size = [], 0
+    while size <= _MAX_TOMBSTONE_BYTES:
+        chunk = os.read(handle, _MAX_TOMBSTONE_BYTES + 1 - size)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks)
+
+
+def _replace_tombstone(fd: int, name: str, handle: int, info: os.stat_result, owner: int) -> None:
+    """Swap a read-only tombstone the filesystem would not re-own for an owner-owned 0400 copy (see module doc)."""
     try:
-        os.fchown(handle, owner, -1)
+        raw = _read_small(handle)
+    except OSError as exc:
+        raise _Deferred("tombstone-read", exc) from None
+    if len(raw) > _MAX_TOMBSTONE_BYTES or not _is_tombstone(raw):
+        raise _Deferred("tombstone", "not-value-free")
+    temporary = f".tombstone-repair-{os.urandom(8).hex()}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        out = os.open(temporary, flags, 0o600, dir_fd=fd)
+    except OSError as exc:
+        raise _Deferred("tombstone-replace", exc) from None
+    published = False  # until then the temporary (created here, O_EXCL) is removed on any failure
+    try:
+        try:
+            os.fchown(out, owner, -1)
+            view = memoryview(raw)
+            while view:
+                view = view[os.write(out, view):]
+            os.fchmod(out, 0o400)
+            os.fsync(out)
+            if not _same(os.stat(name, dir_fd=fd, follow_symlinks=False), info):
+                raise _Deferred("tombstone-replace")  # the name now points elsewhere: look again next pass
+            os.replace(temporary, name, src_dir_fd=fd, dst_dir_fd=fd)
+            published = True
+        except OSError as exc:
+            raise _Deferred("tombstone-replace", exc) from None
+        finally:
+            os.close(out)
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass  # the copy is complete and correct; a crash before the folder syncs brings back the original
     finally:
-        os.fchmod(handle, 0o400)
+        if not published:
+            try:
+                os.unlink(temporary, dir_fd=fd)
+            except OSError:
+                pass
 
 
 def _visit(fd: int, owner: int, device: int, tally: _Tally) -> None:
@@ -144,10 +205,17 @@ def _visit(fd: int, owner: int, device: int, tally: _Tally) -> None:
                 opened = os.fstat(handle)
                 if (_same(entry, opened) and stat.S_ISREG(opened.st_mode) and opened.st_uid == 0
                         and opened.st_nlink == 1 and stat.S_IMODE(opened.st_mode) in _FILE_MODES):
-                    _adopt_file(handle, opened, owner)
+                    try:
+                        os.fchown(handle, owner, -1)
+                    except PermissionError:
+                        if stat.S_IMODE(opened.st_mode) != 0o400:
+                            raise
+                        _replace_tombstone(fd, name, handle, opened, owner)
                     tally.adopted += 1
                 elif not _same(entry, opened):
                     tally.defer("file-open")  # the name now points elsewhere: look again next pass
+            except _Deferred as deferral:
+                tally.defer(deferral.stage, deferral.cause)
             except OSError as exc:
                 tally.defer("file-chown", exc)
             finally:
