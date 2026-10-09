@@ -150,7 +150,7 @@ async def test_original_read_expired_access_refuses_without_renewal(store, monke
     monkeypatch.setattr(session_planned_issuer.time, "time", lambda: bound.expires_at)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_expired$"):
         await read(store, bound)
-    with pytest.raises(SessionIssuanceRefused, match="^issuance_delivery_expired$"):
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_expired$"):
         await bearer(store, applied(bound, first), signs)
     assert not signs
     assert not custody.calls and await counts(store) == (1, 1, 0)

@@ -131,9 +131,11 @@ claims PostgreSQL stores beside their SHA-256: the access session token over its
 reservation claims with the Bundle session key, the refresh artifact over its
 signing input with the refresh signing key. Delivery and replay re-sign exactly
 those claims; a result that differs from the sealed digest (for example after a
-key change) refuses with `issuance_signing_mismatch`,
-`original_refresh_signing_mismatch` or `original_exchange_signing_mismatch` and
-never yields another bearer. Only the two signing keys are secrets.
+key change) refuses and never yields another bearer. The refusing layer names
+the code: session issuance `issuance_signing_mismatch`, the refresh issuer
+`original_refresh_signing_mismatch`, and the exchange flow
+`original_exchange_signing_mismatch` when a provider's bearer differs from the
+committed digest. Only the two signing keys are secrets.
 `read_delegated_client_access_bearer` returns the applied access bearer this
 way; the `custody` arguments that remain on these functions are accepted and
 ignored.
@@ -142,11 +144,12 @@ ignored.
 `platform.services.session_token.secret` and the Hub's refresh signing secret
 (`refresh_signing_secret_ref`), must not change while an original issuance is
 being delivered: from preparation until its delivery deadline. A change in that
-window refuses the retry with `original_exchange_signing_mismatch` (wrapping
-`issuance_signing_mismatch` or `original_refresh_signing_mismatch`) and never
+window refuses the retry with one of the signing-mismatch codes above and never
 yields another bearer; re-authorization is the recovery. There is no key
 versioning. Already delivered refresh tokens are redeemed by digest and survive
-a refresh-key change; a session-key change invalidates every session token.
+a refresh-key change. A session-key change invalidates session tokens in every
+process that resolves the new key; a running authority keeps its cached key
+(`BundleSessionAuthority._resolve_secret`) until it is reconstructed.
  Pending, aborted, superseded, mismatched,
 unbound, or older-authority cases never fall back to ordinary login/minting.
 

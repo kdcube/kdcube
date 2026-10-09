@@ -109,6 +109,15 @@ async def _applied_original(applied: AppliedIssuanceContext, *, tenant: str | No
     return original
 
 
+def _refuse_expired_before_signing(bound: Any) -> None:
+    # The access expiry may precede the delivery deadline; both refuse before any signing.
+    now = int(time.time())
+    if bound.expires_at <= now:
+        raise SessionIssuanceRefused("issuance_expired")
+    if bound.delivery_deadline <= now:
+        raise SessionIssuanceRefused("issuance_delivery_expired")
+
+
 async def read_bound_session_bearer(
     context: object, *, tenant: str | None, project: str | None, store: Any,
     sign: Callable[[Mapping[str, Any]], Awaitable[str]],
@@ -120,8 +129,7 @@ async def read_bound_session_bearer(
     """
     applied = AppliedIssuanceContext.from_context(context)
     original = await _applied_original(applied, tenant=tenant, project=project, store=store)
-    if applied.plan.delivery_deadline <= int(time.time()):
-        raise SessionIssuanceRefused("issuance_delivery_expired")
+    _refuse_expired_before_signing(applied.plan)
     return await _resigned(sign, original.record["claims"], applied.token_sha256)
 
 
@@ -138,8 +146,7 @@ async def activate_prepared_bound_session(
     original = await _applied_original(applied, tenant=tenant, project=project, store=store)
     if original.activation_digest is not None and original.activation_digest != applied.digest:
         raise SessionIssuanceRefused("issuance_activation_conflict")
-    if bound.delivery_deadline <= int(time.time()):
-        raise SessionIssuanceRefused("issuance_delivery_expired")
+    _refuse_expired_before_signing(bound)
     # The applied fingerprint must still be what the stored claims sign to with the current key: a
     # changed or unavailable key refuses here, before activation, and never yields another bearer.
     await _resigned(sign, original.record["claims"], applied.token_sha256)

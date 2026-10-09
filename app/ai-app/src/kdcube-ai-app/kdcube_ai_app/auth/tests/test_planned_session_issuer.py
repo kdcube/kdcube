@@ -442,6 +442,21 @@ async def test_bearer_read_after_retirement_refuses_terminal_before_signing(stor
 
 
 @pytest.mark.asyncio
+async def test_expired_access_with_live_delivery_refuses_read_and_activation_before_signing(store, monkeypatch):
+    """The access expiry can precede the delivery deadline; an expired original never reaches the signer."""
+    now = int(time.time())
+    bound = plan(store, expires_at=now + 400, delivery_deadline=now + 600)
+    first = await session_planned_issuer.prepare_bound_session(bound, **scope(store), **grant_inputs(), sign=Signer())
+    monkeypatch.setattr(session_planned_issuer, "time", SimpleNamespace(time=lambda: now + 450))
+    sign = Signer()
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_expired$"):
+        await session_planned_issuer.read_bound_session_bearer(applied(bound, first), **scope(store), sign=sign)
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_expired$"):
+        await session_planned_issuer.activate_prepared_bound_session(applied(bound, first), **scope(store), sign=sign)
+    assert sign.signed == [] and await counts(store) == (1, 1, 0)
+
+
+@pytest.mark.asyncio
 async def test_bearer_read_with_changed_key_refuses_signing_mismatch(store):
     bound, sign = plan(store), Signer()
     first = await session_planned_issuer.prepare_bound_session(bound, **scope(store), **grant_inputs(), sign=sign)
