@@ -4849,6 +4849,19 @@ def gather_configuration(
 
     update_env_value(env_main, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_main, "HOST_BUNDLES_PATH", host_bundles)
+    # W670 F1: the secrets-file runtime-record folder, on every provider (the host folder is mounted at the
+    # same path in the processors and the secrets service, so it persists across container replacement).
+    from . import host_vault as _host_vault
+
+    runtime_env = _host_vault.runtime_compose_environment(assembly_data)
+    if runtime_env["KDCUBE_SECRETS_RUNTIME_ROOT"]:
+        # Created private (0700), as the runtime store requires; an existing folder is never re-moded here.
+        runtime_root = Path(runtime_env["KDCUBE_SECRETS_RUNTIME_ROOT"])
+        if runtime_root.exists() and not runtime_root.is_dir():
+            raise ValueError(f"Host runtime secrets root must be a directory path, got existing file: {runtime_root}")
+        runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for key, value in runtime_env.items():
+        update_env_value(env_main, key, value)
     update_env_value(env_main, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
     update_env_value(env_main, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
     update_env_value(env_main, "HOST_EXEC_WORKSPACE_PATH", host_exec)
