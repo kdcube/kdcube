@@ -160,7 +160,14 @@ def test_local_compose_mounts_identity_only_into_secrets_broker():
         assert "host.docker.internal:host-gateway" in broker["extra_hosts"]
         assert "ports" not in broker
         assert serialized_broker.count("/run/kdcube-host-vault-identity/") == 3
-        assert all(item["read_only"] is True for item in broker["volumes"])
+        # W670 K2: the runtime-secrets folder is the broker's one writable bind (it stores runtime
+        # records there); every identity file stays read-only.
+        runtime_bind = "${KDCUBE_SECRETS_RUNTIME_ROOT:-/run/kdcube-runtime-secrets}"
+        identity = [item for item in broker["volumes"] if item.get("target") != runtime_bind]
+        assert len(identity) == 3
+        assert all(item["read_only"] is True for item in identity)
+        assert [item.get("read_only") for item in broker["volumes"]
+                if item.get("target") == runtime_bind] == [None]
         assert broker["healthcheck"]["test"][0:2] == ["CMD", "python"]
         assert services["chat-ingress"]["depends_on"]["kdcube-secrets"] == {
             "condition": "service_healthy"

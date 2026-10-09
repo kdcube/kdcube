@@ -43,6 +43,7 @@ from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
     compose_environment as host_vault_compose_environment,
     config_from_assembly as host_vault_config_from_assembly,
+    default_runtime_scope_policy,
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
 )
 from kdcube_cli.host_vault_service import ensure_host_vault_running
@@ -2654,13 +2655,30 @@ def generate_runtime_tokens() -> Dict[str, str]:
 
 def write_env_overlay(base_env: Path, overrides: Dict[str, str]) -> Path:
     env = load_env_file(base_env)
-    for key, value in overrides.items():
+    for key, value in {**overrides, **_default_runtime_scope_overrides(env, overrides)}.items():
         update_env_value(env, key, value)
     fd, tmp_path = tempfile.mkstemp(prefix="kdcube-env-", suffix=".env")
     os.close(fd)
     env.path = Path(tmp_path)
     save_env_file(env)
     return env.path
+
+
+def _default_runtime_scope_overrides(env: "EnvFile", overrides: Dict[str, str]) -> Dict[str, str]:
+    """W673: with no secrets.runtime (KDCUBE_SECRETS_RUNTIME_DEFAULTED=1), each fresh token set grants the
+    default namespaces to exactly this run's proc read and writer credentials (Infra contract). A declared
+    runtime configuration keeps its own policy untouched; no other token is ever granted."""
+    if (env.entries.get("KDCUBE_SECRETS_RUNTIME_DEFAULTED", (None, None))[1] or "").strip() != "1":
+        return {}
+    read_token, write_token = overrides.get("SECRETS_TOKEN_PROC"), overrides.get("SECRETS_ADMIN_TOKEN")
+    if not read_token or not write_token:
+        return {}
+    try:
+        namespaces = tuple(json.loads(env.entries.get("KDCUBE_SECRETS_RUNTIME_NAMESPACES", (None, "[]"))[1] or "[]"))
+    except (TypeError, ValueError):
+        return {}
+    policy = default_runtime_scope_policy(read_token=read_token, write_token=write_token, namespaces=namespaces)
+    return {"KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": policy} if policy else {}
 
 
 def load_env_file(path: Path) -> EnvFile:
@@ -4849,6 +4867,22 @@ def gather_configuration(
 
     update_env_value(env_main, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_main, "HOST_BUNDLES_PATH", host_bundles)
+    # W670 K2: the runtime-secrets folder, on every provider: /config/secrets in the containers (or the
+    # declared secrets.runtime.root inside /config), <host config folder>/secrets on the host.
+    from . import host_vault as _host_vault
+
+    try:
+        runtime_env = _host_vault.runtime_compose_environment(
+            assembly_data, host_config_dir=Path(ctx.config_dir).expanduser().resolve())
+    except HostVaultConfigurationError as exc:
+        raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
+    # Created private (0700), as the runtime store requires; an existing folder is never re-moded here.
+    host_runtime_root = Path(runtime_env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"])
+    if host_runtime_root.exists() and not host_runtime_root.is_dir():
+        raise ValueError(f"Host runtime secrets root must be a directory path, got existing file: {host_runtime_root}")
+    host_runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for key, value in runtime_env.items():
+        update_env_value(env_main, key, value)
     update_env_value(env_main, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
     update_env_value(env_main, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
     update_env_value(env_main, "HOST_EXEC_WORKSPACE_PATH", host_exec)

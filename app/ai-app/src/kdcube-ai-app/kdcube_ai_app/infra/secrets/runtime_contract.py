@@ -16,6 +16,35 @@ SCHEMA = "kdcube.runtime_secret_contract.v1"
 POLICY_SCHEMA = "kdcube.runtime_secret_scopes.v1"
 _NAMESPACE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+# W673 (W670 regression, operator 2026-10-09: "it simply must work regardless of the backend"): the
+# platform's own runtime-record purposes, enrolled when a deployment declares no secrets.runtime.namespaces.
+# An explicit list, an empty one included, is the operator's choice and wins. "users" is reserved for
+# per-user secret folders and is never a purpose here.
+DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refresh-tokens")
+
+
+RUNTIME_SECTION_FIELDS = frozenset({"root", "namespaces", "scope_policy"})
+
+
+def runtime_section_namespaces(section: object) -> tuple[str, ...]:
+    """The enrolled namespaces from the assembly ``secrets.runtime`` section, the CLI projection's rule.
+
+    Absent section, or a section whose ``namespaces`` is omitted or null: the platform defaults (Main,
+    2026-10-09: "omitted namespaces => the 3 defaults in BOTH, explicit [] => none in both"). An explicit
+    list, the empty one included, is exact. Anything malformed, an unsupported field included, enrolls nothing.
+    """
+    if section is None:
+        return DEFAULT_RUNTIME_NAMESPACES
+    # A section with any field other than root, namespaces and scope_policy is malformed (the CLI refuses
+    # it), so it never defaults: SDK consumers not installed through the CLI stay closed too.
+    if not isinstance(section, dict) or set(section) - RUNTIME_SECTION_FIELDS:
+        return ()
+    namespaces = section.get("namespaces")
+    if namespaces is None:
+        return DEFAULT_RUNTIME_NAMESPACES
+    return tuple(namespaces) if isinstance(namespaces, (list, tuple)) else ()
+
+
 GUARANTEES = frozenset({
     "create_only", "restart_persistent", "expiry_enforced",
     "bounded_atomic_purge", "scope_authorized",
