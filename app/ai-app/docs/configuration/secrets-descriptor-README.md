@@ -46,6 +46,13 @@ Typical platform keys:
 - `platform.aws.access_key_id`
 - `platform.aws.secret_access_key`
 
+
+> **File backend:** app (bundle) and per-user secrets now live in the secrets
+> folder (`config/secrets/<bundle>/<key>.json`,
+> `config/secrets/<bundle>/users/<user>/<key>.json`), not in the YAML. See
+> [File backend: app and per-user secrets in folders](../service/secrets/secrets-service-README.md#file-backend-app-and-per-user-secrets-in-folders)
+> for the layout and the one-time move.
+
 ## Direct runtime contract from this descriptor
 
 ### Supported access APIs
