@@ -173,7 +173,7 @@ def test_runtime_policy_change_invalidates_the_manager_cache(monkeypatch, change
 
 
 @pytest.mark.asyncio
-async def test_aws_availability_and_a_declared_namespace_are_not_custody_qualification(monkeypatch):
+async def test_aws_qualifies_only_an_enrolled_namespace_after_one_signed_probe(monkeypatch):
     from kdcube_ai_app.infra.secrets import manager
 
     adapter = manager.AwsSecretsManagerSecretsManager(manager.SecretsManagerConfig(
@@ -191,7 +191,8 @@ async def test_aws_availability_and_a_declared_namespace_are_not_custody_qualifi
         yield AvailableClient()
 
     monkeypatch.setattr(adapter, "_client_cm", client)
-    assert not await adapter.qualify_runtime_custody(namespace="custody")
+    # Enrollment plus authenticated availability, not the full runtime guarantee set.
+    assert await adapter.qualify_runtime_custody(namespace="custody") is True
     assert len(calls) == 1
-    assert not await adapter.qualify_runtime_custody(namespace="other")
+    assert await adapter.qualify_runtime_custody(namespace="other") is False
     assert len(calls) == 1
