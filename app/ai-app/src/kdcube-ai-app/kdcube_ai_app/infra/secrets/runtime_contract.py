@@ -23,11 +23,19 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refresh-tokens")
 
 
-def default_runtime_namespaces(configured: object) -> tuple[str, ...]:
-    """The enrolled namespaces: the defaults when none are declared (None), else exactly the declaration."""
-    if configured is None:
+def runtime_section_namespaces(section: object) -> tuple[str, ...]:
+    """The enrolled namespaces from the whole assembly ``secrets.runtime`` section.
+
+    Absent (None): the platform defaults. A declared mapping wins whole: exactly its ``namespaces`` list,
+    and nothing when it omits them (a root-only or empty section enrolls nothing), the same rule as the
+    CLI projection (kdcube_cli.host_vault). Anything else is malformed and enrolls nothing.
+    """
+    if section is None:
         return DEFAULT_RUNTIME_NAMESPACES
-    return tuple(configured) if isinstance(configured, (list, tuple)) else ()
+    if not isinstance(section, dict):
+        return ()
+    namespaces = section.get("namespaces")
+    return tuple(namespaces) if isinstance(namespaces, (list, tuple)) else ()
 
 
 GUARANTEES = frozenset({
