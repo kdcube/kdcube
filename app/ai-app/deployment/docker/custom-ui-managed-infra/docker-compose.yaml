@@ -121,13 +121,6 @@ services:
       - ${HOST_KDCUBE_STORAGE_PATH?}:/kdcube-storage
       - ${KDCUBE_LOGS_DIR:-./logs}/chat-ingress:/logs
       - ${KDCUBE_CONFIG_DIR:-.}:/config
-      # W670 F1: the secrets-file backend's runtime-record folder (assembly secrets.runtime.root),
-      # mounted at that same path so the records persist across container replacement.
-      - type: bind
-        source: ${HOST_KDCUBE_RUNTIME_SECRETS_ROOT:-/dev/null}
-        target: ${KDCUBE_SECRETS_RUNTIME_ROOT:-/run/kdcube-runtime-secrets}
-        bind:
-          create_host_path: false
       - type: bind
         source: ${HOST_MANAGED_BUNDLES_PATH?}
         target: ${MANAGED_BUNDLES_ROOT:-/managed-bundles}
@@ -181,13 +174,6 @@ services:
       - ${HOST_REACT_DEBUG_PATH?}:/react-debug
       - ${KDCUBE_LOGS_DIR:-./logs}/chat-proc:/logs
       - ${KDCUBE_CONFIG_DIR:-.}:/config
-      # W670 F1: the secrets-file backend's runtime-record folder (assembly secrets.runtime.root),
-      # mounted at that same path so the records persist across container replacement.
-      - type: bind
-        source: ${HOST_KDCUBE_RUNTIME_SECRETS_ROOT:-/dev/null}
-        target: ${KDCUBE_SECRETS_RUNTIME_ROOT:-/run/kdcube-runtime-secrets}
-        bind:
-          create_host_path: false
       - type: bind
         source: ${HOST_BUNDLES_PATH?}           # host root with all bundles
         target: ${BUNDLES_ROOT:-/bundles}      # e.g. /bundles inside the container
