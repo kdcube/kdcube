@@ -17,8 +17,9 @@ from kdcube_ai_app.infra.secrets import ownership_repair as repair
 OWNER = 1000
 
 
-def _present(monkeypatch, tmp_path, attrs):
-    """attrs: relative path -> dict(mode=, uid=, nlink=, dev=) applied to that inode's stat results."""
+def _present(monkeypatch, tmp_path, attrs, refuse=None):
+    """attrs: relative path -> dict(mode=, uid=, nlink=, dev=) applied to that inode's stat results.
+    refuse(values) -> errno: the synthetic filesystem refuses that fchown, as a sharing layer may."""
     by_inode = {}
     for rel, values in attrs.items():
         by_inode[os.lstat(tmp_path / rel).st_ino] = dict(values)  # one copy per inode
@@ -42,10 +43,19 @@ def _present(monkeypatch, tmp_path, attrs):
 
     def fchown(fd, uid, gid):  # recorded, never performed; later stat calls see the new owner, as after a real one
         ino = real_fstat(fd).st_ino
+        code = refuse(by_inode.setdefault(ino, {})) if refuse else None
+        if code:
+            raise PermissionError(code, os.strerror(code))
         changed.append(path_of[ino])
-        by_inode.setdefault(ino, {})["uid"] = uid
+        by_inode[ino]["uid"] = uid
+
+    def fchmod(fd, mode):  # recorded the same way: later stat calls see the new mode
+        ino = real_fstat(fd).st_ino
+        changed.append(f"{path_of[ino]} mode={oct(mode)}")
+        by_inode.setdefault(ino, {})["mode"] = mode
 
     monkeypatch.setattr(repair.os, "fchown", fchown)
+    monkeypatch.setattr(repair.os, "fchmod", fchmod)
     return changed
 
 
@@ -170,4 +180,50 @@ def test_a_persistent_failure_is_reported_as_deferred(tmp_path, monkeypatch, cap
     monkeypatch.setattr(repair.os, "open", failing_open)
     assert repair.repair_secrets_ownership_report(str(root), str(OWNER)) == (0, 1)
     assert repair.main([str(root), str(OWNER)]) == 0
-    assert capsys.readouterr().out.strip() == "secrets ownership repair: adopted=0 deferred=1"
+    assert capsys.readouterr().out.strip() == (
+        "secrets ownership repair: adopted=0 deferred=1 reasons=file-open:OSError*1")
+
+
+def _tombstone_chain(tmp_path):
+    root = _tree(tmp_path)
+    p = "config/secrets"
+    attrs = {p: {"mode": 0o700, "uid": OWNER}, f"{p}/hub": {"mode": 0o700, "uid": OWNER},
+             f"{p}/hub/ns": {"mode": 0o700, "uid": OWNER},
+             f"{p}/hub/ns/tombstone.json": {"mode": 0o400, "uid": 0, "nlink": 1},
+             f"{p}/hub/ns/record.json": {"mode": 0o600, "uid": 0, "nlink": 1}}
+    return root, attrs
+
+
+def _names(changed):
+    return [os.path.basename(entry) for entry in changed]
+
+
+def test_a_tombstone_whose_read_only_file_refuses_the_owner_change_is_adopted_and_stays_0400(
+        tmp_path, monkeypatch, capsys):
+    """Live W677 follow-up (deferred=2, both root-owned 0400 tombstones): a sharing layer that refuses to
+    re-own a read-only file. The tombstone is made 0600 on its descriptor, re-owned, and set back to 0400."""
+    import errno
+    root, attrs = _tombstone_chain(tmp_path)
+    changed = _present(monkeypatch, tmp_path, attrs,
+                       refuse=lambda values: errno.EACCES if values.get("mode") == 0o400 else None)
+    assert repair.main([str(root), str(OWNER)]) == 0
+    assert capsys.readouterr().out.strip() == "secrets ownership repair: adopted=2 deferred=0"
+    tomb = [entry for entry in _names(changed) if entry.startswith("tombstone.json")]
+    assert tomb == ["tombstone.json mode=0o600", "tombstone.json", "tombstone.json mode=0o400"]
+    assert "record.json" in _names(changed) and not any("record.json mode" in e for e in _names(changed))
+    assert S.S_IMODE(repair.os.stat(root / "hub/ns/tombstone.json").st_mode) == 0o400
+    assert repair.os.stat(root / "hub/ns/tombstone.json").st_uid == OWNER
+
+
+def test_a_refused_owner_change_on_a_live_record_is_deferred_with_its_errno_and_mode_kept(
+        tmp_path, monkeypatch, capsys):
+    import errno
+    root, attrs = _tombstone_chain(tmp_path)
+    changed = _present(monkeypatch, tmp_path, attrs, refuse=lambda values: errno.EPERM)
+    assert repair.main([str(root), str(OWNER)]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "secrets ownership repair: adopted=0 deferred=2 reasons=file-chown:EPERM*2"
+    # the 0600 record is never re-moded; the tombstone is lifted for the attempt and always set back
+    assert not any("record.json mode" in entry for entry in _names(changed))
+    assert S.S_IMODE(repair.os.stat(root / "hub/ns/tombstone.json").st_mode) == 0o400
+    assert repair.os.stat(root / "hub/ns/tombstone.json").st_uid == 0
