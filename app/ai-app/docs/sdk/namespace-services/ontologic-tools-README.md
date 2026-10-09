@@ -4,7 +4,7 @@ title: "Namespace Services: Ontology-Guided Tools"
 summary: "How generic named-service tools operate a provider realm through a lightweight operational ontology and schema-declared affordances."
 status: current
 tags: ["sdk", "namespace-services", "ontology-guided-tools", "agents", "schema", "affordance"]
-updated_at: 2026-08-03
+updated_at: 2026-10-02
 keywords:
   [
     "operational ontology",
@@ -278,13 +278,12 @@ returns a precise capability error. The adapter must not silently replace a
 more specific operation with a weaker one.
 
 **Google Docs status:** the current named-service adapter resolves tabs by
-title, literal title fragment, 1-based position, or hierarchy. It resolves one
-document-level Drive comment by literal text, quoted text, author (`me` is
-supported), resolved state, or position. Exact provider ids remain available
-for callers that already hold them. Ambiguous selectors return bounded
-candidates, and a tab-scoped comment request returns
-`tab_anchored_comments_unavailable`. Native tab anchors remain a preview-only
-provider capability. Provider-side translation and capability reporting are
+title, literal title fragment, 1-based position, or hierarchy. It attaches a
+new comment to quoted text or a table cell, and resolves one comment by literal
+text, the commented text, author (`me` is supported), resolved state, scope, or
+position. Exact provider ids remain available for callers that already hold
+them. Ambiguous selectors return bounded candidates. Provider-side translation
+and capability reporting are
 specified in
 [Providers](providers-README.md#domain-operations-and-provider-translation).
 The shipped Docs, Sheets, Mail, and Slack adapters declare projection indexes

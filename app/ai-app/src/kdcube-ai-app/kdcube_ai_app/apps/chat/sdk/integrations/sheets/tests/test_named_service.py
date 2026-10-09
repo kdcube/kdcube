@@ -873,3 +873,23 @@ async def test_tab_range_read_and_unknown_provider_fail_before_google_call() -> 
     assert unsupported.ok is False
     assert unsupported.error.code == "sheets_provider_not_implemented"
     assert fake.calls == []
+
+
+
+def test_every_action_speaks_to_a_person_as_well_as_to_an_agent() -> None:
+    from kdcube_ai_app.apps.chat.sdk.integrations.sheets.named_service import (
+        SHEETS_ACTIONS,
+        SHEETS_PRESENTATION,
+        SHEETS_SCHEMA,
+    )
+
+    presentation = SHEETS_PRESENTATION["actions"]
+    for action in SHEETS_ACTIONS:
+        entry = presentation.get(action)
+        assert entry, f"{action} has no presentation entry"
+        label, described = entry["label"], entry["description"]
+        assert label and not label.endswith("."), f"{action} label reads oddly"
+        # A consent card shows this text; the schema is written for the agent.
+        schema_text = (SHEETS_SCHEMA["actions"].get(action) or {}).get("description")
+        assert described != schema_text, f"{action} shows its schema text to a person"
+        assert len(described) <= 120, f"{action} reads as an instruction, not a line"

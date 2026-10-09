@@ -62,8 +62,20 @@ def mint_file_download_token(
     project: str = "",
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     now: int | None = None,
+    include_identity: bool = True,
+    media_type: str = "",
 ) -> tuple[str, int]:
     """Mint a signed download token bound to a single artifact + requester.
+
+    ``media_type`` signs the type the route must serve the bytes as, for a
+    caller that measured them; the route then never derives it from a name.
+
+    ``include_identity=False`` leaves tenant, project, user and conversation
+    out of the payload. Use it for a URL handed to a third party that records
+    it: a document provider keeps the fetch URL in the file it inserts, so
+    whatever the payload holds becomes readable by everyone who opens that
+    file. The ref is already unguessable, and the route it addresses needs
+    nothing else.
 
     Returns ``(token, expires_at)``. The token carries everything the download
     route needs to re-materialize the file (tenant/project/user/conversation), so
@@ -79,12 +91,19 @@ def mint_file_download_token(
     payload = {
         "v": TOKEN_VERSION,
         "fi_ref": str(fi_ref or "").strip(),
-        "user_id": str(user_id or "").strip(),
-        "conversation_id": str(conversation_id or "").strip(),
-        "tenant": str(tenant or "").strip(),
-        "project": str(project or "").strip(),
         "exp": expires_at,
     }
+    if str(media_type or "").strip():
+        payload["media_type"] = str(media_type).strip().lower()
+    if include_identity:
+        payload.update(
+            {
+                "user_id": str(user_id or "").strip(),
+                "conversation_id": str(conversation_id or "").strip(),
+                "tenant": str(tenant or "").strip(),
+                "project": str(project or "").strip(),
+            }
+        )
     body = _b64url_encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
     sig = _b64url_encode(hmac.new(key, body.encode("ascii"), hashlib.sha256).digest())
     return f"{body}.{sig}", expires_at
@@ -96,6 +115,7 @@ def verify_file_download_token(
     *,
     fi_ref: str,
     now: int | None = None,
+    require_user_scope: bool = True,
 ) -> Dict[str, Any]:
     """Verify a download token and return its payload dict.
 
@@ -127,7 +147,7 @@ def verify_file_download_token(
     current = int(now if now is not None else time.time())
     if expires_at < current:
         raise ValueError("download token is expired")
-    if not str(payload.get("user_id") or "").strip():
+    if require_user_scope and not str(payload.get("user_id") or "").strip():
         raise ValueError("download token does not include a user scope")
     return payload
 

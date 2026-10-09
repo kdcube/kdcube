@@ -173,6 +173,9 @@ def resolve_tab_selector(
     return matches[0]
 
 
+COMMENT_SCOPES = ("text", "cell", "document")
+
+
 def comment_candidates(
     comments: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -194,6 +197,16 @@ def comment_candidates(
                 "author_is_me": bool(comment.get("author_is_me")),
                 "resolved": bool(comment.get("resolved")),
                 "created_time": _text(comment.get("created_time")),
+                **{
+                    key: comment[key]
+                    for key in ("scope", "tab_title", "where", "anchor_state")
+                    if comment.get(key) not in (None, "")
+                },
+                **(
+                    {"current_text": _text(comment.get("current_text"))[:240]}
+                    if comment.get("current_text")
+                    else {}
+                ),
             }
         )
     return candidates
@@ -223,6 +236,14 @@ def matching_comments(
     position = _positive_int(raw.get("position"))
     resolved_supplied = isinstance(raw.get("resolved"), bool)
     resolved = bool(raw.get("resolved"))
+    scope = _normalized(raw.get("scope"))
+    if scope and scope not in COMMENT_SCOPES:
+        raise DocsSelectorError(
+            "docs_comment_selector_invalid",
+            f"comment_selector.scope must be one of: {', '.join(COMMENT_SCOPES)}.",
+            status=400,
+            details={"selector": raw},
+        )
     if not any(
         (
             text_contains,
@@ -231,12 +252,13 @@ def matching_comments(
             author_contains,
             position,
             resolved_supplied,
+            scope,
         )
     ):
         raise DocsSelectorError(
             "docs_comment_selector_invalid",
             "comment_selector must provide text_contains, quoted_text_contains, "
-            "author, author_contains, position, or resolved.",
+            "author, author_contains, position, resolved, or scope.",
             status=400,
             details={"selector": raw},
         )
@@ -256,14 +278,22 @@ def matching_comments(
         candidate["position"] = position_index
         content = _normalized(raw_comment.get("content"))
         quoted_text = _normalized(raw_comment.get("quoted_text"))
+        current_text = _normalized(raw_comment.get("current_text"))
         author_name = _normalized(candidate.get("author"))
         if (
             text_contains
             and text_contains not in content
             and text_contains not in quoted_text
+            and text_contains not in current_text
         ):
             continue
-        if quoted_contains and quoted_contains not in quoted_text:
+        if (
+            quoted_contains
+            and quoted_contains not in quoted_text
+            and quoted_contains not in current_text
+        ):
+            continue
+        if scope and _normalized(raw_comment.get("scope")) != scope:
             continue
         if author == "me":
             if not candidate.get("author_is_me"):

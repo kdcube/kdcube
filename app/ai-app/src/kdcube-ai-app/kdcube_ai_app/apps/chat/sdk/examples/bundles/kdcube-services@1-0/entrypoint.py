@@ -37,6 +37,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import (
 from kdcube_ai_app.apps.chat.sdk.integrations.docs.named_service import (
     make_docs_named_service_provider,
     parse_docs_export_ref,
+    parse_docs_image_ref,
     parse_docs_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.mail import make_mail_named_service_provider
@@ -69,12 +70,14 @@ from .services import telegram as telegram_notify
 from .services.conversations.named_service import build_conversation_named_service_provider
 from .services.named_services import NamedServicesMcpBridge
 from .services.named_services.request_scope import get_public_base_url
+from .services.provider_fetch import serve_provider_fetch
 from .services.productivity import (
     GoogleDocsService,
     GoogleSheetsService,
     bind_docs_service,
     bind_service as bind_productivity_service,
     fetch_google_docs_export,
+    fetch_google_docs_image,
     fetch_google_docs_snapshot,
     fetch_google_sheets_snapshot,
 )
@@ -93,6 +96,12 @@ WORKFLOW_NAME = "kdcube_services"
 # artifacts, mail attachments, Slack files, Sheets snapshots) — the token
 # payload, not the key, scopes each link to its exact object and requester.
 CONV_FILE_DOWNLOAD_SECRET_KEY = "conversations.file_download_secret"
+# Where a provider that fetches our files for itself is configured: the public
+# origin it reaches us at, and how long the one-fetch token stays valid.
+PROVIDER_FETCH_CONFIG_PREFIX = "integrations.provider_fetch"
+
+
+
 STORAGE_WIDGET_SRC = "sdk://solutions/storage/ui.widget.storage"
 APP_CONFIG_WIDGET_SRC = "sdk://solutions/app_config/ui/widget"
 AGENTIC_CONFIG_WIDGET_SRC = "sdk://solutions/agentic_config/ui/widget"
@@ -452,6 +461,10 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                 execute_operation=docs_service.execute,
                 bundle_id=self._named_services_bundle_id(),
                 file_url_factory=self._integration_file_url,
+                staging_root_factory=lambda: staging_root(
+                    str(getattr(self.settings, "STORAGE_PATH", "") or "")
+                ),
+                provider_fetch_url_factory=self._provider_fetch_url,
             )
         )
         # Stored agent instruction sets (instr:custom:<id>[:<version>]):
@@ -654,6 +667,121 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
             "max_bytes": MAX_STAGED_FILE_BYTES,
         }
 
+    def _provider_fetch_origin(self) -> str:
+        """The public origin a provider fetches a staged file from.
+
+        Configuration first, the live request second: an agent embedding a file
+        mid-turn has no HTTP request in context, which is exactly when this is
+        needed.
+        """
+
+        configured = str(
+            self.bundle_prop(PROVIDER_FETCH_CONFIG_PREFIX + ".public_base_url", "") or ""
+        ).strip().rstrip("/")
+        return configured or get_public_base_url()
+
+    def _provider_fetch_ttl_seconds(self) -> int:
+        try:
+            ttl = int(
+                self.bundle_prop(PROVIDER_FETCH_CONFIG_PREFIX + ".token_ttl_seconds", 60)
+                or 60
+            )
+        except Exception:
+            ttl = 60
+        return max(60, min(ttl, 3600))
+
+    async def _provider_fetch_url(self, ns_ctx: Any, info: Any) -> Dict[str, Any] | None:
+        """Mint a short-lived URL for one staged file, for a provider to fetch.
+
+        The provider arrives with no identity of its own, so the signed token is
+        the whole authorization; it is bound to that one staged ref and expires
+        within a minute by default. The caller deletes the staged file as soon
+        as the operation returns, which is what actually ends the URL's life.
+        """
+
+        base = self._provider_fetch_origin()
+        if not base:
+            return None
+        info = info if isinstance(info, dict) else {}
+        staged_ref = str(info.get("staged_ref") or "").strip()
+        if not staged_ref:
+            return None
+        secret = await self._conv_download_secret()
+        if not secret:
+            LOGGER.warning(
+                "[kdcube-services] %s not configured in bundles.secrets.yaml for %s; "
+                "a provider cannot be handed a file of ours.",
+                CONV_FILE_DOWNLOAD_SECRET_KEY, self._named_services_bundle_id(),
+            )
+            return None
+        try:
+            token, expires_at = mint_file_download_token(
+                secret,
+                fi_ref=staged_ref,
+                user_id=str(getattr(ns_ctx, "user_id", "") or ""),
+                tenant=str(getattr(ns_ctx, "tenant", "") or ""),
+                project=str(getattr(ns_ctx, "project", "") or ""),
+                ttl_seconds=self._provider_fetch_ttl_seconds(),
+                # The provider records this URL inside the file it inserts, so
+                # the token travels with it: it carries no identity.
+                include_identity=False,
+                # The caller measured the bytes; the route serves that type.
+                media_type=str(info.get("media_type") or ""),
+            )
+            url = bundle_operation_url(
+                tenant=str(getattr(ns_ctx, "tenant", "") or ""),
+                project=str(getattr(ns_ctx, "project", "") or ""),
+                bundle_id=self._named_services_bundle_id(),
+                operation="provider_fetch_download",
+                route="public",
+                query={"object_ref": staged_ref, "download_token": token},
+                base_url=base,
+                strict=True,
+            )
+        except Exception:
+            LOGGER.exception("[kdcube-services] provider fetch url not minted")
+            return None
+        return {"url": url, "expires_at": expires_at}
+
+    @api(method="GET", alias="provider_fetch_download", route="public")
+    async def provider_fetch_download(self, request: Any = None, object_ref: str = "", download_token: str = "", **kwargs):
+        """Serve one staged file to a provider that fetches it anonymously.
+
+        The token (minted when the action staged the file) binds the exact
+        staged ref and the media type the action measured the bytes as, so
+        this route trusts the signature rather than the request or the staged
+        name. Only display-only types are served inline, always with nosniff.
+        The file itself is removed by the action that staged it, as soon as the
+        provider call returns."""
+        del kwargs
+        try:
+            from starlette.responses import JSONResponse, Response
+        except Exception:  # pragma: no cover
+            from fastapi.responses import JSONResponse, Response  # type: ignore
+
+        ref = str(object_ref or "").strip()
+        token = str(download_token or "").strip()
+        if request is not None:
+            ref = ref or str(request.query_params.get("object_ref") or "").strip()
+            token = token or str(request.query_params.get("download_token") or "").strip()
+        if not ref or not token:
+            return JSONResponse(status_code=400, content={"error": "fetch_request_invalid"})
+        secret = await self._conv_download_secret()
+        if not secret:
+            return JSONResponse(status_code=503, content={"error": "fetch_not_configured"})
+        answer = serve_provider_fetch(
+            secret=secret,
+            root=staging_root(str(getattr(self.settings, "STORAGE_PATH", "") or "")),
+            ref=ref,
+            token=token,
+        )
+        if answer.error is not None:
+            return JSONResponse(status_code=answer.status, content=answer.error)
+        return Response(
+            content=answer.body, media_type=answer.media_type, headers=answer.headers
+        )
+
+
     @api(method="POST", alias="integration_file_upload", route="public")
     async def integration_file_upload(self, request: Any = None, object_ref: str = "", upload_token: str = "", **kwargs):
         """Session-less signed upload of one inbound integration file.
@@ -746,6 +874,10 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
             docs_export_parsed = parse_docs_export_ref(ref)
         except ValueError:
             docs_export_parsed = {}
+        try:
+            docs_image_parsed = parse_docs_image_ref(ref)
+        except ValueError:
+            docs_image_parsed = {}
         if mail_parsed.get("kind") == "attachment":
             result = await fetch_mail_attachment(
                 self,
@@ -786,6 +918,14 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
             )
         elif docs_export_parsed.get("document_id"):
             result = await fetch_google_docs_export(
+                self,
+                user_id=user_id,
+                tenant=tenant,
+                project=project,
+                object_ref=ref,
+            )
+        elif docs_image_parsed.get("object_id"):
+            result = await fetch_google_docs_image(
                 self,
                 user_id=user_id,
                 tenant=tenant,

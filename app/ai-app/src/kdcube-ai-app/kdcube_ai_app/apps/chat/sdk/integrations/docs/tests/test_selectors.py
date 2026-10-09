@@ -5,6 +5,7 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.integrations.docs.selectors import (
     DocsSelectorError,
     SELECTOR_CANDIDATE_LIMIT,
+    matching_comments,
     resolve_comment_selector,
     resolve_tab_selector,
 )
@@ -142,3 +143,20 @@ def test_comment_selector_bounds_ambiguity_candidates() -> None:
     assert details["match_count"] == SELECTOR_CANDIDATE_LIMIT + 5
     assert len(details["candidates"]) == SELECTOR_CANDIDATE_LIMIT
     assert details["candidates_truncated"] is True
+
+
+def test_comment_selector_reads_the_text_under_a_comment_now() -> None:
+    comments = [
+        {"comment_id": "c1", "content": "check", "quoted_text": "June", "current_text": "July", "scope": "text"},
+        {"comment_id": "c2", "content": "general", "scope": "document"},
+    ]
+    assert [m["comment_id"] for m in matching_comments(comments, {"quoted_text_contains": "july"})] == ["c1"]
+    assert [m["comment_id"] for m in matching_comments(comments, {"text_contains": "june"})] == ["c1"]
+    assert [m["comment_id"] for m in matching_comments(comments, {"scope": "document"})] == ["c2"]
+    assert matching_comments(comments, {"scope": "text"})[0]["current_text"] == "July"
+
+
+def test_comment_selector_refuses_an_unknown_scope() -> None:
+    with pytest.raises(DocsSelectorError) as error:
+        matching_comments([], {"scope": "paragraph"})
+    assert error.value.code == "docs_comment_selector_invalid"
