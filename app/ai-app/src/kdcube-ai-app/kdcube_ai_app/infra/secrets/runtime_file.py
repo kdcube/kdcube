@@ -78,7 +78,8 @@ class RuntimeFileStore:
 
     def __init__(self, *, root: str | Path, namespace: str, authorized_namespaces: Iterable[str],
                  owner: str | None = None):
-        if type(namespace) is not str or _NAMESPACE.fullmatch(namespace) is None:
+        # "users" is reserved: <root>/<bundle>/users/ holds per-user secrets (user_secret_files).
+        if type(namespace) is not str or _NAMESPACE.fullmatch(namespace) is None or namespace == "users":
             raise RuntimeFileError("runtime_secret_scope_invalid")
         if (isinstance(authorized_namespaces, (str, bytes))
                 or namespace not in frozenset(authorized_namespaces)):

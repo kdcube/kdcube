@@ -1101,11 +1101,11 @@ async def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_pat
         )
         == "sk-user"
     )
-    text = global_file.read_text(encoding="utf-8")
-    assert "users:" in text
-    assert "user-1:" in text
-    assert "rms@06-04-26-156" in text
-    assert "sk-user" in text
+    # W670 (operator: "step 2 should not stay in secrets.yaml. it should be also in folder"): the value is
+    # one private file under its bundle, beside (never in) the descriptor yaml.
+    assert not global_file.exists() or "sk-user" not in global_file.read_text(encoding="utf-8")
+    record = tmp_path / "secrets" / "rms@06-04-26-156" / "users" / "user-1" / "anthropic.api_key.json"
+    assert json.loads(record.read_text(encoding="utf-8")) == {"value": "sk-user"}
     assert await manager.list_user_secret_keys(
         user_id="user-1",
         bundle_id="rms@06-04-26-156",
@@ -1116,7 +1116,8 @@ async def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_pat
         bundle_id="rms@06-04-26-156",
     )
     await manager.set_secret(metadata_key, '["users.user-1.stale"]')
-    assert metadata_key not in global_file.read_text(encoding="utf-8")
+    assert not global_file.exists() or metadata_key not in global_file.read_text(encoding="utf-8")
+    assert await manager.list_user_secret_keys(user_id="user-1", bundle_id="rms@06-04-26-156") == [expected_key]
 
     await manager.delete_user_secret(
         user_id="user-1",
@@ -1542,6 +1543,8 @@ async def test_secrets_file_refuses_all_ephemeral_secret_operations(tmp_path):
             limit=100,
         ),
     )
+    # W670: the runtime root defaults beside the secrets yaml, so the refusal is now the missing namespace
+    # enrollment; runtime values still never enter the tracked descriptors.
     for call in calls:
-        with pytest.raises(SecretsManagerWriteError, match="tracked descriptors"):
+        with pytest.raises(SecretsManagerWriteError, match="runtime_secret_scope_forbidden"):
             await call
