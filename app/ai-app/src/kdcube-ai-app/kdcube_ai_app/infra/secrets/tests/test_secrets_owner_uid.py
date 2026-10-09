@@ -220,3 +220,61 @@ def test_kdcube_secrets_startup_reowns_only_root_owned_entries(tmp_path, monkeyp
     assert sorted(chowned) == sorted([("secrets", 1000), (HUB, 1000), ("root.json", 1000)])
     monkeypatch.setattr(entry.os, "geteuid", lambda: 1000)
     assert entry.adopt_root_owned_entries(str(root), "1000") == 0  # only root repairs
+
+
+# W677 acceptance: both creation orders, every runtime namespace, qualify/create/read/delete, then the
+# negative cases. SYNTHETIC uids: "root" is os.geteuid patched to 0 (a chown to one's own uid is a real call),
+# the owner is this test user; no test runs with real uid changes.
+NAMESPACES = ("card-credentials", "login-attempts", "oauth-refresh-tokens")
+
+
+def _ns_store(root, namespace):
+    return RuntimeFileStore(root=root, namespace=namespace, authorized_namespaces=NAMESPACES, owner=HUB)
+
+
+@pytest.mark.parametrize("namespace", NAMESPACES)
+@pytest.mark.parametrize("first", ["owner", "root"])
+def test_both_creation_orders_share_every_namespace(tmp_path, monkeypatch, namespace, first):
+    monkeypatch.setenv("KDCUBE_SECRETS_OWNER_UID", str(ME))
+    monkeypatch.setattr("kdcube_ai_app.infra.secrets.runtime_contract.persistent_filesystem", lambda root: True)
+    root = tmp_path / "secrets"
+    order = [first, "root" if first == "owner" else "owner"]
+
+    def act_as(who):
+        monkeypatch.setattr(runtime_file.os, "geteuid", (lambda: 0) if who == "root" else (lambda: ME))
+
+    for index, who in enumerate(order):
+        act_as(who)
+        store = _ns_store(root, namespace)
+        store.qualify()
+        assert store.create(secret_ref=f"{index + 1:032x}", value=f"synthetic-{who}", expires_at=int(time.time()) + 60)
+    for who in order:  # each reads the other's record and its own
+        act_as(who)
+        store = _ns_store(root, namespace)
+        assert {store.get(secret_ref=f"{i + 1:032x}") for i in range(2)} == {"synthetic-owner", "synthetic-root"}
+    act_as(order[1])
+    _ns_store(root, namespace).delete(secret_ref=f"{1:032x}")  # the second process deletes the first one's record
+    act_as(order[0])
+    assert _ns_store(root, namespace).get(secret_ref=f"{1:032x}") is None
+    assert not _ns_store(root, namespace).create(secret_ref=f"{1:032x}", value="again", expires_at=int(time.time()) + 60)
+    for path in root.rglob("*"):
+        assert path.lstat().st_uid == ME and path.lstat().st_mode & 0o077 == 0
+
+
+def test_symlink_traversal_and_unsafe_modes_stay_refused_under_the_owner_model(tmp_path, monkeypatch, as_root):
+    monkeypatch.setenv("KDCUBE_SECRETS_OWNER_UID", str(ME))
+    root = tmp_path / "secrets"
+    store = _ns_store(root, "login-attempts")
+    assert store.create(secret_ref=REF, value="synthetic", expires_at=int(time.time()) + 60)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir(mode=0o700)
+    (root / HUB / "oauth-refresh-tokens").symlink_to(elsewhere)  # a symlinked purpose folder
+    with pytest.raises(RuntimeFileError, match="runtime_secret_storage_unavailable"):
+        _ns_store(root, "oauth-refresh-tokens").create(secret_ref=REF, value="v", expires_at=int(time.time()) + 60)
+    assert list(elsewhere.iterdir()) == []
+    with pytest.raises(RuntimeFileError, match="runtime_secret_owner_invalid"):
+        RuntimeFileStore(root=root, namespace="card-credentials", authorized_namespaces=NAMESPACES, owner="../escape")
+    (root / HUB / "login-attempts").chmod(0o750)
+    with pytest.raises(RuntimeFileError, match="runtime_secret_storage_unavailable"):
+        store.get(secret_ref=REF)
+    assert (root / HUB / "login-attempts").stat().st_mode & 0o777 == 0o750  # refused, not repaired
