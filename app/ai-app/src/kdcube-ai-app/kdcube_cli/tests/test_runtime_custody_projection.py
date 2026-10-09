@@ -94,4 +94,4 @@ def test_projected_descriptor_drives_real_common_http_storage(tmp_path, monkeypa
     assert response.json() == {"status": "ok", "created": True}
     assert client.get(base + "/secret/" + "a" * 32, headers=read).json() == {"value": "synthetic-roundtrip-value"}
     assert client.get(base + "/secret/" + "a" * 32, headers=write).status_code == 403
-    assert (tmp_path / "private-custody" / "custody.json").stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "private-custody" / "platform" / "custody" / ("a" * 32 + ".json")).stat().st_mode & 0o777 == 0o600
