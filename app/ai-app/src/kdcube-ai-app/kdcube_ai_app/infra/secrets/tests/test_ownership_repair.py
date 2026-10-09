@@ -188,18 +188,22 @@ def test_a_persistent_failure_is_reported_as_deferred(tmp_path, monkeypatch, cap
         "secrets ownership repair: adopted=0 deferred=1 reasons=file-open:OSError*1")
 
 
-TOMBSTONE = b'{"expires_at":1760000000,"value":null}'
+TOMBSTONE = b'{"expires_at":1760000000,"value":null}'  # exactly what runtime_file writes
+TOMB = "0123456789abcdef0123456789abcdef.json"  # a runtime record name, in <root>/hub/ns/
 
 
-def _tombstone_chain(tmp_path, content=TOMBSTONE):
+def _tombstone_chain(tmp_path, content=TOMBSTONE, folder="hub/ns"):
     root = _tree(tmp_path)
-    (root / "hub/ns/tombstone.json").write_bytes(content)
+    (root / folder).mkdir(parents=True, exist_ok=True)
+    (root / folder / TOMB).write_bytes(content)
     p = "config/secrets"
-    attrs = {p: {"mode": 0o700, "uid": OWNER}, f"{p}/hub": {"mode": 0o700, "uid": OWNER},
-             f"{p}/hub/ns": {"mode": 0o700, "uid": OWNER},
-             f"{p}/hub/ns/tombstone.json": {"mode": 0o400, "uid": 0, "nlink": 1},
-             f"{p}/hub/ns/record.json": {"mode": 0o600, "uid": 0, "nlink": 1}}
-    return root, attrs
+    attrs = {p: {"mode": 0o700, "uid": OWNER}, f"{p}/hub/ns/record.json": {"mode": 0o600, "uid": 0, "nlink": 1},
+             f"{p}/{folder}/{TOMB}": {"mode": 0o400, "uid": 0, "nlink": 1}}
+    parts = folder.split("/")
+    for depth in range(1, len(parts) + 1):
+        attrs[f"{p}/{'/'.join(parts[:depth])}"] = {"mode": 0o700, "uid": OWNER}
+    attrs[f"{p}/hub/ns"] = {"mode": 0o700, "uid": OWNER}
+    return root, attrs, root / folder / TOMB
 
 
 def _read_only_share(values):
@@ -208,22 +212,26 @@ def _read_only_share(values):
     return errno.EACCES if values.get("mode") == 0o400 else None
 
 
-def _leftovers(root):
-    return [path.name for path in (root / "hub/ns").iterdir() if path.name.startswith(".tombstone-repair-")]
+def _leftovers(folder):
+    return [path.name for path in folder.iterdir() if path.name.startswith(".tombstone-repair-")]
+
+
+def _names(changed):
+    return [os.path.basename(entry) for entry in changed]
 
 
 def test_a_read_only_tombstone_the_share_will_not_re_own_is_replaced_by_an_owned_0400_copy(
         tmp_path, monkeypatch, capsys):
     """Live W677 follow-up (deferred=2, both root-owned 0400 tombstones). The original is never re-moded: a
-    complete owner-owned 0400 copy with the same value-free content replaces it atomically."""
-    root, attrs = _tombstone_chain(tmp_path)
-    original = os.lstat(root / "hub/ns/tombstone.json").st_ino
+    complete owner-owned 0400 copy with the same bytes replaces it."""
+    root, attrs, tomb = _tombstone_chain(tmp_path)
+    original = os.lstat(tomb).st_ino
     changed = _present(monkeypatch, tmp_path, attrs, refuse=_read_only_share)
     assert repair.main([str(root), str(OWNER)]) == 0
     assert capsys.readouterr().out.strip() == "secrets ownership repair: adopted=2 deferred=0"
-    now = repair.os.stat(root / "hub/ns/tombstone.json", follow_symlinks=False)
+    now = repair.os.stat(tomb, follow_symlinks=False)
     assert now.st_ino != original and now.st_uid == OWNER and S.S_IMODE(now.st_mode) == 0o400
-    assert (root / "hub/ns/tombstone.json").read_bytes() == TOMBSTONE and _leftovers(root) == []
+    assert tomb.read_bytes() == TOMBSTONE and _leftovers(tomb.parent) == []
     # only the new copy is ever re-moded, and only to 0400; the record is re-owned in place
     assert [entry for entry in changed if "mode=" in entry] == ["<new> mode=0o400"]
     assert sorted(_names(changed)) == ["<new>", "<new> mode=0o400", "record.json"]
@@ -235,37 +243,53 @@ def test_a_failed_replacement_leaves_the_original_and_stays_deferred_on_every_pa
     unsafe tombstone stays. Here the copy's 0400 step is refused: the original root-owned 0400 tombstone is
     untouched, the copy is removed, and the deferral is reported by every pass and every start."""
     import errno
-    root, attrs = _tombstone_chain(tmp_path)
-    original = os.lstat(root / "hub/ns/tombstone.json").st_ino
+    root, attrs, tomb = _tombstone_chain(tmp_path)
+    original = os.lstat(tomb).st_ino
     changed = _present(monkeypatch, tmp_path, attrs, refuse=_read_only_share,
                        refuse_mode=lambda values, mode: errno.EACCES)
     for start in range(2):
         assert repair.main([str(root), str(OWNER)]) == 0
         assert capsys.readouterr().out.strip() == (
             f"secrets ownership repair: adopted={1 - start} deferred=1 reasons=tombstone-replace:EACCES*1")
-        now = repair.os.stat(root / "hub/ns/tombstone.json", follow_symlinks=False)
+        now = repair.os.stat(tomb, follow_symlinks=False)
         assert now.st_ino == original and now.st_uid == 0 and S.S_IMODE(now.st_mode) == 0o400
-        assert (root / "hub/ns/tombstone.json").read_bytes() == TOMBSTONE and _leftovers(root) == []
-    assert not any(entry.startswith("tombstone.json") for entry in _names(changed))
+        assert tomb.read_bytes() == TOMBSTONE and _leftovers(tomb.parent) == []
+    assert not any(entry.startswith(TOMB) for entry in _names(changed))
 
 
-def test_a_read_only_file_that_is_not_a_value_free_tombstone_is_never_copied(tmp_path, monkeypatch, capsys):
-    root, attrs = _tombstone_chain(tmp_path, content=b'{"expires_at":1760000000,"value":"synthetic"}')
+@pytest.mark.parametrize("content", [
+    b'{"expires_at":1760000000,"value":"synthetic"}',  # a value
+    b'{"value":"synthetic-sensitive","value":null,"expires_at":1760000000}',  # CodeApp: duplicate key, last wins
+    b'{"expires_at":1760000000,"val\\u0075e":null}',  # an escaped key
+    b'{"value":null,"expires_at":1760000000}',  # other order
+    b'{"expires_at": 1760000000, "value": null}',  # other spacing
+    b'{"expires_at":1760000000,"value":null}\n',  # trailing bytes
+], ids=["value", "duplicate-key", "escaped-key", "order", "spacing", "trailing"])
+def test_only_the_exact_store_tombstone_bytes_are_ever_copied(tmp_path, monkeypatch, capsys, content):
+    root, attrs, tomb = _tombstone_chain(tmp_path, content=content)
     changed = _present(monkeypatch, tmp_path, attrs, refuse=_read_only_share)
     assert repair.main([str(root), str(OWNER)]) == 0
     assert capsys.readouterr().out.strip() == (
         "secrets ownership repair: adopted=1 deferred=1 reasons=tombstone:not-value-free*1")
-    assert _names(changed) == ["record.json"] and _leftovers(root) == []
+    assert _names(changed) == ["record.json"] and _leftovers(tomb.parent) == []
+    assert tomb.read_bytes() == content
 
 
-def _names(changed):
-    return [os.path.basename(entry) for entry in changed]
+@pytest.mark.parametrize("folder", ["hub", "hub/users", "hub/users/u", "hub/ns/deeper"],
+                         ids=["app-secret-level", "users-folder", "user-secret", "below-record-folder"])
+def test_the_copy_route_is_only_for_runtime_record_folders(tmp_path, monkeypatch, capsys, folder):
+    root, attrs, tomb = _tombstone_chain(tmp_path, folder=folder)
+    changed = _present(monkeypatch, tmp_path, attrs, refuse=_read_only_share)
+    assert repair.main([str(root), str(OWNER)]) == 0
+    assert capsys.readouterr().out.strip() == (
+        "secrets ownership repair: adopted=1 deferred=1 reasons=file-chown:EACCES*1")
+    assert _names(changed) == ["record.json"] and _leftovers(tomb.parent) == []
 
 
 def test_a_refused_owner_change_on_a_live_record_is_deferred_with_its_errno_and_mode_kept(
         tmp_path, monkeypatch, capsys):
     import errno
-    root, attrs = _tombstone_chain(tmp_path)
+    root, attrs, tomb = _tombstone_chain(tmp_path)
     changed = _present(monkeypatch, tmp_path, attrs,
                        refuse=lambda values: errno.EPERM if values.get("uid") == 0 else None)
     assert repair.main([str(root), str(OWNER)]) == 0
@@ -276,19 +300,35 @@ def test_a_refused_owner_change_on_a_live_record_is_deferred_with_its_errno_and_
     assert S.S_IMODE(repair.os.stat(root / "hub/ns/record.json").st_mode) == 0o600
 
 
-def test_a_tombstone_name_that_changes_before_the_swap_is_never_overwritten(tmp_path, monkeypatch, capsys):
-    root, attrs = _tombstone_chain(tmp_path)
+def test_a_tombstone_name_that_changes_before_the_check_is_never_overwritten(tmp_path, monkeypatch, capsys):
+    """The re-check covers a change before it; the interval after it is covered by the store protocol (module
+    doc), not by this test."""
+    root, attrs, tomb = _tombstone_chain(tmp_path)
     _present(monkeypatch, tmp_path, attrs, refuse=_read_only_share)
     real_fsync, swapped = os.fsync, []
 
-    def fsync(fd):  # between the copy's write and the swap, another writer puts a new file under the name
+    def fsync(fd):  # between the copy's write and the re-check, another file is put under the name
         if not swapped:
-            (root / "hub/ns/newer").write_bytes(b"synthetic newer entry")
-            os.rename(root / "hub/ns/newer", root / "hub/ns/tombstone.json")
+            (tomb.parent / "newer").write_bytes(b"synthetic newer entry")
+            os.rename(tomb.parent / "newer", tomb)
             swapped.append(True)
         real_fsync(fd)
 
     monkeypatch.setattr(repair.os, "fsync", fsync)
     assert repair.main([str(root), str(OWNER)]) == 0
     assert capsys.readouterr().out.strip() == "secrets ownership repair: adopted=1 deferred=0"
-    assert (root / "hub/ns/tombstone.json").read_bytes() == b"synthetic newer entry" and _leftovers(root) == []
+    assert tomb.read_bytes() == b"synthetic newer entry" and _leftovers(tomb.parent) == []
+
+
+def test_the_copy_route_is_only_for_runtime_record_names(tmp_path, monkeypatch, capsys):
+    root, attrs, tomb = _tombstone_chain(tmp_path)
+    other = tomb.parent / "tombstone.json"
+    other.write_bytes(TOMBSTONE)
+    tomb.unlink()
+    attrs = {key: value for key, value in attrs.items() if not key.endswith(TOMB)}
+    attrs["config/secrets/hub/ns/tombstone.json"] = {"mode": 0o400, "uid": 0, "nlink": 1}
+    changed = _present(monkeypatch, tmp_path, attrs, refuse=_read_only_share)
+    assert repair.main([str(root), str(OWNER)]) == 0
+    assert capsys.readouterr().out.strip() == (
+        "secrets ownership repair: adopted=1 deferred=1 reasons=file-chown:EACCES*1")
+    assert _names(changed) == ["record.json"] and _leftovers(tomb.parent) == []

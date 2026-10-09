@@ -21,18 +21,27 @@ Entries are adopted only when ALL of these hold, otherwise they are left untouch
 
 Modes are never changed and nothing is removed, with one exception. A file-sharing layer may refuse to re-own
 a read-only file: Docker Desktop on macOS keeps container ownership as an extended attribute of the host file.
-For a tombstone (0400) refused that way, the original is never modified. A replacement with the same
-value-free content is written beside it: created 0600 with O_EXCL, re-owned while still writable, made 0400
-and fsynced. It then replaces the original atomically, and only if the name still points to the checked
-inode. Any failure before that leaves the root-owned original exactly as it was, so the entry is deferred
-again on every pass and every start. Content that is not a value-free tombstone is never copied. Every
-deferral is reported by stage and errno, never by path. Stdlib only (the secrets image carries no SDK).
+The exception applies only to a runtime-record tombstone refused that way. That is a 0400
+``<root>/<owner>/<namespace>/<32 hex>.json``, outside ``users``, whose bytes are exactly the store's
+tombstone (``{"expires_at":<int>,"value":null}``, so a duplicate, escaped or reordered key never matches).
+Its original is never modified. A replacement with the same bytes is written beside it: created 0600 with
+O_EXCL, re-owned while still writable, made 0400 and fsynced. It then replaces the original. Any failure
+before that leaves the root-owned original exactly as it was, so the entry is deferred again on every pass
+and every start.
+
+The replace is not a compare-and-swap. The name's inode is re-checked first, but a writer acting between
+that check and the replace would be overwritten. No supported writer can act there: the runtime store takes
+no lock (operator decision), create publishes with os.link and never reuses an existing tombstone's name,
+and delete and purge write tombstones only over live records. So a tombstoned record name is never
+rewritten, and a concurrent repair writes the same bytes. Every deferral is reported by stage and errno,
+never by path. Stdlib only (the secrets image carries no SDK).
 """
 from __future__ import annotations
 
 import errno
 import json
 import os
+import re
 import stat
 import sys
 
@@ -40,6 +49,7 @@ _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEX
 _FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
 _FILE_MODES = (0o600, 0o400)
 _MAX_TOMBSTONE_BYTES = 256
+_RECORD_NAME = re.compile(r"[0-9a-f]{32}\.json")  # runtime_file's record names
 
 
 def safe_repair_root(root: object) -> bool:
@@ -88,13 +98,28 @@ class _Deferred(Exception):
         self.stage, self.cause = stage, cause
 
 
+def _unique_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate field")
+        result[key] = value
+    return result
+
+
 def _is_tombstone(raw: bytes) -> bool:
+    """Exactly the bytes runtime_file writes for a tombstone; anything else (a duplicate or escaped key, other
+    spacing or order, a value) is refused before anything is created."""
     try:
-        record = json.loads(raw.decode("ascii"))
+        record = json.loads(raw.decode("ascii"), object_pairs_hook=_unique_fields)
     except (UnicodeError, ValueError):
         return False
-    return (type(record) is dict and set(record) == {"value", "expires_at"} and record["value"] is None
-            and type(record["expires_at"]) is int and record["expires_at"] > 0)
+    if not (type(record) is dict and set(record) == {"value", "expires_at"} and record["value"] is None
+            and type(record["expires_at"]) is int and record["expires_at"] > 0):
+        return False
+    canonical = json.dumps({"value": None, "expires_at": record["expires_at"]}, sort_keys=True,
+                           separators=(",", ":")).encode("ascii")
+    return raw == canonical
 
 
 def _read_small(handle: int) -> bytes:
@@ -151,8 +176,9 @@ def _replace_tombstone(fd: int, name: str, handle: int, info: os.stat_result, ow
                 pass
 
 
-def _visit(fd: int, owner: int, device: int, tally: _Tally) -> None:
-    """fd is an open, already verified trusted directory; adopt its private children and descend."""
+def _visit(fd: int, owner: int, device: int, tally: _Tally, chain: tuple[str, ...] = ()) -> None:
+    """fd is an open, already verified trusted directory (``chain``: its folder names below the root); adopt
+    its private children and descend."""
     try:
         names = os.listdir(fd)
     except OSError as exc:
@@ -186,7 +212,7 @@ def _visit(fd: int, owner: int, device: int, tally: _Tally) -> None:
                 if opened.st_uid == 0:
                     os.fchown(child, owner, -1)
                     tally.adopted += 1
-                _visit(child, owner, device, tally)
+                _visit(child, owner, device, tally, chain + (name,))
             except OSError as exc:
                 tally.defer("dir-chown", exc)
             finally:
@@ -208,7 +234,9 @@ def _visit(fd: int, owner: int, device: int, tally: _Tally) -> None:
                     try:
                         os.fchown(handle, owner, -1)
                     except PermissionError:
-                        if stat.S_IMODE(opened.st_mode) != 0o400:
+                        record_folder = len(chain) == 2 and chain[1] != "users"
+                        if (stat.S_IMODE(opened.st_mode) != 0o400 or not record_folder
+                                or _RECORD_NAME.fullmatch(name) is None):
                             raise
                         _replace_tombstone(fd, name, handle, opened, owner)
                     tally.adopted += 1
