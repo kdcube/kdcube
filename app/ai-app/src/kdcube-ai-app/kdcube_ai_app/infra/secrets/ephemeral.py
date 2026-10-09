@@ -5,10 +5,7 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
-import os
 import time
 import uuid
 from typing import Any
@@ -35,11 +32,6 @@ def _runtime_secret_manager(settings: Any | None) -> ISecretsManager:
 # secreys manager" / "so this is change in connection hub, not in secret manager"): records are ordinary
 # secrets of their owner, read and written through the configured manager's normal calls, on any backend.
 RUNTIME_RECORDS_KEY = "__runtime_records__"
-# The Hub's own lock around one record's read -> set -> readback (never the secrets manager's lock key).
-RECORD_LOCK_PREFIX = "kdcube:hub:runtime-record-lock:"
-RECORD_LOCK_TTL_MS = 10_000
-RECORD_LOCK_WAIT_SECONDS = 5.0
-_RELEASE_OWN_TOKEN = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
 
 
 def _record_part(value: str, name: str) -> str:
@@ -60,7 +52,7 @@ class KDCubeEphemeralSecretStore:
 
     def __init__(
         self, manager: ISecretsManager, *, namespace: str,
-        durability_required: bool = False, bundle_id: str | None = None, redis: Any | None = None,
+        durability_required: bool = False, bundle_id: str | None = None,
     ) -> None:
         # Eligibility is the common asynchronous qualification, not a mode
         # allowlist. This argument is retained for constructor compatibility.
@@ -72,33 +64,6 @@ class KDCubeEphemeralSecretStore:
         self._manager = manager
         self._namespace = str(namespace or "").strip()
         self._bundle_id = str(bundle_id).strip() if bundle_id else None
-        self._redis = redis  # the Hub's own short per-record lock (SET NX PX, own-token release)
-
-    @contextlib.asynccontextmanager
-    async def _record_lock(self, key: str):
-        """Serialize one record's read -> write -> readback across processes; a timeout is unavailable."""
-        if self._redis is None:
-            raise SecretsManagerError("runtime_record_lock_unavailable")
-        lock_key, token = RECORD_LOCK_PREFIX + key, uuid.uuid4().hex
-        deadline = time.monotonic() + RECORD_LOCK_WAIT_SECONDS
-        while True:
-            try:
-                acquired = bool(await self._redis.set(lock_key, token, nx=True, px=RECORD_LOCK_TTL_MS))
-            except Exception:
-                raise SecretsManagerError("runtime_record_lock_unavailable") from None
-            if acquired:
-                break
-            if time.monotonic() >= deadline:
-                raise SecretsManagerError("runtime_record_lock_unavailable")
-            await asyncio.sleep(0.05)
-        try:
-            yield
-        finally:
-            try:
-                await self._redis.eval(_RELEASE_OWN_TOKEN, 1, lock_key, token)
-            except Exception:
-                pass  # the lock expires by its TTL; never another holder's token
-
     @property
     def provider_type(self) -> str:
         return self._manager.provider_type
@@ -152,16 +117,20 @@ class KDCubeEphemeralSecretStore:
             raise SecretsManagerError("runtime_secret_create_conflict")
 
     async def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool:
-        """Create-only: absent, then set, then read back; anything else is a conflict, never success."""
+        """Create-only: present means False; absent means set and True.
+
+        No lock here: the issuers reserve the reference and seal the value's digest in PostgreSQL before
+        this call, every retry of one reference writes the identical value, and the issuer refuses a
+        read-back whose digest differs (Main, W670).
+        """
         if type(value) is not str or type(expires_at) is not int or expires_at <= 0:
             raise SecretsManagerError("runtime_record_invalid")
         key = self._key(secret_ref)
-        record = json.dumps({"value": value, "expires_at": expires_at}, sort_keys=True, separators=(",", ":"))
-        async with self._record_lock(key):
-            if await self._manager.get_secret(key) is not None:
-                return False
-            await self._manager.set_secret(key, record)
-            return await self._manager.get_secret(key) == record
+        if await self._manager.get_secret(key) is not None:
+            return False
+        await self._manager.set_secret(
+            key, json.dumps({"value": value, "expires_at": expires_at}, sort_keys=True, separators=(",", ":")))
+        return True
 
     async def get(self, *, secret_ref: str) -> str | None:
         decoded = self._decode(await self._manager.get_secret(self._key(secret_ref)))
@@ -170,9 +139,7 @@ class KDCubeEphemeralSecretStore:
         return decoded[0]
 
     async def delete(self, *, secret_ref: str) -> None:
-        key = self._key(secret_ref)
-        async with self._record_lock(key):
-            await self._manager.delete_secret(key)
+        await self._manager.delete_secret(self._key(secret_ref))
 
     async def purge_expired(self, *, now: int, limit: int) -> int:
         """Delete at most ``limit`` expired records of this namespace, found through the owner's existing
@@ -189,11 +156,10 @@ class KDCubeEphemeralSecretStore:
         for key in sorted(item for item in listed if isinstance(item, str) and item.startswith(prefix)):
             if purged >= limit:
                 break
-            async with self._record_lock(key):
-                decoded = self._decode(await self._manager.get_secret(key))
-                if decoded is None or decoded[1] <= now:
-                    await self._manager.delete_secret(key)
-                    purged += 1
+            decoded = self._decode(await self._manager.get_secret(key))
+            if decoded is None or decoded[1] <= now:
+                await self._manager.delete_secret(key)
+                purged += 1
         return purged
 
     async def probe_writable(self) -> None:
@@ -209,25 +175,13 @@ def ephemeral_secret_store(
     manager: ISecretsManager | None = None,
     durability_required: bool = False,
     bundle_id: str | None = None,
-    redis: Any | None = None,
 ) -> KDCubeEphemeralSecretStore:
     """Build the deployment-selected, mode-neutral runtime adapter for the owner bundle."""
 
     selected = manager or _runtime_secret_manager(settings)
     return KDCubeEphemeralSecretStore(
         selected, namespace=namespace, durability_required=durability_required, bundle_id=bundle_id,
-        redis=redis if redis is not None else _record_lock_redis(settings),
     )
-
-
-def _record_lock_redis(settings: Any | None):
-    """The deployment's Redis (required in every kdcube deployment) for the Hub's per-record lock."""
-    url = str(getattr(settings, "REDIS_URL", None) or os.getenv("REDIS_URL") or "").strip()
-    if not url:
-        return None
-    from kdcube_ai_app.infra.redis.client import get_async_redis_client
-
-    return get_async_redis_client(url, decode_responses=True)
 
 
 __all__ = [

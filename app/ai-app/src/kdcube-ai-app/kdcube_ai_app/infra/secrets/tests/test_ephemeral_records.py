@@ -15,8 +15,7 @@ import time
 import pytest
 import yaml
 
-from kdcube_ai_app.infra.secrets import ephemeral as ephemeral_module
-from kdcube_ai_app.infra.secrets.ephemeral import RECORD_LOCK_PREFIX, RUNTIME_RECORDS_KEY, ephemeral_secret_store
+from kdcube_ai_app.infra.secrets.ephemeral import RUNTIME_RECORDS_KEY, ephemeral_secret_store
 from kdcube_ai_app.infra.secrets.manager import SecretsFileSecretsManager, SecretsManagerConfig, SecretsManagerError
 
 OWNER = "connection-hub@1-0"
@@ -38,38 +37,14 @@ def _manager(tmp_path):
     return manager
 
 
-class FakeRedis:
-    """SET NX PX and the compare-and-delete release script, with Redis semantics (one shared server)."""
-
-    def __init__(self):
-        self.values, self.refused = {}, 0
-
-    async def set(self, key, value, *, nx=False, px=None):
-        if nx and key in self.values:
-            self.refused += 1
-            return None
-        self.values[key] = value
-        return True
-
-    async def eval(self, script, numkeys, key, token):
-        if self.values.get(key) == token:
-            del self.values[key]
-            return 1
-        return 0
-
-
-REDIS = FakeRedis()
-
-
 def _forbidden(name):
     async def call(*args, **kwargs):
         raise AssertionError(f"{name} must not be called")
     return call
 
 
-def _store(manager, redis=None, **kwargs):
-    return ephemeral_secret_store(namespace=NAMESPACE, manager=manager, bundle_id=OWNER,
-                                  redis=redis or REDIS, **kwargs)
+def _store(manager, **kwargs):
+    return ephemeral_secret_store(namespace=NAMESPACE, manager=manager, bundle_id=OWNER, **kwargs)
 
 
 def _stored(tmp_path):
@@ -115,8 +90,7 @@ async def test_purge_uses_the_owner_inventory_and_is_bounded(tmp_path):
     for index in range(5):
         await store.create(secret_ref=f"old{index}", value="v", expires_at=now - 10)
     await store.create(secret_ref="live", value="v", expires_at=now + 60)
-    other = ephemeral_secret_store(namespace="other-custody", manager=_manager(tmp_path), bundle_id=OWNER,
-                                   redis=REDIS)
+    other = ephemeral_secret_store(namespace="other-custody", manager=_manager(tmp_path), bundle_id=OWNER)
     await other.create(secret_ref="old-other", value="v", expires_at=now - 10)
     assert await store.purge_expired(now=now, limit=3) == 3
     assert await store.purge_expired(now=now, limit=3) == 2
@@ -128,10 +102,10 @@ async def test_purge_uses_the_owner_inventory_and_is_bounded(tmp_path):
 async def test_namespaces_and_owners_are_isolated(tmp_path):
     manager, expiry = _manager(tmp_path), int(time.time()) + 60
     await _store(manager).create(secret_ref=REF, value="one", expires_at=expiry)
-    assert await ephemeral_secret_store(namespace="other-custody", manager=manager, bundle_id=OWNER,
-                                        redis=REDIS).get(secret_ref=REF) is None
-    assert await ephemeral_secret_store(namespace=NAMESPACE, manager=manager, bundle_id="other-app@1-0",
-                                        redis=REDIS).get(secret_ref=REF) is None
+    assert await ephemeral_secret_store(namespace="other-custody", manager=manager, bundle_id=OWNER).get(
+        secret_ref=REF) is None
+    assert await ephemeral_secret_store(namespace=NAMESPACE, manager=manager, bundle_id="other-app@1-0").get(
+        secret_ref=REF) is None
 
 
 @pytest.mark.asyncio
@@ -147,7 +121,7 @@ async def test_the_owner_defaults_to_the_current_bundle_and_a_bundle_less_caller
 
     manager, expiry = _manager(tmp_path), int(time.time()) + 60
     monkeypatch.setattr(sdk_config, "_resolve_current_bundle_id", lambda: OWNER)
-    store = ephemeral_secret_store(namespace=NAMESPACE, manager=manager, redis=REDIS)
+    store = ephemeral_secret_store(namespace=NAMESPACE, manager=manager)
     assert await store.create(secret_ref=REF, value="from-context", expires_at=expiry)
     assert await _store(manager).get(secret_ref=REF) == "from-context"
     monkeypatch.setattr(sdk_config, "_resolve_current_bundle_id", lambda: None)
@@ -164,61 +138,16 @@ async def test_values_are_never_logged(tmp_path, caplog):
 
 
 @pytest.mark.asyncio
-async def test_two_instances_creating_the_same_ref_never_both_succeed(tmp_path):
-    """Main/Infra guard, Infra's forced schedule on two REAL secrets-file manager instances sharing one Redis:
-    A reads absent and pauses; B tries the same ref. With the Hub's per-record lock B cannot read until A has
-    written and read back, so exactly one create succeeds and the original is preserved."""
-    redis = FakeRedis()
-    a_manager, b_manager = _manager(tmp_path), _manager(tmp_path)
-    b_blocked = asyncio.Event()
-    get = a_manager.get_secret
-    first = {"a": True}
-
-    async def a_get_secret(key):
-        value = await get(key)
-        if first["a"]:  # A's absence check: hold here until B has hit the lock
-            first["a"] = False
-            try:  # without the lock B is never blocked; then A resumes after B and the guard below fails
-                await asyncio.wait_for(b_blocked.wait(), 1.0)
-            except asyncio.TimeoutError:
-                pass
-        return value
-
-    a_manager.get_secret = a_get_secret
-    refused = redis.set
-
-    async def watched_set(key, value, *, nx=False, px=None):
-        result = await refused(key, value, nx=nx, px=px)
-        if result is None:
-            b_blocked.set()
-        return result
-
-    redis.set = watched_set
+async def test_two_instances_writing_the_same_value_for_one_ref_leave_that_value(tmp_path):
+    """(b) Main: no adapter lock. PostgreSQL serializes: the issuers reserve the ref and seal the value's digest
+    before create, and every retry of a ref writes the identical value. Two independent managers creating the
+    same ref with that same value concurrently leave exactly that value (either outcome is acceptable).
+    (c) A foreign value under a reserved ref is refused at the issuer, by the sealed digest:
+    test_original_refresh_issuer.py::test_existing_refresh_custody_value_must_match_sealed_original_digest and
+    test_bound_session_crash_recovery.py::test_failed_readback_never_activates_candidate."""
     expiry = int(time.time()) + 60
-    a_task = asyncio.create_task(_store(a_manager, redis).create(secret_ref=REF, value="from-a", expires_at=expiry))
-    await asyncio.sleep(0)
-    b_created = await _store(b_manager, redis).create(secret_ref=REF, value="from-b", expires_at=expiry)
-    a_created = await a_task
-    assert (a_created, b_created) == (True, False)
-    assert await _store(_manager(tmp_path), redis).get(secret_ref=REF) == "from-a"
-    assert redis.values == {}  # both locks released
-
-
-@pytest.mark.asyncio
-async def test_a_lock_timeout_is_unavailable_and_never_reports_created(tmp_path, monkeypatch):
-    redis, store = FakeRedis(), _store(_manager(tmp_path), FakeRedis())
-    monkeypatch.setattr(ephemeral_module, "RECORD_LOCK_WAIT_SECONDS", 0.1)
-    store = _store(_manager(tmp_path), redis)
-    redis.values[RECORD_LOCK_PREFIX + store._key(REF)] = "another-holder"
-    with pytest.raises(SecretsManagerError, match="runtime_record_lock_unavailable"):
-        await store.create(secret_ref=REF, value="v", expires_at=int(time.time()) + 60)
-    assert redis.values[RECORD_LOCK_PREFIX + store._key(REF)] == "another-holder"  # never released by us
-    assert REF not in _stored(tmp_path).get(NAMESPACE, {})
-
-
-@pytest.mark.asyncio
-async def test_without_redis_a_create_is_unavailable_not_unlocked(tmp_path):
-    store = ephemeral_secret_store(namespace=NAMESPACE, manager=_manager(tmp_path), bundle_id=OWNER)
-    store._redis = None
-    with pytest.raises(SecretsManagerError, match="runtime_record_lock_unavailable"):
-        await store.create(secret_ref=REF, value="v", expires_at=int(time.time()) + 60)
+    outcomes = await asyncio.gather(*[
+        _store(_manager(tmp_path)).create(secret_ref=REF, value="same-sealed-value", expires_at=expiry)
+        for _ in range(2)])
+    assert True in outcomes
+    assert await _store(_manager(tmp_path)).get(secret_ref=REF) == "same-sealed-value"
