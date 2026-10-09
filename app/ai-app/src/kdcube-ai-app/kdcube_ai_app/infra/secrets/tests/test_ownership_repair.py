@@ -21,7 +21,7 @@ def _present(monkeypatch, tmp_path, attrs):
     """attrs: relative path -> dict(mode=, uid=, nlink=, dev=) applied to that inode's stat results."""
     by_inode = {}
     for rel, values in attrs.items():
-        by_inode[os.lstat(tmp_path / rel).st_ino] = values
+        by_inode[os.lstat(tmp_path / rel).st_ino] = dict(values)  # one copy per inode
     real_stat, real_fstat = os.stat, os.fstat
 
     def shape(info):
@@ -39,7 +39,13 @@ def _present(monkeypatch, tmp_path, attrs):
     # Portable (no /proc on macOS): the descriptor's inode names the path that would change owner.
     path_of = {os.lstat(path).st_ino: str(path) for path in tmp_path.rglob("*")}
     changed = []
-    monkeypatch.setattr(repair.os, "fchown", lambda fd, uid, gid: changed.append(path_of[real_fstat(fd).st_ino]))
+
+    def fchown(fd, uid, gid):  # recorded, never performed; later stat calls see the new owner, as after a real one
+        ino = real_fstat(fd).st_ino
+        changed.append(path_of[ino])
+        by_inode.setdefault(ino, {})["uid"] = uid
+
+    monkeypatch.setattr(repair.os, "fchown", fchown)
     return changed
 
 
@@ -122,5 +128,46 @@ def test_an_entry_swapped_between_check_and_open_is_not_adopted(tmp_path, monkey
 
 def test_the_module_command_prints_only_a_count(tmp_path, capsys):
     assert repair.main([str(tmp_path), "1000"]) == 0
-    assert capsys.readouterr().out.strip() == "secrets ownership repair: adopted=0"
+    assert capsys.readouterr().out.strip() == "secrets ownership repair: adopted=0 deferred=0"
     assert repair.main(["only-one"]) == 2
+
+
+def test_a_transient_failure_is_deferred_and_retried_in_the_same_start(tmp_path, monkeypatch, capsys):
+    """Live W677 follow-up: an entry the first pass could not finish is adopted by a repeat pass, and the
+    command reports what stayed deferred instead of a silent partial count."""
+    root = _tree(tmp_path)
+    p = "config/secrets"
+    attrs = {p: {"mode": 0o700, "uid": OWNER}, f"{p}/hub": {"mode": 0o700, "uid": OWNER},
+             f"{p}/hub/ns": {"mode": 0o700, "uid": OWNER}, f"{p}/hub/ns/record.json": {"mode": 0o600, "uid": 0, "nlink": 1},
+             f"{p}/hub/ns/tombstone.json": {"mode": 0o400, "uid": 0, "nlink": 1}}
+    changed = _present(monkeypatch, tmp_path, attrs)
+    real_open, failures = os.open, {"record.json": 1}
+
+    def flaky_open(name, flags, *args, **kwargs):
+        if failures.get(name):
+            failures[name] -= 1
+            raise OSError("synthetic transient I/O error")
+        return real_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(repair.os, "open", flaky_open)
+    assert repair.repair_secrets_ownership_report(str(root), str(OWNER)) == (2, 0)
+    assert sorted(os.path.basename(path) for path in changed) == ["record.json", "tombstone.json"]
+
+
+def test_a_persistent_failure_is_reported_as_deferred(tmp_path, monkeypatch, capsys):
+    root = _tree(tmp_path)
+    p = "config/secrets"
+    attrs = {p: {"mode": 0o700, "uid": OWNER}, f"{p}/hub": {"mode": 0o700, "uid": OWNER},
+             f"{p}/hub/ns": {"mode": 0o700, "uid": OWNER}, f"{p}/hub/ns/record.json": {"mode": 0o600, "uid": 0, "nlink": 1}}
+    _present(monkeypatch, tmp_path, attrs)
+    real_open = os.open
+
+    def failing_open(name, flags, *args, **kwargs):
+        if name == "record.json":
+            raise OSError("synthetic persistent I/O error")
+        return real_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(repair.os, "open", failing_open)
+    assert repair.repair_secrets_ownership_report(str(root), str(OWNER)) == (0, 1)
+    assert repair.main([str(root), str(OWNER)]) == 0
+    assert capsys.readouterr().out.strip() == "secrets ownership repair: adopted=0 deferred=1"
