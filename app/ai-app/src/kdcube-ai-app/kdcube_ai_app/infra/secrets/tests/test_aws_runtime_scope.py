@@ -157,3 +157,30 @@ async def test_the_hub_store_qualifies_an_enrolled_aws_namespace():
 
     store = ephemeral_secret_store(namespace=NAMESPACE, manager=_enrolled(_ListClient({"SecretList": []})))
     assert await store.qualify_durable_backend() is True
+
+
+@pytest.mark.asyncio
+async def test_an_owner_bundle_probe_lists_only_that_owners_records():
+    client = _ListClient({"SecretList": []})
+    manager = _enrolled(client)
+    assert await manager.qualify_runtime_custody(namespace=NAMESPACE, bundle_id="connection-hub@1-0") is True
+    assert client.calls == [{"Filters": [{"Key": "name", "Values": [
+        f"synthetic/qualify/runtime/connection-hub@1-0/{NAMESPACE}/"]}], "MaxResults": 1}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["platform", "../escape", "a/b", "", "."])
+async def test_an_invalid_owner_does_not_qualify_and_sends_nothing(owner):
+    client = _ListClient({"SecretList": []})
+    assert await _enrolled(client).qualify_runtime_custody(namespace=NAMESPACE, bundle_id=owner) is False
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_the_hub_store_qualifies_an_enrolled_aws_namespace_for_its_owner_bundle():
+    from kdcube_ai_app.infra.secrets.ephemeral import ephemeral_secret_store
+
+    client = _ListClient({"SecretList": []})
+    store = ephemeral_secret_store(namespace=NAMESPACE, manager=_enrolled(client), bundle_id="connection-hub@1-0")
+    assert await store.qualify_durable_backend() is True
+    assert client.calls[0]["Filters"][0]["Values"] == [f"synthetic/qualify/runtime/connection-hub@1-0/{NAMESPACE}/"]
