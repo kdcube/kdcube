@@ -51,7 +51,14 @@ async def test_actual_file_provider_write_read_and_removal_use_uri_path(tmp_path
         global_secrets_yaml=target.as_uri() if store == "global" else None,
     ))
     key = "bundles.fixture@1-0.secrets.value" if store == "bundle" else "platform.fixture.value"
-    await manager.set_many({key: "synthetic value"})
+    if store == "bundle":
+        # W670: app secrets live beside the descriptor, in <descriptor folder>/secrets/<bundle>/<key>.json,
+        # so the decoded folder of the yaml URI is where the record must land.
+        target.parent.mkdir()
+        await manager.set_many({key: "synthetic value"})
+        target = tmp_path / name / "secrets" / "fixture@1-0" / "value.json"
+    else:
+        await manager.set_many({key: "synthetic value"})
     assert target.is_file()
     assert await manager.get_secret(key) == "synthetic value"
     # Strict physical removal is the original consumer's unavailable witness.

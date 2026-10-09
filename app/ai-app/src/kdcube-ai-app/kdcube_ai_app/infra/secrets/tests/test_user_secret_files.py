@@ -159,7 +159,7 @@ def test_dot_users_are_encoded_folders(tmp_path):
     assert sorted(os.listdir(tmp_path / "secrets" / HUB / "users")) == ["%2E", "%2E.", "%2Ehidden"]
 
 
-@pytest.mark.parametrize("bundle", ["platform", "../escape", "a.b"])
+@pytest.mark.parametrize("bundle", ["platform", "../escape", "..", ".hidden", "a/b", ""])
 def test_an_invalid_owner_bundle_is_refused(tmp_path, bundle):
     store = UserSecretFileStore(root=tmp_path / "secrets")
     with pytest.raises(Exception, match="user_secret_bundle_invalid"):
@@ -224,18 +224,21 @@ async def test_migration_moves_every_user_leaf_then_removes_them_from_yaml(tmp_p
     _yaml_with_users(tmp_path, SOURCE)
     manager = _manager(tmp_path)
     assert await manager.migrate_user_secrets(dry_run=True) == {
-        "found": 4, "written": 0, "already_present": 0, "removed_from_yaml": 0, "would_write": 4}
+        "found": 4, "user_found": 4, "app_found": 0, "written": 0, "already_present": 0, "removed_from_yaml": 0,
+        "bundle_items_kept": 0, "would_write": 4}
     assert "users" in yaml.safe_load((tmp_path / "config" / "secrets.yaml").read_text())
     assert await manager.migrate_user_secrets() == {
-        "found": 4, "written": 4, "already_present": 0, "removed_from_yaml": 4}
+        "found": 4, "user_found": 4, "app_found": 0, "written": 4, "already_present": 0, "removed_from_yaml": 4,
+        "bundle_items_kept": 0}
     data = yaml.safe_load((tmp_path / "config" / "secrets.yaml").read_text())
     assert data == {"platform": {"existing": "platform-value"}}
     fresh = _manager(tmp_path)
     assert await fresh.get_secret(_key(key="google.refresh_token")) == "synthetic-a"
     assert await fresh.get_secret(_key(bundle=OTHER, key="k")) == "synthetic-c"
     assert await fresh.get_secret(_key(user="user-2", key="k")) == "synthetic-d"
-    assert await fresh.migrate_user_secrets() == {"found": 0, "written": 0, "already_present": 0,
-                                                  "removed_from_yaml": 0}
+    assert await fresh.migrate_user_secrets() == {"found": 0, "user_found": 0, "app_found": 0, "written": 0,
+                                                  "already_present": 0, "removed_from_yaml": 0,
+                                                  "bundle_items_kept": 0}
 
 
 @pytest.mark.asyncio
@@ -251,8 +254,9 @@ async def test_a_crash_before_the_yaml_write_loses_nothing_and_a_rerun_completes
         await manager.migrate_user_secrets()
     monkeypatch.undo()
     assert "users" in yaml.safe_load((tmp_path / "config" / "secrets.yaml").read_text())
-    assert await manager.migrate_user_secrets() == {"found": 4, "written": 0, "already_present": 4,
-                                                    "removed_from_yaml": 4}
+    assert await manager.migrate_user_secrets() == {"found": 4, "user_found": 4, "app_found": 0, "written": 0,
+                                                    "already_present": 4, "removed_from_yaml": 4,
+                                                    "bundle_items_kept": 0}
     assert await manager.get_secret(_key(key="other")) == "synthetic-b"
 
 
@@ -298,3 +302,142 @@ def test_the_host_command_migrates_a_config_folder_and_prints_counts_only(tmp_pa
     assert (_root(tmp_path) / HUB / "users" / "user-1" / "other.json").exists()
     assert main(["migrate", "--config-dir", str(tmp_path / "missing")]) == 1
     assert json.loads(capsys.readouterr().out)["reason"] == "global_secrets_yaml_not_found"
+
+
+# W670 extension (operator: "the persons secrets and the stuff stored in bundles.secrets.yaml is now read from
+# folders"): app secrets live in <root>/<bundle>/<key path>.json.
+
+def _app_key(bundle=HUB, key="google.client_secret"):
+    return f"bundles.{bundle}.secrets.{key}"
+
+
+@pytest.mark.asyncio
+async def test_app_secrets_are_one_private_file_each_and_never_in_yaml(tmp_path):
+    manager = _manager(tmp_path, bundle_secrets_yaml=(tmp_path / "config" / "bundles.secrets.yaml").as_uri())
+    await manager.set_secret(_app_key(), "synthetic-app")
+    await manager.set_secret(_app_key(bundle="kdcube.copilot@2026-04-03", key="users"), "synthetic-dotted")
+    await manager.set_secret(_app_key(key="card-credentials"), "synthetic-purpose-name")
+    record = _root(tmp_path) / HUB / "google.client_secret.json"
+    assert json.loads(record.read_text()) == {"value": "synthetic-app"}
+    assert record.stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / "config" / "bundles.secrets.yaml").exists()
+    assert await _manager(tmp_path).get_secret(_app_key()) == "synthetic-app"
+    assert await manager.get_secret(_app_key(bundle="kdcube.copilot@2026-04-03", key="users")) == "synthetic-dotted"
+    # Records end in .json; users/ and runtime purpose folders are directories, so names never collide.
+    await manager.set_secret(_key(key="k"), "synthetic-user")
+    assert json.loads(await manager.get_secret(f"bundles.{HUB}.secrets.__keys")) == sorted(
+        [_app_key(), _app_key(key="card-credentials")])
+    assert set(json.loads(await manager.get_secret("bundles.__keys"))) == {
+        _app_key(), _app_key(key="card-credentials"), _app_key(bundle="kdcube.copilot@2026-04-03", key="users")}
+    assert await manager.get_secret(_key(key="k")) == "synthetic-user"
+    await manager.delete_secret(_app_key())
+    assert await manager.get_secret(_app_key()) is None
+
+
+@pytest.mark.parametrize("operation", ["set", "delete", "list", "set_app", "delete_app", "list_app"])
+def test_an_unsafe_existing_record_is_refused_before_set_delete_or_list(tmp_path, operation):
+    store = UserSecretFileStore(root=tmp_path / "secrets")
+    app = operation.endswith("app")
+    if app:
+        store.set_app(bundle_id=HUB, key="k", value="synthetic")
+        path = tmp_path / "secrets" / HUB / "k.json"
+    else:
+        store.set(user_id=USER, bundle_id=HUB, key="k", value="synthetic")
+        path = tmp_path / "secrets" / HUB / "users" / USER / "k.json"
+    path.chmod(0o644)
+    calls = {
+        "set": lambda: store.set(user_id=USER, bundle_id=HUB, key="k", value="other"),
+        "delete": lambda: store.delete(user_id=USER, bundle_id=HUB, key="k"),
+        "list": lambda: store.list_keys(user_id=USER, bundle_id=HUB),
+        "set_app": lambda: store.set_app(bundle_id=HUB, key="k", value="other"),
+        "delete_app": lambda: store.delete_app(bundle_id=HUB, key="k"),
+        "list_app": lambda: store.list_app_keys(bundle_id=HUB),
+    }
+    with pytest.raises(Exception, match="user_secret_storage_unavailable"):
+        calls[operation]()
+    assert path.exists() and path.stat().st_mode & 0o777 == 0o644  # neither replaced, removed nor repaired
+    path.chmod(0o600)
+    os.symlink(path, path.with_name("linked.json"))
+    with pytest.raises(Exception, match="user_secret_storage_unavailable"):
+        (store.list_app_keys(bundle_id=HUB) if app else store.list_keys(user_id=USER, bundle_id=HUB))
+
+
+BUNDLES_SOURCE = {"bundles": {"version": "1", "items": [
+    {"id": HUB, "secrets": {"google": {"client_secret": "synthetic-app-1"}, "peer": "synthetic-app-2"},
+     "note": "kept"},
+    {"id": "kdcube.copilot@2026-04-03", "secrets": {"telegram": {"webhook_secret": "synthetic-app-3"}}},
+    {"id": "no-secrets@1-0"},
+]}}
+
+
+@pytest.mark.asyncio
+async def test_migration_moves_app_and_user_secrets_and_keeps_bundle_items(tmp_path):
+    _yaml_with_users(tmp_path, SOURCE)
+    bundle_yaml = tmp_path / "config" / "bundles.secrets.yaml"
+    bundle_yaml.write_text(yaml.safe_dump(BUNDLES_SOURCE))
+    manager = _manager(tmp_path, bundle_secrets_yaml=bundle_yaml.as_uri())
+    counts = await manager.migrate_user_secrets()
+    assert counts == {"found": 7, "user_found": 4, "app_found": 3, "written": 7, "already_present": 0,
+                      "removed_from_yaml": 7, "bundle_items_kept": 2}
+    kept = yaml.safe_load(bundle_yaml.read_text())["bundles"]["items"]
+    assert kept == [{"id": HUB, "note": "kept"}, {"id": "kdcube.copilot@2026-04-03"}, {"id": "no-secrets@1-0"}]
+    fresh = _manager(tmp_path, bundle_secrets_yaml=bundle_yaml.as_uri())
+    assert await fresh.get_secret(_app_key()) == "synthetic-app-1"
+    assert await fresh.get_secret("bundles.kdcube.copilot@2026-04-03.secrets.telegram.webhook_secret") == (
+        "synthetic-app-3")
+    assert (await fresh.migrate_user_secrets())["found"] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_app_destination_conflict_stops_before_any_change(tmp_path):
+    _yaml_with_users(tmp_path, SOURCE)
+    bundle_yaml = tmp_path / "config" / "bundles.secrets.yaml"
+    bundle_yaml.write_text(yaml.safe_dump(BUNDLES_SOURCE))
+    before = (bundle_yaml.read_text(), (tmp_path / "config" / "secrets.yaml").read_text())
+    UserSecretFileStore(root=_root(tmp_path)).set_app(bundle_id=HUB, key="peer", value="different")
+    manager = _manager(tmp_path, bundle_secrets_yaml=bundle_yaml.as_uri())
+    with pytest.raises(SecretsManagerError, match="destination_conflict"):
+        await manager.migrate_user_secrets()
+    assert (bundle_yaml.read_text(), (tmp_path / "config" / "secrets.yaml").read_text()) == before
+    assert not (_root(tmp_path) / HUB / "users").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_parent_folder_fsync_leaves_both_yamls_intact(tmp_path, monkeypatch):
+    _yaml_with_users(tmp_path, SOURCE)
+    bundle_yaml = tmp_path / "config" / "bundles.secrets.yaml"
+    bundle_yaml.write_text(yaml.safe_dump(BUNDLES_SOURCE))
+    before = (bundle_yaml.read_text(), (tmp_path / "config" / "secrets.yaml").read_text())
+    manager = _manager(tmp_path, bundle_secrets_yaml=bundle_yaml.as_uri())
+    from kdcube_ai_app.infra.secrets import user_secret_files
+
+    real_fsync, synced = os.fsync, []
+
+    def failing_fsync(descriptor):
+        synced.append(os.fstat(descriptor).st_ino)
+        if os.fstat(descriptor).st_ino == (tmp_path / "config").stat().st_ino:
+            raise OSError("synthetic parent fsync failure")
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(user_secret_files.os, "fsync", failing_fsync)
+    with pytest.raises(SecretsManagerError, match="user_secret_storage_unavailable"):
+        await manager.migrate_user_secrets()
+    monkeypatch.undo()
+    assert (tmp_path / "config").stat().st_ino in synced  # the new root's entry was fsynced in its parent
+    assert (bundle_yaml.read_text(), (tmp_path / "config" / "secrets.yaml").read_text()) == before
+
+
+def test_the_host_command_requires_paths_and_prints_only_fixed_reasons(tmp_path, capsys):
+    from kdcube_ai_app.infra.secrets.user_secret_files import main
+
+    assert main(["migrate"]) == 2
+    assert json.loads(capsys.readouterr().out)["reason"] == "config_paths_required"
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "secrets.yaml").write_text("users: [synthetic-canary-text\n")  # malformed yaml
+    assert main(["migrate", "--config-dir", str(config)]) == 1
+    output = capsys.readouterr().out
+    assert json.loads(output)["reason"] == "migration_unavailable" and "canary" not in output
+    assert main(["migrate", "--global-secrets-yaml", str(config / "secrets.yaml"),
+                 "--bundle-secrets-yaml", str(config / "missing.yaml")]) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "bundle_secrets_yaml_not_found"

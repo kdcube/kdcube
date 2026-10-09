@@ -105,7 +105,17 @@ class RuntimeFileStore:
         # a configured broad/public directory or a symlink is refused, never chmod-ed or followed.
         try:
             for folder in (self._root, self._root / self._owner, self._folder):
-                folder.mkdir(mode=0o700, exist_ok=True)
+                try:
+                    folder.mkdir(mode=0o700)
+                    created = True
+                except FileExistsError:
+                    created = False
+                if created:  # a new entry is durable in its parent before anything is published inside it
+                    parent = os.open(folder.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(parent)
+                    finally:
+                        os.close(parent)
                 info = folder.lstat()
                 if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
                         or stat.S_IMODE(info.st_mode) != 0o700):

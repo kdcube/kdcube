@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import tempfile
 from pathlib import Path
 from urllib.parse import unquote
 
-from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileError, runtime_owner
+from kdcube_ai_app.infra.secrets.runtime_file import PLATFORM_OWNER
 
 USERS_FOLDER = "users"
 _SAFE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._@-")
@@ -31,6 +32,8 @@ _MAX_SEGMENT_CHARS = 200
 _MAX_VALUE_BYTES = 65536
 _MAX_FILE_BYTES = 6 * _MAX_VALUE_BYTES + 64
 _SUFFIX = ".json"
+_REASON = re.compile(r"[a-z_]{1,80}")
+_BUNDLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,127}")
 
 
 class UserSecretFileError(RuntimeError):
@@ -61,6 +64,10 @@ def user_secret_key(user_id: str, bundle_id: str, key: str) -> str:
     return f"users.{user_id}.bundles.{bundle_id}.secrets.{key}"
 
 
+def app_secret_key(bundle_id: str, key: str) -> str:
+    return f"bundles.{bundle_id}.secrets.{key}"
+
+
 class UserSecretFileStore:
     """Private per-user secret files below one dedicated, per-project root."""
 
@@ -71,12 +78,14 @@ class UserSecretFileStore:
 
     @staticmethod
     def _owner(bundle_id: str | None) -> str:
+        """The bundle folder: the bundle id itself (dots allowed, e.g. ``kdcube.copilot@2026-04-03``), one
+        segment, never "platform", ".", ".." or hidden."""
         if bundle_id is None:
             raise UserSecretFileError("user_secret_bundle_required")
-        try:
-            return runtime_owner(bundle_id)
-        except RuntimeFileError:
-            raise UserSecretFileError("user_secret_bundle_invalid") from None
+        if (type(bundle_id) is not str or _BUNDLE.fullmatch(bundle_id) is None
+                or bundle_id in {PLATFORM_OWNER, ".", ".."}):
+            raise UserSecretFileError("user_secret_bundle_invalid")
+        return bundle_id
 
     def _chain(self, bundle_id: str, user_id: str | None = None) -> list[Path]:
         chain = [self._root, self._root / self._owner(bundle_id), self._root / self._owner(bundle_id) / USERS_FOLDER]
@@ -105,11 +114,33 @@ class UserSecretFileStore:
 
     def _create(self, chain: list[Path]) -> None:
         for folder in chain:
-            folder.mkdir(mode=0o700, exist_ok=True)
+            try:
+                folder.mkdir(mode=0o700)
+                created = True
+            except FileExistsError:
+                created = False
             if not self._verify(folder):
                 raise UserSecretFileError("user_secret_storage_unavailable")
+            if created:  # the new entry is durable in its parent before anything is published inside it
+                parent = os.open(folder.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(parent)
+                finally:
+                    os.close(parent)
         if chain[-1].resolve() != chain[-1]:
             raise UserSecretFileError("user_secret_storage_unavailable")
+
+    @staticmethod
+    def _check_record(path: Path) -> bool:
+        """True for an existing private record, False when absent; an unsafe one is refused, never repaired."""
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return False
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+            raise UserSecretFileError("user_secret_storage_unavailable")
+        return True
 
     @staticmethod
     def _read(path: Path) -> str | None:
@@ -152,8 +183,9 @@ class UserSecretFileStore:
             raise UserSecretFileError("user_secret_storage_unavailable") from None
 
     def set(self, *, user_id: str, bundle_id: str | None, key: str, value: str) -> None:
-        chain = self._chain(bundle_id, user_id)
-        name = encode_segment(key) + _SUFFIX
+        self._write(self._chain(bundle_id, user_id), encode_segment(key) + _SUFFIX, value)
+
+    def _write(self, chain: list[Path], name: str, value: str) -> None:
         try:
             if type(value) is not str or len(value.encode("utf-8")) > _MAX_VALUE_BYTES:
                 raise ValueError
@@ -163,6 +195,7 @@ class UserSecretFileStore:
         try:
             self._create(chain)
             folder = chain[-1]
+            self._check_record(folder / name)  # an unsafe existing record is refused, not replaced
             descriptor, temporary = tempfile.mkstemp(prefix=".write-", dir=folder)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
@@ -180,10 +213,11 @@ class UserSecretFileStore:
             raise UserSecretFileError("user_secret_storage_unavailable") from None
 
     def delete(self, *, user_id: str, bundle_id: str | None, key: str) -> None:
-        chain = self._chain(bundle_id, user_id)
-        name = encode_segment(key) + _SUFFIX
+        self._unlink(self._chain(bundle_id, user_id), encode_segment(key) + _SUFFIX)
+
+    def _unlink(self, chain: list[Path], name: str) -> None:
         try:
-            if not self._existing(chain):
+            if not self._existing(chain) or not self._check_record(chain[-1] / name):
                 return
             try:
                 os.unlink(chain[-1] / name)
@@ -193,12 +227,58 @@ class UserSecretFileStore:
         except OSError:
             raise UserSecretFileError("user_secret_storage_unavailable") from None
 
+    # App (bundle) secrets: <root>/<bundle>/<key path>.json. Every record file ends in .json; users/ and the
+    # runtime purpose folders are directories without a suffix, so a key path can never collide with them.
+    def get_app(self, *, bundle_id: str | None, key: str) -> str | None:
+        chain = self._chain(bundle_id)[:2]
+        name = encode_segment(key) + _SUFFIX
+        try:
+            if not self._existing(chain):
+                return None
+            return self._read(chain[-1] / name)
+        except (OSError, UnicodeError, ValueError):
+            raise UserSecretFileError("user_secret_storage_unavailable") from None
+
+    def set_app(self, *, bundle_id: str | None, key: str, value: str) -> None:
+        self._write(self._chain(bundle_id)[:2], encode_segment(key) + _SUFFIX, value)
+
+    def delete_app(self, *, bundle_id: str | None, key: str) -> None:
+        self._unlink(self._chain(bundle_id)[:2], encode_segment(key) + _SUFFIX)
+
+    def list_app_keys(self, *, bundle_id: str | None = None) -> list[str]:
+        """``bundles.<bundle>.secrets.<key>`` keys from the bundle folders (one bundle, or every bundle)."""
+        try:
+            if not self._verify(self._root):
+                return []
+            owners = [bundle_id] if bundle_id is not None else [
+                entry.name for entry in os.scandir(self._root) if not entry.is_file(follow_symlinks=False)]
+            keys: list[str] = []
+            for owner in owners:
+                try:
+                    chain = self._chain(owner)[:2]
+                except UserSecretFileError:
+                    if bundle_id is not None:
+                        raise
+                    continue  # not a bundle folder (e.g. platform/)
+                if not self._existing(chain):
+                    continue
+                for entry in os.scandir(chain[-1]):
+                    if entry.name.startswith(".") or not entry.name.endswith(_SUFFIX) or entry.is_dir(
+                            follow_symlinks=False):
+                        continue
+                    self._check_record(chain[-1] / entry.name)
+                    keys.append(app_secret_key(owner, decode_segment(entry.name[:-len(_SUFFIX)])))
+            return sorted(keys)
+        except (OSError, UnicodeError, ValueError):
+            raise UserSecretFileError("user_secret_storage_unavailable") from None
+
     def _user_keys(self, bundle_id: str, user_folder: Path) -> list[str]:
         user_id = decode_segment(user_folder.name)
         keys = []
         for entry in os.scandir(user_folder):
             if entry.name.startswith(".") or not entry.name.endswith(_SUFFIX):
                 continue
+            self._check_record(user_folder / entry.name)
             keys.append(user_secret_key(user_id, bundle_id, decode_segment(entry.name[:-len(_SUFFIX)])))
         return keys
 
@@ -214,6 +294,8 @@ class UserSecretFileStore:
                 return []
             keys: list[str] = []
             for owner in os.scandir(self._root):
+                if owner.is_file(follow_symlinks=False):
+                    continue
                 try:
                     chain = self._chain(owner.name)
                 except UserSecretFileError:
@@ -241,13 +323,13 @@ def main(argv: list[str] | None = None) -> int:
 
     ``--config-dir`` selects ``<dir>/secrets.yaml`` (and ``<dir>/bundles.secrets.yaml`` when present) and
     the default root ``<dir>/secrets``; ``--global-secrets-yaml`` / ``--bundle-secrets-yaml`` /
-    ``--runtime-root`` override them. With no path option, the deployment's configured manager is used.
+    ``--runtime-root`` override them. A path option is required; a named descriptor that is missing refuses.
     """
     import argparse
     import asyncio
 
     from kdcube_ai_app.infra.secrets.manager import (
-        SecretsFileSecretsManager, SecretsManagerConfig, get_secrets_manager,
+        SecretsFileSecretsManager, SecretsManagerConfig, SecretsManagerError,
     )
 
     parser = argparse.ArgumentParser(prog="user_secret_files")
@@ -264,9 +346,15 @@ def main(argv: list[str] | None = None) -> int:
         global_yaml = global_yaml or str(config_dir / "secrets.yaml")
         if not bundle_yaml and (config_dir / "bundles.secrets.yaml").is_file():
             bundle_yaml = str(config_dir / "bundles.secrets.yaml")
+    if not (global_yaml or bundle_yaml):
+        print(json.dumps({"status": "refused", "reason": "config_paths_required"}))
+        return 2
     if global_yaml or bundle_yaml or arguments.runtime_root:
         if not global_yaml or not Path(global_yaml).expanduser().is_file():
             print(json.dumps({"status": "refused", "reason": "global_secrets_yaml_not_found"}))
+            return 1
+        if bundle_yaml and not Path(bundle_yaml).expanduser().is_file():
+            print(json.dumps({"status": "refused", "reason": "bundle_secrets_yaml_not_found"}))
             return 1
         manager = SecretsFileSecretsManager(SecretsManagerConfig(
             provider="secrets-file", component="migration",
@@ -275,15 +363,12 @@ def main(argv: list[str] | None = None) -> int:
             runtime_secrets_root=(str(Path(arguments.runtime_root).expanduser().resolve())
                                   if arguments.runtime_root else None),
         ))
-    else:
-        manager = get_secrets_manager()
-    if not isinstance(manager, SecretsFileSecretsManager):
-        print(json.dumps({"status": "not_applicable", "provider": manager.provider_type}))
-        return 2
     try:
         counts = asyncio.run(manager.migrate_user_secrets(dry_run=arguments.dry_run))
-    except Exception as exc:  # a finite reason only; never a value
-        print(json.dumps({"status": "refused", "reason": str(exc)}))
+    except Exception as exc:  # a fixed reason only: never a value, a path or parser text
+        reason = str(exc) if isinstance(exc, SecretsManagerError) and _REASON.fullmatch(str(exc)) else (
+            "migration_unavailable")
+        print(json.dumps({"status": "refused", "reason": reason}))
         return 1
     print(json.dumps({"status": "ok", "dry_run": arguments.dry_run, "root": manager._runtime_secrets_root,
                       **counts}, sort_keys=True))
@@ -294,4 +379,5 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["USERS_FOLDER", "UserSecretFileError", "UserSecretFileStore", "decode_segment", "encode_segment"]
+__all__ = ["USERS_FOLDER", "UserSecretFileError", "UserSecretFileStore", "app_secret_key", "decode_segment",
+           "encode_segment", "user_secret_key"]
