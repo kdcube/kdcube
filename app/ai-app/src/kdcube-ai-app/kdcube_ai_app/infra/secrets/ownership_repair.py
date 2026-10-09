@@ -56,13 +56,26 @@ def _same(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_ino, left.st_dev) == (right.st_ino, right.st_dev)
 
 
-def _visit(fd: int, owner: int, device: int) -> int:
+class _Tally:
+    def __init__(self) -> None:
+        self.adopted = 0
+        self.deferred = 0  # eligible-looking entries this pass could not safely finish (I/O error or a change)
+
+
+def _visit(fd: int, owner: int, device: int, tally: _Tally) -> None:
     """fd is an open, already verified trusted directory; adopt its private children and descend."""
-    changed = 0
-    for name in os.listdir(fd):
+    try:
+        names = os.listdir(fd)
+    except OSError:
+        tally.deferred += 1
+        return
+    for name in names:
         try:
             entry = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue  # removed meanwhile
         except OSError:
+            tally.deferred += 1
             continue
         if entry.st_dev != device:
             continue  # another filesystem: pruned before descent
@@ -72,15 +85,21 @@ def _visit(fd: int, owner: int, device: int) -> int:
             try:
                 child = os.open(name, _DIR_FLAGS, dir_fd=fd)
             except OSError:
+                tally.deferred += 1
                 continue
             try:
                 opened = os.fstat(child)
-                if not _same(entry, opened) or not _trusted_dir(opened, owner, device):
+                if not _same(entry, opened):
+                    tally.deferred += 1  # the name now points elsewhere: look again next pass
+                    continue
+                if not _trusted_dir(opened, owner, device):
                     continue
                 if opened.st_uid == 0:
                     os.fchown(child, owner, -1)
-                    changed += 1
-                changed += _visit(child, owner, device)
+                    tally.adopted += 1
+                _visit(child, owner, device, tally)
+            except OSError:
+                tally.deferred += 1
             finally:
                 os.close(child)
         elif stat.S_ISREG(entry.st_mode):
@@ -88,50 +107,76 @@ def _visit(fd: int, owner: int, device: int) -> int:
                 continue
             try:
                 handle = os.open(name, _FILE_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                continue
             except OSError:
+                tally.deferred += 1
                 continue
             try:
                 opened = os.fstat(handle)
                 if (_same(entry, opened) and stat.S_ISREG(opened.st_mode) and opened.st_uid == 0
                         and opened.st_nlink == 1 and stat.S_IMODE(opened.st_mode) in _FILE_MODES):
                     os.fchown(handle, owner, -1)
-                    changed += 1
+                    tally.adopted += 1
+                elif not _same(entry, opened):
+                    tally.deferred += 1  # the name now points elsewhere: look again next pass
+            except OSError:
+                tally.deferred += 1
             finally:
                 os.close(handle)
         # symlinks, sockets, devices and anything else are never touched
-    return changed
+
+
+_MAX_PASSES = 3
+
+
+def _one_pass(root: str, owner_uid: int) -> _Tally:
+    tally = _Tally()
+    fd = os.open(root, _DIR_FLAGS)
+    try:
+        top = os.fstat(fd)
+        if not _trusted_dir(top, owner_uid, top.st_dev):
+            return tally
+        if top.st_uid == 0:
+            os.fchown(fd, owner_uid, -1)
+            tally.adopted += 1
+        _visit(fd, owner_uid, top.st_dev, tally)
+        return tally
+    finally:
+        os.close(fd)
+
+
+def repair_secrets_ownership_report(root: object, owner: object) -> tuple[int, int]:
+    """(adopted, deferred). Passes repeat while entries were deferred and the last pass made progress, so a
+    transient I/O error or a concurrent change does not leave an eligible entry root-owned until next start."""
+    owner_uid = _owner_uid(owner)
+    if owner_uid is None or os.geteuid() != 0 or not safe_repair_root(root):
+        return 0, 0
+    root = os.path.normpath(str(root))
+    adopted = deferred = 0
+    for attempt in range(_MAX_PASSES):
+        try:
+            tally = _one_pass(root, owner_uid)
+        except OSError:
+            return adopted, deferred + 1
+        adopted += tally.adopted
+        deferred = tally.deferred
+        if not deferred or (attempt and not tally.adopted):
+            break
+    return adopted, deferred
 
 
 def repair_secrets_ownership(root: object, owner: object) -> int:
     """Adopt root-owned private entries under ``root`` to ``owner``; the number of entries changed."""
-    owner_uid = _owner_uid(owner)
-    if owner_uid is None or os.geteuid() != 0 or not safe_repair_root(root):
-        return 0
-    root = os.path.normpath(str(root))
-    try:
-        fd = os.open(root, _DIR_FLAGS)
-    except OSError:
-        return 0
-    try:
-        top = os.fstat(fd)
-        if not _trusted_dir(top, owner_uid, top.st_dev):
-            return 0
-        changed = 0
-        if top.st_uid == 0:
-            os.fchown(fd, owner_uid, -1)
-            changed += 1
-        return changed + _visit(fd, owner_uid, top.st_dev)
-    except OSError:
-        return 0
-    finally:
-        os.close(fd)
+    return repair_secrets_ownership_report(root, owner)[0]
 
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) != 2:
         return 2
-    print(f"secrets ownership repair: adopted={repair_secrets_ownership(args[0], args[1])}")
+    adopted, deferred = repair_secrets_ownership_report(args[0], args[1])
+    print(f"secrets ownership repair: adopted={adopted} deferred={deferred}")
     return 0
 
 
