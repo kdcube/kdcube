@@ -23,16 +23,21 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refresh-tokens")
 
 
+RUNTIME_SECTION_FIELDS = frozenset({"root", "namespaces", "scope_policy"})
+
+
 def runtime_section_namespaces(section: object) -> tuple[str, ...]:
     """The enrolled namespaces from the assembly ``secrets.runtime`` section, the CLI projection's rule.
 
     Absent section, or a section whose ``namespaces`` is omitted or null: the platform defaults (Main,
     2026-10-09: "omitted namespaces => the 3 defaults in BOTH, explicit [] => none in both"). An explicit
-    list, the empty one included, is exact. Anything malformed enrolls nothing.
+    list, the empty one included, is exact. Anything malformed, an unsupported field included, enrolls nothing.
     """
     if section is None:
         return DEFAULT_RUNTIME_NAMESPACES
-    if not isinstance(section, dict):
+    # A section with any field other than root, namespaces and scope_policy is malformed (the CLI refuses
+    # it), so it never defaults: SDK consumers not installed through the CLI stay closed too.
+    if not isinstance(section, dict) or set(section) - RUNTIME_SECTION_FIELDS:
         return ()
     namespaces = section.get("namespaces")
     if namespaces is None:

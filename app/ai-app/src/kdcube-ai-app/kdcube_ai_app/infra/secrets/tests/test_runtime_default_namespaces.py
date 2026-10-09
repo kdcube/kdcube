@@ -31,6 +31,7 @@ def test_the_defaults_are_valid_and_never_users():
     ({"namespaces": []}, ()),
     ({"namespaces": ["custody"]}, ("custody",)),
     ([], ()), ("runtime", ()), (True, ()),
+    ({"unexpected": True}, ()), ({"root": "/config/secrets", "extra": 1}, ()),
 ])
 def test_the_whole_section_decides(section, expected):
     assert runtime_section_namespaces(section) == expected
@@ -61,3 +62,14 @@ def test_settings_and_the_cli_projection_enroll_the_same(monkeypatch, tmp_path, 
     assert (settings.SECRETS_RUNTIME_NAMESPACES == DEFAULT_RUNTIME_NAMESPACES) is defaults
     # The per-run own-credential grant goes with defaulted namespaces when no policy is declared.
     assert projected["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ("1" if defaults else "")
+
+
+def test_an_unsupported_field_is_closed_in_settings_and_refused_by_the_cli(monkeypatch, tmp_path):
+    from kdcube_cli.host_vault import HostVaultConfigurationError
+    secrets = {"provider": "secrets-file", "runtime": {"unexpected": True}}
+    assembly = tmp_path / "assembly.yaml"
+    assembly.write_text(json.dumps({"secrets": secrets}), encoding="utf-8")
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly))
+    assert sdk_config.Settings().SECRETS_RUNTIME_NAMESPACES == ()
+    with pytest.raises(HostVaultConfigurationError):
+        config_from_assembly({"secrets": secrets})

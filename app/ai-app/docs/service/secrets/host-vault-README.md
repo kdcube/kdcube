@@ -559,12 +559,18 @@ per-user secret folders). The CLI marks the projection
 install or refresh (`write_env_overlay`) carries a scope policy granting exactly
 those namespaces to this run's own proc credentials: `read` for the proc read
 token (`SECRETS_TOKEN_PROC`) and `write` for the writer token
-(`SECRETS_ADMIN_TOKEN`), by SHA-256 identifier only. The ingress door token and
-any other credential get nothing, and there is no wildcard. The same rule
+(`SECRETS_ADMIN_TOKEN`), by SHA-256 identifier only. The ingress read token
+(`SECRETS_TOKEN_INGRESS`) and any other read credential get nothing, and there
+is no wildcard. The writer is the deployment's shared admin token: the compose
+also gives it to chat-ingress and the secrets service, so every holder of
+`SECRETS_ADMIN_TOKEN` can use the write grant. This is a deployment-wide trust
+boundary, not a per-process or per-bundle one. The same rule
 applies when a declared `secrets.runtime` omits `namespaces` (for example a
 root-only section). An explicit namespace list, the empty one included, is
 exact; declared namespaces without a `scope_policy` get no default grant, and a
-declared `scope_policy` is projected unchanged.
+declared `scope_policy` is projected unchanged. A section with any field other
+than `root`, `namespaces` and `scope_policy` is malformed: the CLI refuses it and
+the SDK enrolls nothing.
 The file runtime root default is the secrets-file manager's own rule
 (`resolve_runtime_secrets_root`). Ambient inputs do not
 override the descriptor during projection. A server snapshots those inputs at
