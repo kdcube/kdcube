@@ -10,14 +10,16 @@ import pytest
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceReceipt, SessionIssuanceRefused
 from kdcube_ai_app.auth.bundle.session_planned_issuance import PlannedIssuanceContext, PreparedSessionSnapshot
 from kdcube_ai_app.auth.tests.test_bound_session_issuance_store import counts, store
-from kdcube_ai_app.auth.tests.test_bound_session_issuer import MemoryCustody, authority
+from kdcube_ai_app.auth.tests.test_bound_session_issuer import authority
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import grants
-from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.test_grants import _plan
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.test_grants import (
+    _NoCustody, _plan,
+)
 
 
 @pytest.mark.asyncio
 async def test_public_access_read_recovers_original_without_preparing_or_key_access(store):
-    plan, custody = _plan(tenant=store.tenant, project=store.project), MemoryCustody()
+    plan, custody = _plan(tenant=store.tenant, project=store.project), _NoCustody()
     expiry = int(time.time()) + 3600
     prepared = await grants.prepare_delegated_client_access_token(plan=plan, expires_at=expiry,
                                                                 custody=custody, authority=authority(store))
@@ -31,12 +33,12 @@ async def test_public_access_read_recovers_original_without_preparing_or_key_acc
     assert one == two and one.context == prepared.context
     assert one.receipt.session_id == prepared.receipt.session_id
     assert one.receipt.bearer_sha256 == prepared.receipt.bearer_sha256
-    assert one.issued_at > 0 and custody.created == 1 and await counts(store) == (1, 1, 0)
+    assert one.issued_at > 0 and await counts(store) == (1, 1, 0)
 
 
 @pytest.mark.asyncio
 async def test_access_read_changed_grants_refuses_with_no_repair(store):
-    plan, custody = _plan(tenant=store.tenant, project=store.project), MemoryCustody()
+    plan, custody = _plan(tenant=store.tenant, project=store.project), _NoCustody()
     expiry = int(time.time()) + 3600
     await grants.prepare_delegated_client_access_token(plan=plan, expires_at=expiry,
                                                      custody=custody, authority=authority(store))
@@ -44,7 +46,7 @@ async def test_access_read_changed_grants_refuses_with_no_repair(store):
         await grants.read_prepared_delegated_client_access_token(
             plan=replace(plan, resource_grants={"records": ("records:write",)}),
             expires_at=expiry, authority=authority(store))
-    assert custody.created == 1 and await counts(store) == (1, 1, 0)
+    assert await counts(store) == (1, 1, 0)
 
 
 @pytest.mark.asyncio

@@ -54,50 +54,54 @@ class HmacOriginalRefreshSigner:
 
 
 class OriginalRefreshIssuer:
-    def __init__(self, *, store: PostgresOriginalRefreshStore, custody: Any,
-                 signer: HmacOriginalRefreshSigner, card_kind: str, ttl_seconds: int):
+    """Durable refresh issuance with no bearer in custody (operator, 2026-10-09: "i need the stronger version").
+
+    PostgreSQL keeps the signing input (claims) and the sealed SHA-256. The bearer is deterministic over those
+    claims with the refresh signing key, so preparation, recovery and delivery re-sign exactly that input and
+    must match the sealed fingerprint; a changed or unavailable key refuses, never yielding another bearer.
+    """
+
+    def __init__(self, *, store: PostgresOriginalRefreshStore, signer: HmacOriginalRefreshSigner,
+                 card_kind: str, ttl_seconds: int, custody: Any = None):
         if (type(signer) is not HmacOriginalRefreshSigner
                 or (signer.tenant, signer.project) != (store.tenant, store.project)):
             raise OriginalExchangeRefused("original_refresh_namespace_mismatch")
-        self.store, self.custody, self.signer = store, custody, signer
+        self.store, self.signer = store, signer
         self.card_kind, self.ttl_seconds = card_kind, ttl_seconds
 
     def _args(self, plan):
         return {"plan": plan, "card_kind": self.card_kind, "ttl_seconds": self.ttl_seconds}
 
-    async def prepare(self, *, plan) -> OriginalRefreshReservation:
-        original = await self.store.reserve(**self._args(plan))
-        bearer = await self.custody.get(secret_ref=original.secret_ref)
-        if bearer is None:
-            if original.state == "applied":
-                raise OriginalExchangeRefused("original_refresh_custody_missing")
-            # Deterministic re-signing uses the first durable signing input,
-            # never a new id, timestamp, expiry or refresh generation.
-            bearer = await self.signer.sign(context=original.context, claims=original.claims)
-            original = await self.store.seal(original, hashlib.sha256(bearer.encode()).hexdigest())
-            await self.custody.create(secret_ref=original.secret_ref, value=bearer,
-                                      expires_at=original.context.expires_at)
-            bearer = await self.custody.get(secret_ref=original.secret_ref)
+    async def _resigned(self, original: OriginalRefreshReservation) -> str:
+        bearer = await self.signer.sign(context=original.context, claims=original.claims)
         if (type(bearer) is not str or not bearer or original.bearer_sha256 is None
                 or not hmac.compare_digest(hashlib.sha256(bearer.encode()).hexdigest(), original.bearer_sha256)):
-            raise OriginalExchangeRefused("original_refresh_custody_mismatch")
-        try:
-            return await self.store.seal(original, original.bearer_sha256, ready=True)
-        except OriginalExchangeRefused as exc:
-            if str(exc) == "original_refresh_terminal":
-                # Retirement won while external create/get yielded. Recovery
-                # still owns this same reference if purge itself is uncertain.
-                await self.custody.delete(secret_ref=original.secret_ref)
-            raise
+            raise OriginalExchangeRefused("original_refresh_signing_mismatch")
+        return bearer
+
+    async def prepare(self, *, plan) -> OriginalRefreshReservation:
+        original = await self.store.reserve(**self._args(plan))
+        if original.bearer_sha256 is None:
+            if original.state == "applied":
+                raise OriginalExchangeRefused("original_refresh_record_invalid")
+            # Deterministic signing over the first durable signing input, never a new id, timestamp,
+            # expiry or refresh generation; only its fingerprint is sealed.
+            bearer = await self.signer.sign(context=original.context, claims=original.claims)
+            original = await self.store.seal(original, hashlib.sha256(bearer.encode()).hexdigest())
+        await self._resigned(original)
+        return await self.store.seal(original, original.bearer_sha256, ready=True)
+
+    async def bearer(self, *, plan) -> str:
+        """The sealed refresh bearer, re-signed from its stored claims for delivery or replay."""
+        return await self._resigned(await self.store.read(**self._args(plan)))
 
     async def read(self, *, plan) -> OriginalRefreshReservation:
-        """No signing, custody or writes; a missing original is never prepared."""
+        """No signing or writes; a missing original is never prepared."""
         return await self.store.read(**self._args(plan))
 
     async def protect_applied(self, *, plan, result) -> None:
         await self.store.protect_applied(**self._args(plan), result=result)
 
     async def retire(self, *, plan, terminal) -> None:
-        reference = await self.store.retire(**self._args(plan), terminal=terminal)
-        if reference is not None:
-            await self.custody.delete(secret_ref=reference)
+        # The PostgreSQL tombstone is the whole retirement: no bearer was stored anywhere else.
+        await self.store.retire(**self._args(plan), terminal=terminal)

@@ -1,8 +1,9 @@
-"""Real Hub/SDK stores and private file custody over an in-process ASGI API.
+"""Real Hub/SDK stores over an in-process API; no bearer custody.
 
-Card serving projection, declared catalog resolver, signing key and physical
-volume qualification are explicit fixtures. No encryption or installed runtime
-is qualified; RuntimeFileStore enforces private modes, locks and fsync.
+Card serving projection, declared catalog resolver and signing keys are explicit
+fixtures. Both bearers are re-signed from the claims PostgreSQL stores; the
+secrets-service file root is exposed only so tests can show nothing is written
+there. No installed runtime is qualified.
 """
 from __future__ import annotations
 
@@ -36,15 +37,13 @@ from connection_hub.delegated_credentials.oauth.store import GrantStore
 from connection_hub.invocation_policy import BundleStorageInvocationPolicyStore, InvocationPolicyService
 from kdcube_ai_app.auth.bundle.session_store import PostgresBundleSessionStore
 from kdcube_ai_app.auth.tests.test_bound_session_issuer import authority
-from kdcube_ai_app.infra.secrets.issuance import issuance_secret_custody
-from kdcube_ai_app.infra.secrets.tests.test_runtime_http import service_adapter
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.http import original_code
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_code_flow import OriginalCodeExchangeFlow
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_exchange import CodeExchangeProof
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_exchange_store import PostgresOriginalExchangeStore
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_pair_provider import OriginalCredentialPairProvider
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_refresh_issuer import HmacOriginalRefreshSigner
-from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_refresh_store import PostgresOriginalRefreshStore
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_refresh_store import PostgresOriginalRefreshStore, TABLE_REFRESH
 
 RESOURCE = "https://unit.test/api/mcp/records"
 
@@ -60,7 +59,7 @@ async def hub_world(tmp_path, monkeypatch, secrets_rig):
     pool = await asyncpg.create_pool(dsn, min_size=1, max_size=8)
     redis = redis_asyncio.from_url(redis_url)
     suffix = uuid.uuid4().hex
-    r = SimpleNamespace(tenant="original-hub-" + suffix, project="original-code", signs=0, creates=0,
+    r = SimpleNamespace(tenant="original-hub-" + suffix, project="original-code", signs=0,
                         subject="unit-human", client="https://unit.test/oauth/client", pool=pool, errors=[])
     r.schema = "original_hub_" + suffix
     r.oauth = PostgresOAuthAuthorityStore(pg_pool=pool, tenant=r.tenant, project=r.project)
@@ -113,24 +112,17 @@ async def hub_world(tmp_path, monkeypatch, secrets_rig):
             intents=intents, decisions=decisions, intent_ttl_seconds=60)
         r.hub.bind_oauth_issuance_store(r.oauth)
         r.hub.bind_card_credential_handles(handles)
-        _, app, _, r.custody_root, _ = secrets_rig
-        manager = service_adapter(app, monkeypatch)
-        create = manager.create_ephemeral_secret
-        async def counted_create(**kwargs):
-            made = await create(**kwargs)
-            r.creates += bool(made)
-            return made
-        manager.create_ephemeral_secret = counted_create
-        r.custody = issuance_secret_custody(namespace="custody", manager=manager)
+        # Unused by the provider and flow: tests assert nothing is ever written under this root.
+        r.custody_root = secrets_rig[3]
         async def key():
             r.signs += 1
             return b"unit-original-refresh-key-32-bytes!"
-        refresh = PostgresOriginalRefreshStore(pg_pool=pool, tenant=r.tenant, project=r.project)
+        r.refresh = refresh = PostgresOriginalRefreshStore(pg_pool=pool, tenant=r.tenant, project=r.project)
         r.ledger = PostgresOriginalExchangeStore(pg_pool=pool, tenant=r.tenant, project=r.project)
         await refresh.ensure_schema()
         await r.ledger.ensure_schema()
-        r.provider = OriginalCredentialPairProvider(refresh_store=refresh, custody=r.custody,
-            custody_namespace="custody", refresh_signer=HmacOriginalRefreshSigner(r.tenant, r.project, key),
+        r.provider = OriginalCredentialPairProvider(refresh_store=refresh,
+            refresh_signer=HmacOriginalRefreshSigner(r.tenant, r.project, key),
             card_kind="connector", refresh_ttl_seconds=180 * 86400,
             authority_factory=lambda **kwargs: authority(r.sessions))
         r.candidate_overrides = {}
@@ -144,7 +136,7 @@ async def hub_world(tmp_path, monkeypatch, secrets_rig):
             return (current is not None and current[1].card_revision == plan.candidate_revision
                     and current[1].content_hash() == plan.card_content_hash and current[1].state == "active")
         r.flow = OriginalCodeExchangeFlow(ledger=r.ledger, grant_store=r.grants, hub=r.hub, provider=r.provider,
-            custody=r.custody, candidate_inputs=candidates, fence_target=fence)
+            candidate_inputs=candidates, fence_target=fence)
         async def exchange(**kwargs):
             try:
                 return await r.flow.exchange(**kwargs)
@@ -185,3 +177,12 @@ def token_digests(response):
     import json
     body = json.loads(response.body)
     return {slot: hashlib.sha256(body[slot + "_token"].encode()).hexdigest() for slot in ("access", "refresh")}
+
+
+async def refresh_originals(r):
+    """(sid, state, bearer_sha256) of every original refresh row; one row means no second original."""
+    import json
+    async with r.pool.acquire() as connection:
+        rows = await connection.fetch(f"SELECT claims, state, bearer_sha256 FROM {r.refresh.schema}.{TABLE_REFRESH}")
+    claims = [json.loads(row["claims"]) if isinstance(row["claims"], str) else row["claims"] for row in rows]
+    return [((value or {}).get("sid"), row["state"], row["bearer_sha256"]) for value, row in zip(claims, rows)]

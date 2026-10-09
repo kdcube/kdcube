@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Recover one fixed session through durable reservation and secret custody."""
+"""Recover one fixed session through its durable reservation, re-signing the stored claims.
+
+Operator, 2026-10-09: "i need the stronger version now" (no issued bearer is kept in secret custody).
+PostgreSQL keeps the bearer's SHA-256 and the signed claims; the bearer is deterministic over those claims
+with the bundle session key, so preparation, recovery and replay re-sign exactly the stored claims and must
+match the stored fingerprint, else they refuse (a changed or unavailable key never yields another bearer).
+Only the signing key is a secret, read through the secrets manager.
+"""
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import time
 import uuid
@@ -18,7 +26,7 @@ from kdcube_ai_app.auth.bundle.session_issuance import (
 
 
 class IssuanceSecretCustody(Protocol):
-    """A host-injected durable, authorized create-only secret store."""
+    """Former bearer custody. Kept as a type for callers that still pass one; it is never used."""
 
     async def create(self, *, secret_ref: str, value: str, expires_at: int) -> bool: ...
     async def get(self, *, secret_ref: str) -> str | None: ...
@@ -71,6 +79,16 @@ def _inputs_digest(bound: Any, *, user_id: str, roles: Sequence[str],
     }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
 
 
+async def _resigned(sign: Callable[[Mapping[str, Any]], Awaitable[str]], claims: Mapping[str, Any],
+                    token_sha256: str) -> str:
+    """The original bearer, re-signed from its stored claims; a different result refuses."""
+    bearer = await _signed(sign, claims)
+    if (type(bearer) is not str or not bearer or type(token_sha256) is not str
+            or not hmac.compare_digest(hashlib.sha256(bearer.encode("utf-8")).hexdigest(), token_sha256)):
+        raise SessionIssuanceRefused("issuance_signing_mismatch")
+    return bearer
+
+
 async def _custody_call(call: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
     try:
         return await call(**kwargs)
@@ -86,8 +104,8 @@ async def _custody_call(call: Callable[..., Awaitable[Any]], **kwargs: Any) -> A
 async def issue_bound_session(
     context: object, *, tenant: str | None, project: str | None, store: Any,
     user_id: str, roles: Sequence[str], permissions: Sequence[str],
-    custody: IssuanceSecretCustody,
     sign: Callable[[Mapping[str, Any]], Awaitable[str]],
+    custody: IssuanceSecretCustody | None = None,
 ) -> SessionIssuanceReceipt:
     bound = IssuanceContext.from_context(context)
     reservation = await _prepare_bound_session(
@@ -105,8 +123,8 @@ async def issue_bound_session(
 async def _prepare_bound_session(
     bound: Any, *, tenant: str | None, project: str | None, store: Any,
     user_id: str, roles: Sequence[str], permissions: Sequence[str],
-    custody: IssuanceSecretCustody,
     sign: Callable[[Mapping[str, Any]], Awaitable[str]], planned: bool = False,
+    custody: IssuanceSecretCustody | None = None,
 ) -> Any:
     if bound.tenant != tenant or bound.project != project:
         raise SessionIssuanceRefused("issuance_namespace_mismatch")
@@ -119,12 +137,10 @@ async def _prepare_bound_session(
     if (store is None or not all(callable(getattr(store, name, None)) for name in
             ("read_issuance", "reserve_issuance", "activate_reserved", "get_login_state"))):
         raise SessionIssuanceRefused("issuance_store_unavailable")
-    if not all(callable(getattr(custody, name, None)) for name in ("create", "get")):
-        raise SessionIssuanceRefused("issuance_custody_unavailable")
 
     reservation = await _store_call(store.read_issuance, bound.identity)
     if reservation is not None and reservation.inputs_digest != fingerprint:
-        # This comes before user/key/custody access and before any mutation.
+        # This comes before user/key access and before any mutation.
         raise SessionIssuanceRefused("issuance_identity_conflict")
     if bound.expires_at <= int(time.time()):
         raise SessionIssuanceRefused("issuance_expired")
@@ -194,41 +210,14 @@ async def _prepare_bound_session(
         if reservation.session_id != sid:
             candidate = None  # a concurrent reservation owns the original
 
-    original = await _custody_call(custody.get, secret_ref=reservation.secret_ref)
-    if original is None:
-        if reservation.state == "active":
-            raise SessionIssuanceRefused("issuance_custody_missing")
-        if candidate is None:
-            # The original signed input was reserved before activation. A
-            # restart re-signs exactly that input, never new claims or an id.
-            candidate = await _signed(sign, reservation.record["claims"])
-        if hashlib.sha256(candidate.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:
-            raise SessionIssuanceRefused("issuance_custody_unrecoverable")
-        await _custody_call(
-            custody.create, secret_ref=reservation.secret_ref, value=candidate,
-            expires_at=reservation.expires_at,
-        )
-        # A false create or an uncertain concurrent outcome must read the
-        # winner. No candidate bearer is trusted just because we made it.
-        original = await _custody_call(custody.get, secret_ref=reservation.secret_ref)
-    if type(original) is not str or not original:
-        raise SessionIssuanceRefused("issuance_custody_missing")
-    if hashlib.sha256(original.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:
-        raise SessionIssuanceRefused("issuance_custody_mismatch")
+    # No custody: the original bearer is the deterministic signature over the stored claims. A restart, a
+    # concurrent winner or a later read re-signs exactly that input, never new claims or an id, and must
+    # match the stored fingerprint.
+    if candidate is None or hashlib.sha256(candidate.encode("utf-8")).hexdigest() != reservation.record["token_sha256"]:
+        candidate = await _resigned(sign, reservation.record["claims"], reservation.record["token_sha256"])
 
     if planned:
-        # Retirement can commit while an external custody write is in flight.
-        # An absent-reference provider delete may not fence that first create.
-        # Recheck the durable no-mint record before returning preparation, and
-        # retire any late original value. If this process dies before the
-        # recheck, the terminal retry still owns this exact reference.
-        try:
-            await _store_call(store.read_issuance, bound.identity)
-        except SessionIssuanceRefused as exc:
-            if exc.reason == "issuance_terminal":
-                delete = getattr(custody, "delete", None)
-                if not callable(delete):
-                    raise SessionIssuanceRefused("issuance_custody_unavailable") from None
-                await _custody_call(delete, secret_ref=reservation.secret_ref)
-            raise
+        # Retirement can commit concurrently. Recheck the durable no-mint record before returning
+        # preparation; a terminal identity refuses, and nothing outside PostgreSQL needs cleaning up.
+        await _store_call(store.read_issuance, bound.identity)
     return reservation

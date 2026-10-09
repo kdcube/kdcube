@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Original refresh signing inputs and custody coordinates, never bearers.
+"""Original refresh signing inputs, opaque references and digests, never bearers.
 
 This issuer metadata is separate from Bundle access sessions and Hub's sole
 grant decision. Hub activates the refresh family; this table grants nothing.

@@ -548,9 +548,9 @@ class BundleSessionAuthority:
 
     async def issue_bound_session(
         self, context: IssuanceContext, *, user_id: str, roles: list[str],
-        permissions: list[str], custody: IssuanceSecretCustody,
+        permissions: list[str], custody: IssuanceSecretCustody | None = None,
     ) -> BoundIssuance:
-        """Issue/recover a trusted host's committed credential into durable custody.
+        """Issue/recover a trusted host's committed credential; the bearer is re-signed, never stored.
 
         Hosts validate actor, intent, effect and live target eligibility before
         this internal call. Request JSON never supplies that authority. Redis
@@ -564,12 +564,12 @@ class BundleSessionAuthority:
         return await issue_bound_session(
             context, tenant=self.tenant, project=self.project,
             store=self._active_authority_store(), user_id=user_id,
-            roles=roles, permissions=permissions, custody=custody, sign=sign,
+            roles=roles, permissions=permissions, sign=sign,
         )
 
     async def prepare_bound_session(
         self, context: object, *, user_id: str, roles: list[str],
-        permissions: list[str], custody: IssuanceSecretCustody,
+        permissions: list[str], custody: IssuanceSecretCustody | None = None,
     ) -> BoundIssuance:
         """Prepare one trusted original plan while its session stays inactive."""
         from kdcube_ai_app.auth.bundle.session_planned_issuer import prepare_bound_session
@@ -580,7 +580,7 @@ class BundleSessionAuthority:
         return await prepare_bound_session(
             context, tenant=self.tenant, project=self.project,
             store=self._active_authority_store(), user_id=user_id,
-            roles=roles, permissions=permissions, custody=custody, sign=sign,
+            roles=roles, permissions=permissions, sign=sign,
         )
 
     async def read_prepared_bound_session(
@@ -596,25 +596,40 @@ class BundleSessionAuthority:
         )
 
     async def activate_prepared_bound_session(
-        self, context: object, *, custody: IssuanceSecretCustody,
+        self, context: object, *, custody: IssuanceSecretCustody | None = None,
     ) -> BoundIssuance:
         """Activate only the original prepared session's validated applied result."""
         from kdcube_ai_app.auth.bundle.session_planned_issuer import activate_prepared_bound_session
 
+        async def sign(claims):
+            return _make_token(claims, secret=await self._resolve_secret())
+
         return await activate_prepared_bound_session(
             context, tenant=self.tenant, project=self.project,
-            store=self._active_authority_store(), custody=custody,
+            store=self._active_authority_store(), sign=sign,
+        )
+
+    async def read_bound_session_bearer(self, context: object) -> str:
+        """The applied original's bearer, re-signed from its stored claims; nothing is stored or logged."""
+        from kdcube_ai_app.auth.bundle.session_planned_issuer import read_bound_session_bearer
+
+        async def sign(claims):
+            return _make_token(claims, secret=await self._resolve_secret())
+
+        return await read_bound_session_bearer(
+            context, tenant=self.tenant, project=self.project,
+            store=self._active_authority_store(), sign=sign,
         )
 
     async def retire_prepared_bound_session(
-        self, context: object, *, custody: IssuanceSecretCustody,
+        self, context: object, *, custody: IssuanceSecretCustody | None = None,
     ) -> TerminalIssuanceReceipt:
         """Retire only a never-active original after a trusted terminal result."""
         from kdcube_ai_app.auth.bundle.session_planned_issuer import retire_prepared_bound_session
 
         return await retire_prepared_bound_session(
             context, tenant=self.tenant, project=self.project,
-            store=self._active_authority_store(), custody=custody,
+            store=self._active_authority_store(),
         )
 
     async def _login_durable(

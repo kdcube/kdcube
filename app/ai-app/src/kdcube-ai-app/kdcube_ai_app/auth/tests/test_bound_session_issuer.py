@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from types import SimpleNamespace
 
@@ -9,6 +8,10 @@ import pytest
 
 from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, BundleSessionAuthority
 from kdcube_ai_app.auth.bundle.session_issuance import IssuanceContext, SessionIssuanceRefused
+from kdcube_ai_app.auth.bundle.sessions import _make_token
+from kdcube_ai_app.auth.tests._bound_session_crash_fixtures import (
+    SIGNING_SECRET, ForbiddenCustody, PhasedStore,
+)
 from kdcube_ai_app.auth.tests.test_bound_session_issuance_store import counts, store
 from kdcube_ai_app.auth.tests.test_bundle_sessions import FakeRedis
 from kdcube_ai_app.infra.secrets.issuance import issuance_secret_custody
@@ -41,33 +44,42 @@ def context(store):
     )
 
 
-def authority(store):
+def authority(store, secret=SIGNING_SECRET):
     return BundleSessionAuthority(
         tenant=store.tenant, project=store.project, authority_store=store,
-        redis=FakeRedis(), secret="unit-session-signing-secret",
+        redis=FakeRedis(), secret=secret,
     )
 
 
-async def issue(store, custody, bound):
+async def issue(store, bound, custody=None):
+    """Issue or recover; by default any custody call fails the test."""
     return await authority(store).issue_bound_session(
         bound, user_id="integration:unit:human", roles=["delegated-client"],
-        permissions=["records:read"], custody=custody,
+        permissions=["records:read"], custody=ForbiddenCustody() if custody is None else custody,
     )
+
+
+async def resigned(store, bound, secret=SIGNING_SECRET):
+    """The original bearer, re-signed from the stored claims; it must match the stored fingerprint."""
+    original = await store.read_issuance(bound.identity)
+    token = _make_token(original.record["claims"], secret=secret)
+    assert hashlib.sha256(token.encode()).hexdigest() == original.record["token_sha256"]
+    return token
 
 
 @pytest.mark.asyncio
-async def test_bound_issuer_recovers_original_custody_with_one_real_pg_session(store):
-    custody = MemoryCustody()
+async def test_bound_issuer_recovers_original_by_resigning_with_one_real_pg_session(store):
+    custody = ForbiddenCustody()
     bound = context(store)
-    first = await issue(store, custody, bound)
-    recovered = await issue(store, custody, bound)
+    first = await issue(store, bound, custody)
+    recovered = await issue(store, bound, custody)
     assert first.outcome == "issued" and recovered.outcome == "recovered"
     assert first.session_id == recovered.session_id
     assert first.secret_ref == recovered.secret_ref
     assert first.bearer_sha256 == recovered.bearer_sha256
-    assert custody.created == 1
+    assert custody.calls == []
     assert await counts(store) == (1, 1, 1)
-    token = await custody.get(first.secret_ref)
+    token = await resigned(store, bound)
     assert hashlib.sha256(token.encode()).hexdigest() == first.bearer_sha256
     user = await BundleSessionAuthManager(authority=authority(store)).authenticate(token)
     assert user.sub == "integration:unit:human"
@@ -76,16 +88,21 @@ async def test_bound_issuer_recovers_original_custody_with_one_real_pg_session(s
 
 
 @pytest.mark.asyncio
-async def test_conflicting_request_refuses_before_custody_or_user_changes(store):
-    custody = MemoryCustody()
+async def test_conflicting_request_refuses_before_signing_or_user_changes(store):
     bound = context(store)
-    first = await issue(store, custody, bound)
+    first = await issue(store, bound)
+    issuer = authority(store)
+
+    async def forbidden_key():
+        pytest.fail("conflict reached the signing key")
+
+    issuer._resolve_secret = forbidden_key
     with pytest.raises(SessionIssuanceRefused, match="^issuance_identity_conflict$"):
-        await authority(store).issue_bound_session(
+        await issuer.issue_bound_session(
             bound, user_id="integration:unit:human", roles=["admin"],
-            permissions=["records:write"], custody=custody,
+            permissions=["records:write"], custody=ForbiddenCustody(),
         )
-    assert custody.created == 1
+    assert (await store.read_issuance(bound.identity)).record["token_sha256"] == first.bearer_sha256
     assert (await store.get_user("integration:unit:human"))["permissions"] == ["records:read"]
     assert await counts(store) == (1, 1, 1)
 
@@ -106,54 +123,52 @@ def envelope_custody(manager):
 
 
 @pytest.mark.asyncio
-async def test_issuer_recovers_pending_enveloped_custody_after_lost_create_response(store):
+async def test_issuer_recovers_after_lost_activation_response_and_writes_no_secret(store):
     manager = _EnvelopeProviderFixture()
-    custody = envelope_custody(manager)
     bound = context(store)
 
-    class LostResponse:
-        async def get(self, **kwargs):
-            return await custody.get(**kwargs)
-
-        async def create(self, **kwargs):
-            await custody.create(**kwargs)
+    async def lost_response(boundary):
+        if boundary == "after_reservation":
             raise RuntimeError("synthetic lost response")
 
-    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_unavailable$"):
-        await issue(store, LostResponse(), bound)
+    issuer = BundleSessionAuthority(
+        tenant=store.tenant, project=store.project,
+        authority_store=PhasedStore(store, lost_response), secret=SIGNING_SECRET,
+    )
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_store_unavailable$"):
+        await issuer.issue_bound_session(
+            bound, user_id="integration:unit:human", roles=["delegated-client"],
+            permissions=["records:read"], custody=envelope_custody(manager),
+        )
     reserved = await store.read_issuance(bound.identity)
     assert reserved.state == "reserved"
     assert await counts(store) == (1, 1, 0)
-    original = hashlib.sha256((await custody.get(secret_ref=reserved.secret_ref)).encode()).hexdigest()
-    assert await custody.purge_expired(now=int(time.time()), limit=1) == 0
-    recovered = await issue(store, envelope_custody(manager), bound)
+    recovered = await issue(store, bound, envelope_custody(manager))
     assert recovered.session_id == reserved.session_id
     assert recovered.secret_ref == reserved.secret_ref
-    assert recovered.bearer_sha256 == original
+    assert recovered.bearer_sha256 == reserved.record["token_sha256"]
     assert await counts(store) == (1, 1, 1)
+    # A passed secrets custody is ignored: no bearer reached the secrets manager.
+    assert manager._data == {}
+    assert await envelope_custody(manager).get(secret_ref=reserved.secret_ref) is None
+    await resigned(store, bound)
 
 
 @pytest.mark.asyncio
-async def test_expired_and_purged_active_custody_never_recreates_original(store):
-    manager = _EnvelopeProviderFixture()
-    custody = envelope_custody(manager)
+async def test_signing_key_change_never_replaces_active_original(store):
     bound = context(store)
-    first = await issue(store, custody, bound)
-    namespace = "connection-hub-issuance-custody"
-    raw = await manager.get_ephemeral_secret(namespace=namespace, secret_ref=first.secret_ref)
-    # A backend with a shorter/incorrect expiry must still refuse recovery,
-    # even when the immutable issuer context has not expired yet.
-    envelope = {**json.loads(raw), "expires_at": int(time.time()) - 1}
-    await manager.set_ephemeral_secret(
-        namespace=namespace, secret_ref=first.secret_ref,
-        value=json.dumps(envelope), expires_at=envelope["expires_at"],
-    )
-    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_expired$"):
-        await issue(store, custody, bound)
+    first = await issue(store, bound)
+    issuer = authority(store, secret="different-unit-session-signing-secret")
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_signing_mismatch$"):
+        await issuer.issue_bound_session(
+            bound, user_id="integration:unit:human", roles=["delegated-client"],
+            permissions=["records:read"], custody=ForbiddenCustody(),
+        )
     assert await counts(store) == (1, 1, 1)
-    assert await custody.purge_expired(now=int(time.time()), limit=1) == 1
-    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_missing$"):
-        await issue(store, custody, bound)
-    assert await counts(store) == (1, 1, 1)
-    assert (await store.read_issuance(bound.identity)).session_id == first.session_id
-    assert await manager.get_ephemeral_secret(namespace=namespace, secret_ref=first.secret_ref) is None
+    original = await store.read_issuance(bound.identity)
+    assert (original.session_id, original.state) == (first.session_id, "active")
+    assert original.record["token_sha256"] == first.bearer_sha256
+    # The original bearer is still the one the stored claims sign to with the original key.
+    token = await resigned(store, bound)
+    user = await BundleSessionAuthManager(authority=authority(store)).authenticate(token)
+    assert user.permissions == ["records:read"]

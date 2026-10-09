@@ -185,7 +185,7 @@ class IssuanceContext:
 
 @dataclass(frozen=True)
 class SessionIssuanceReceipt:
-    """Replay-stable public outcome; bearer values stay in secret custody."""
+    """Replay-stable public outcome; bearer values are never stored, only re-signed from claims."""
 
     session_id: str
     secret_ref: str

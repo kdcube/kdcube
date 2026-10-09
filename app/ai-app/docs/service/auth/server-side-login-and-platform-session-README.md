@@ -114,18 +114,19 @@ at most 256 bytes; test fixture names are not production slot definitions.
 
 SDK session activation and a host's Card/grant binding are separate checks.
 Possessing the correctly signed reserved bearer does not authenticate before
-the active PostgreSQL session row exists, even after custody was committed.
+the active PostgreSQL session row exists.
 After SDK activation, the host still enforces the exact live Card/grant binding
 at its delegated authorization boundary. Normal platform sign-in uses its own
 login lane and does not acquire a Card binding from this API.
 
-The durable sequence is reservation, create-only original bearer custody, then
-session activation. PostgreSQL reserves the fixed session id, opaque secret
-reference, signed inputs and bearer digest before an active session exists.
+The durable sequence is reservation, then session activation. PostgreSQL
+reserves the fixed session id, opaque reference, signed claims and bearer
+digest before an active session exists. No issued bearer is stored anywhere
+(operator, 2026-10-09: "i need the stronger version now").
 Register-if-absent happens in that same transaction; granted roles and
 permissions are installed at first activation. An identical retry uses the
-stored reservation and original custody entry. A conflicting request refuses
-before changing the user or custody. Revocation, a moved user epoch and expiry
+stored reservation and re-signs its stored claims. A conflicting request
+refuses before changing the user. Revocation, a moved user epoch and expiry
 remain refusals, and replay of an activated reservation never restores earlier
 user grants.
 
@@ -139,11 +140,16 @@ already-active rows can still recover their original receipt without changing
 the current user's grants.
 
 The result `SessionIssuanceReceipt(session_id, secret_ref, bearer_sha256, outcome)` exposes
-coordinates and a digest; the original bearer remains in the host-injected
-durable secret store. Its `create(secret_ref=..., value=..., expires_at=...)`
-is atomic/create-only and its `get(secret_ref=...)` returns `None` only for
-absence; unavailable or uncertain outcomes raise. Expiry and
-signing-key changes cannot cause a retry to mint a new session identity.
+coordinates and a digest; `secret_ref` is an opaque identifier only. The
+original bearer is the deterministic signature over the stored claims, so a
+retry, a fresh process or a delivery read (`read_bound_session_bearer`) re-signs
+exactly those claims with the session key and must match the stored digest,
+else it refuses with `issuance_signing_mismatch`. Expiry and signing-key
+changes cannot cause a retry to mint a new session identity or bearer. The
+session key must therefore not change while an issuance is being delivered
+(from reservation until its delivery deadline); a change refuses that retry,
+and re-authorization is the recovery. See the signing-key rule in the
+[OAuth delegated-credential adapter](../../sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md).
 Reservations remain identity tombstones after completion or expiry, so any
 retention policy must preserve their no-remint identity.
 
@@ -152,21 +158,10 @@ reserved claims during recovery. Original hash equality fences that recovery;
 the guarantee is one accepted original session identity and bearer, rather
 than one invocation of the signing primitive.
 
-For KDCube host composition, `issuance_secret_custody(namespace=..., settings=...)`
-in `infra.secrets.issuance` wraps the selected secret backend in a create-only
-JSON envelope. The envelope contains the bearer and original absolute expiry;
-it stays in secret storage, never the public receipt. Reads refuse expired or
-malformed envelopes by name, rather than returning absence and recreating one.
-This also supplies the format needed by expiry purge. The factory uses the
-configured secrets-service runtime custody protocol and rejects in-memory
-providers. File, native-vault and AWS adapters share its scoped operations;
-each backend must qualify its required guarantees before custody access.
-`await custody.qualify()` lets the host check this before composing issuance.
-Unavailable, transient or unqualified custody refuses. Qualification is
-rechecked for operations rather than cached.
-Generic ephemeral-store defaults remain unchanged. The host must separately qualify backend restart durability
-and reader isolation: a namespace string is not an access-control proof.
-See [runtime-secret custody](../secrets/secrets-service-README.md#11-expiring-runtime-secret-custody).
+The issuance functions still accept a `custody` argument for existing callers
+and ignore it; nothing is written to, read from or qualified against any
+secrets backend for an issued bearer. `issuance_secret_custody` in
+`infra.secrets.issuance` remains available but is not used by session issuance.
 
 The source tests cover PostgreSQL reservation/replay, concurrent issuers, and
 SIGKILL followed by a fresh issuer after reservation, custody, and activation.

@@ -95,7 +95,7 @@ def _planned_authority(bound: PlannedIssuanceContext, *, authority: Any,
 
 
 async def prepare_delegated_client_access_token(
-    *, plan: object, expires_at: int, custody: Any, authority: Any = None,
+    *, plan: object, expires_at: int, custody: Any = None, authority: Any = None,
     authority_factory: SessionAuthorityFactory | None = None,
 ) -> PreparedDelegatedClientAccess:
     """Prepare the authenticated original plan without ordinary login or delivery.
@@ -127,7 +127,7 @@ async def prepare_delegated_client_access_token(
     resolved = _planned_authority(bound, authority=authority, authority_factory=authority_factory)
     receipt = await resolved.prepare_bound_session(
         bound, user_id=bound.credential_subject, roles=[DELEGATED_CLIENT_ROLE],
-        permissions=permissions, custody=custody,
+        permissions=permissions,
     )
     if type(receipt) is not SessionIssuanceReceipt:
         raise SessionIssuanceRefused("session_issuance_result_invalid")
@@ -135,15 +135,16 @@ async def prepare_delegated_client_access_token(
 
 
 async def activate_prepared_delegated_client_access_token(
-    *, prepared: PreparedDelegatedClientAccess, result: object, custody: Any,
+    *, prepared: PreparedDelegatedClientAccess, result: object, custody: Any = None,
     authority: Any = None, authority_factory: SessionAuthorityFactory | None = None,
 ) -> SessionIssuanceReceipt:
     """Activate only the host-authenticated original committed/applied result.
 
     The host reads the original result and fences its target. This adapter does
     not complete a Hub decision, resolve a replacement Card, or publish bearer
-    material. The public session authority verifies custody and activates the
-    original under its PostgreSQL lock; no ordinary minter fallback exists.
+    material. The public session authority re-signs the stored claims, checks
+    the applied fingerprint and activates the original under its PostgreSQL
+    lock; no ordinary minter fallback exists and no bearer is stored.
     """
     if type(prepared) is not PreparedDelegatedClientAccess:
         raise SessionIssuanceRefused("issuance_context_invalid")
@@ -155,7 +156,7 @@ async def activate_prepared_delegated_client_access_token(
     if applied.token_sha256 != receipt.bearer_sha256:
         raise SessionIssuanceRefused("issuance_commitment_mismatch")
     resolved = _planned_authority(bound, authority=authority, authority_factory=authority_factory)
-    activated = await resolved.activate_prepared_bound_session(applied, custody=custody)
+    activated = await resolved.activate_prepared_bound_session(applied)
     if type(activated) is not SessionIssuanceReceipt:
         raise SessionIssuanceRefused("session_issuance_result_invalid")
     activated.validated()
@@ -163,6 +164,27 @@ async def activate_prepared_delegated_client_access_token(
             or activated.bearer_sha256 != receipt.bearer_sha256):
         raise SessionIssuanceRefused("issuance_identity_conflict")
     return activated
+
+
+async def read_delegated_client_access_bearer(
+    *, prepared: PreparedDelegatedClientAccess, result: object,
+    authority: Any = None, authority_factory: SessionAuthorityFactory | None = None,
+) -> str:
+    """The applied original access bearer, re-signed from its stored claims (never stored or logged)."""
+    if type(prepared) is not PreparedDelegatedClientAccess or type(prepared.receipt) is not SessionIssuanceReceipt:
+        raise SessionIssuanceRefused("issuance_context_invalid")
+    bound = _access_context(prepared.context)
+    applied = AppliedIssuanceContext.from_oauth_result(bound, result)
+    if applied.token_sha256 != prepared.receipt.validated().bearer_sha256:
+        raise SessionIssuanceRefused("issuance_commitment_mismatch")
+    resolved = _planned_authority(bound, authority=authority, authority_factory=authority_factory)
+    reader = getattr(resolved, "read_bound_session_bearer", None)
+    if not callable(reader):
+        raise SessionIssuanceRefused("issuance_store_unavailable")
+    bearer = await reader(applied)
+    if type(bearer) is not str or not bearer:
+        raise SessionIssuanceRefused("issuance_signing_mismatch")
+    return bearer
 
 
 async def read_prepared_delegated_client_access_token(
@@ -211,5 +233,6 @@ __all__ = [
     "prepare_delegated_client_access_token",
     "activate_prepared_delegated_client_access_token",
     "read_prepared_delegated_client_access_token",
+    "read_delegated_client_access_bearer",
     "oauth_tenant_project",
 ]
