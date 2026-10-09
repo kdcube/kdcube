@@ -112,12 +112,14 @@ async def test_a_record_made_unsafe_is_re_read_and_refused(rig):
     assert len(rig.reads) == 3
 
 
-def test_a_miss_is_never_cached_on_any_backend():
+def test_only_a_file_backed_miss_is_never_cached():
     from kdcube_ai_app.apps.chat.sdk.config_cache import get_secret_cache, set_secret_cache
 
     clear_secret_cache()
-    assert set_secret_cache(("provider", "t", "p", "platform.missing"), None) is None
-    assert get_secret_cache(("provider", "t", "p", "platform.missing")) == (False, None)
-    assert set_secret_cache(("provider", "t", "p", "platform.present"), "synthetic") == "synthetic"
-    assert get_secret_cache(("provider", "t", "p", "platform.present")) == (True, "synthetic")
+    file_key, other_key = ("provider", "t", "p", "platform.file"), ("provider", "t", "p", "platform.remote")
+    assert set_secret_cache(file_key, None, fingerprint=(1, 2, 3, 4)) is None
+    assert get_secret_cache(file_key, fingerprint=(1, 2, 3, 4)) == (False, None)
+    # Non-file backends may cache a miss; the bundles.secrets.update invalidation clears it (TTL as backstop).
+    assert set_secret_cache(other_key, None) is None
+    assert get_secret_cache(other_key) == (True, None)
     clear_secret_cache()
