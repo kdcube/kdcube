@@ -1130,6 +1130,31 @@ class SecretsFileSecretsManager(ISecretsManager):
         except UserSecretFileError as exc:
             raise SecretsManagerWriteError(str(exc)) from None
 
+    def secret_source(self, key: str) -> Path | None:
+        """The exact file a key's value is read from, for a file-validated cache (W670); None when the value
+        is not file-backed here (inventories, a remote yaml): such callers keep their time-bounded cache."""
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileError
+
+        try:
+            key = validate_secret_provider_key(key)
+            if _secret_inventory_prefix(key) is not None or key in (USER_SECRET_INVENTORY_KEY,
+                                                                     BUNDLE_SECRET_INVENTORY_KEY):
+                return None
+            if _is_user_secret_key(key):
+                store = self._user_store()
+                bundle = _split_bundle_secret_key(key)
+                if bundle is not None:
+                    return store.app_path(bundle_id=bundle[0], key=bundle[1])
+                user_id, bundle_id, tail = _split_user_secret_key(key)
+                return store.user_path(user_id=user_id, bundle_id=bundle_id, key=tail)
+            uri = self._global_uri or ""
+            parsed = urlparse(uri)
+            if not uri or parsed.scheme not in {"", "file"}:
+                return None
+            return Path(local_file_uri_path(uri) if parsed.scheme == "file" else uri).expanduser().resolve()
+        except (SecretsManagerError, UserSecretFileError, ValueError):
+            return None
+
     def _read_user_secret(self, key: str) -> Optional[str]:
         result = self._user_secret_call("get", key)
         if isinstance(result, list):

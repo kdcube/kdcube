@@ -8,7 +8,9 @@ from collections.abc import Callable
 from typing import Any, Iterable
 
 _SECRET_CACHE_TTL_SECONDS = 120.0
-_SECRET_VALUE_CACHE: dict[tuple[str, ...], tuple[float, str | None]] = {}
+# Entry: (expires_at, value, fingerprint). A fingerprinted entry (file-backed secret, W670) is valid exactly
+# while its source file's fingerprint is unchanged, independent of the TTL.
+_SECRET_VALUE_CACHE: dict[tuple[str, ...], tuple[float, str | None, tuple | None]] = {}
 _PLAIN_VALUE_CACHE: dict[tuple[str, int, int, str], Any] = {}
 
 
@@ -81,21 +83,44 @@ def clear_secret_cache(
     return len(to_delete)
 
 
-def get_secret_cache(cache_key: tuple[str, ...]) -> tuple[bool, str | None]:
+def get_secret_cache(cache_key: tuple[str, ...], *, fingerprint: tuple | None = None) -> tuple[bool, str | None]:
     cached = _SECRET_VALUE_CACHE.get(cache_key)
     if cached is None:
         return False, None
-    expires_at, value = cached
-    if expires_at > time.monotonic():
+    expires_at, value, cached_fingerprint = cached
+    if fingerprint is not None:
+        if cached_fingerprint == fingerprint:
+            return True, value
+    elif cached_fingerprint is None and expires_at > time.monotonic():
         return True, value
     _SECRET_VALUE_CACHE.pop(cache_key, None)
     return False, None
 
 
-def set_secret_cache(cache_key: tuple[str, ...], value: str | None) -> str | None:
+def set_secret_cache(
+    cache_key: tuple[str, ...], value: str | None, *, fingerprint: tuple | None = None,
+) -> str | None:
     resolved = value or None
-    _SECRET_VALUE_CACHE[cache_key] = (time.monotonic() + _SECRET_CACHE_TTL_SECONDS, resolved)
+    if fingerprint is not None and resolved is None:
+        _SECRET_VALUE_CACHE.pop(cache_key, None)  # a file-backed miss is never cached
+        return None
+    _SECRET_VALUE_CACHE[cache_key] = (time.monotonic() + _SECRET_CACHE_TTL_SECONDS, resolved, fingerprint)
     return resolved
+
+
+def drop_secret_cache(cache_key: tuple[str, ...]) -> None:
+    _SECRET_VALUE_CACHE.pop(cache_key, None)
+
+
+def file_fingerprint(path: Any) -> tuple | None:
+    """(inode, size, mtime_ns, ctime_ns) of the file itself (not a symlink target); None when absent."""
+    import os
+
+    try:
+        info = os.lstat(path)
+    except (OSError, TypeError, ValueError):
+        return None
+    return (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 def clear_plain_cache() -> int:

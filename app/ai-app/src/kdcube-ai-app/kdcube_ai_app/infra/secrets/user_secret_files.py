@@ -227,6 +227,14 @@ class UserSecretFileStore:
         except OSError:
             raise UserSecretFileError("user_secret_storage_unavailable") from None
 
+    def user_path(self, *, user_id: str, bundle_id: str | None, key: str) -> Path:
+        """The record file of one per-user secret (no I/O)."""
+        return self._chain(bundle_id, user_id)[-1] / (encode_segment(key) + _SUFFIX)
+
+    def app_path(self, *, bundle_id: str | None, key: str) -> Path:
+        """The record file of one app secret (no I/O)."""
+        return self._chain(bundle_id)[1] / (encode_segment(key) + _SUFFIX)
+
     # App (bundle) secrets: <root>/<bundle>/<key path>.json. Every record file ends in .json; users/ and the
     # runtime purpose folders are directories without a suffix, so a key path can never collide with them.
     def get_app(self, *, bundle_id: str | None, key: str) -> str | None:
