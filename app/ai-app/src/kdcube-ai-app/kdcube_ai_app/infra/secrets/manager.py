@@ -1417,7 +1417,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         """
         from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileError
 
-        redis, token = await self._acquire_distributed_lock()
+        # No lock (operator: "nolock"): the host runs this once with kdcube stopped.
 
         def fsync_parent(uri: str) -> None:
             parsed = urlparse(uri)
@@ -1509,8 +1509,6 @@ class SecretsFileSecretsManager(ISecretsManager):
             return await _run_blocking_critical_section(migrate)
         except UserSecretFileError as exc:
             raise SecretsManagerWriteError(str(exc)) from None
-        finally:
-            await self._release_distributed_lock(redis, token)
 
 
 class SecretsServiceSecretsManager(ISecretsManager):

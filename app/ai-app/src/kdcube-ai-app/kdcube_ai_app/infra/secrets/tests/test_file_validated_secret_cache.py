@@ -110,3 +110,14 @@ async def test_a_record_made_unsafe_is_re_read_and_refused(rig):
     os.symlink(moved, path)
     assert await _get(APP_KEY) is None
     assert len(rig.reads) == 3
+
+
+def test_a_miss_is_never_cached_on_any_backend():
+    from kdcube_ai_app.apps.chat.sdk.config_cache import get_secret_cache, set_secret_cache
+
+    clear_secret_cache()
+    assert set_secret_cache(("provider", "t", "p", "platform.missing"), None) is None
+    assert get_secret_cache(("provider", "t", "p", "platform.missing")) == (False, None)
+    assert set_secret_cache(("provider", "t", "p", "platform.present"), "synthetic") == "synthetic"
+    assert get_secret_cache(("provider", "t", "p", "platform.present")) == (True, "synthetic")
+    clear_secret_cache()

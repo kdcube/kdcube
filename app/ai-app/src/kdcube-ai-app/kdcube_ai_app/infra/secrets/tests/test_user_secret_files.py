@@ -295,7 +295,7 @@ def test_the_host_command_migrates_a_config_folder_and_prints_counts_only(tmp_pa
     config = str(tmp_path / "config")
     assert main(["migrate", "--config-dir", config, "--dry-run"]) == 0
     dry = json.loads(capsys.readouterr().out)
-    assert dry["would_write"] == 4 and dry["written"] == 0 and dry["root"] == str(_root(tmp_path).resolve())
+    assert dry["would_write"] == 4 and dry["written"] == 0 and "root" not in dry  # counts only
     assert main(["migrate", "--config-dir", config]) == 0
     output = capsys.readouterr().out
     assert json.loads(output)["written"] == 4 and "synthetic-" not in output

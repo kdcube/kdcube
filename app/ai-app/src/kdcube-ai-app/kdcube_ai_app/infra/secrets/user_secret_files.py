@@ -378,8 +378,7 @@ def main(argv: list[str] | None = None) -> int:
             "migration_unavailable")
         print(json.dumps({"status": "refused", "reason": reason}))
         return 1
-    print(json.dumps({"status": "ok", "dry_run": arguments.dry_run, "root": manager._runtime_secrets_root,
-                      **counts}, sort_keys=True))
+    print(json.dumps({"status": "ok", "dry_run": arguments.dry_run, **counts}, sort_keys=True))
     return 0
 
 

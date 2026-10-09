@@ -101,8 +101,9 @@ def set_secret_cache(
     cache_key: tuple[str, ...], value: str | None, *, fingerprint: tuple | None = None,
 ) -> str | None:
     resolved = value or None
-    if fingerprint is not None and resolved is None:
-        _SECRET_VALUE_CACHE.pop(cache_key, None)  # a file-backed miss is never cached
+    if resolved is None:
+        # A miss is never cached, on any backend (W670): a secret written elsewhere becomes visible at once.
+        _SECRET_VALUE_CACHE.pop(cache_key, None)
         return None
     _SECRET_VALUE_CACHE[cache_key] = (time.monotonic() + _SECRET_CACHE_TTL_SECONDS, resolved, fingerprint)
     return resolved
