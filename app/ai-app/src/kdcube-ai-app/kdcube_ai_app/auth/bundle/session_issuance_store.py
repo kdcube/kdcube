@@ -3,9 +3,10 @@
 
 """Durable reservations for one recoverable session issuance identity.
 
-Reservations contain only public coordinates and a hash-only session record.
-The issuer must save the original bearer in create-only secret custody before
-activation. Both steps use this reservation's fixed coordinates. Completed or
+Reservations contain only public coordinates, the signed claims and a hash-only
+session record; no bearer is stored anywhere. The issuer re-signs these claims
+and must match the stored digest before activation or delivery. Both steps use
+this reservation's fixed coordinates. Completed or
 expired reservations remain identity tombstones; removing them would permit a
 previous transaction to mint again.
 """
@@ -121,7 +122,7 @@ class PostgresSessionIssuanceStore:
             raise SessionIssuanceRefused("issuance_terminal")
 
     async def retire_issuance(self, context: object) -> SessionIssuanceReservation | None:
-        """Commit a no-mint fence before external custody retirement.
+        """Commit the no-mint fence that retires an original; it is the whole retirement.
 
         Only an inactive original is eligible. No user, session, sibling
         issuance, permission or delivered token is revoked by this operation.

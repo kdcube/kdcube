@@ -1,50 +1,35 @@
-"""Durable *test-only* custody for process-interruption qualification.
+"""Test-only seams for process-interruption qualification.
 
-The table contains synthetic bearers in the isolated test schema. It is not a
-production secret backend, encryption claim, or deployment recommendation.
+No bearer is kept in custody: recovery re-signs the stored claims. These seams
+only phase the durable store and prove that no custody call is ever made.
 """
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Awaitable
+
+import pytest
+
+SIGNING_SECRET = "unit-session-signing-secret"
 
 
-class PostgresTestCustody:
-    def __init__(self, store, *, hook: Callable[[str], Awaitable[None]] | None = None):
-        self.store = store
-        self.hook = hook
+class ForbiddenCustody:
+    """Any custody I/O fails the test; ``calls`` stays empty when none happened."""
 
-    async def ensure_schema(self):
-        async with self.store._pool.acquire() as connection:
-            await connection.execute(
-                f"CREATE TABLE IF NOT EXISTS {self.store.schema}.test_issuance_custody ("
-                "secret_ref text PRIMARY KEY, value text NOT NULL, expires_at timestamptz NOT NULL)"
-            )
+    def __init__(self):
+        self.calls = []
 
-    async def create(self, *, secret_ref, value, expires_at):
-        async with self.store._pool.acquire() as connection:
-            inserted = await connection.fetchval(
-                f"INSERT INTO {self.store.schema}.test_issuance_custody "
-                "(secret_ref, value, expires_at) VALUES ($1, $2, to_timestamp($3)) "
-                "ON CONFLICT (secret_ref) DO NOTHING RETURNING secret_ref",
-                secret_ref, value, expires_at,
-            )
-        if self.hook is not None:
-            await self.hook("after_custody")
-        return inserted is not None
+    def _forbidden(self, name):
+        self.calls.append(name)
+        pytest.fail("issuer reached custody " + name)
 
-    async def get(self, *, secret_ref):
-        async with self.store._pool.acquire() as connection:
-            return await connection.fetchval(
-                f"SELECT value FROM {self.store.schema}.test_issuance_custody "
-                "WHERE secret_ref = $1 AND expires_at > clock_timestamp()", secret_ref,
-            )
+    async def create(self, **kwargs):
+        self._forbidden("create")
 
-    async def count(self):
-        async with self.store._pool.acquire() as connection:
-            return await connection.fetchval(
-                f"SELECT count(*) FROM {self.store.schema}.test_issuance_custody"
-            )
+    async def get(self, **kwargs):
+        self._forbidden("get")
+
+    async def delete(self, **kwargs):
+        self._forbidden("delete")
 
 
 class PhasedStore:

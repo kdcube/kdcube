@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Concrete original access/refresh provider over public authorities and custody."""
+"""Concrete original access/refresh provider over public authorities; no bearer is kept in custody.
+
+Operator, 2026-10-09: "i need the stronger version now". Both bearers are deterministic signatures over the
+claims PostgreSQL stores; delivery and replay re-sign them and must match the sealed fingerprints.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -13,7 +17,6 @@ from connection_hub.delegated_credentials.oauth_issuance import OAuthIssuancePla
 from kdcube_ai_app.auth.bundle.session_planned_issuance import (
     AppliedIssuanceContext, PlannedIssuanceContext, TerminalIssuanceContext,
 )
-from kdcube_ai_app.infra.secrets.issuance import KDCubeIssuanceSecretCustody
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_exchange import (
     OriginalExchangeRefused, text,
 )
@@ -24,7 +27,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_refresh_store import PostgresOriginalRefreshStore
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.grants import (
     PreparedDelegatedClientAccess, activate_prepared_delegated_client_access_token,
-    prepare_delegated_client_access_token, read_prepared_delegated_client_access_token,
+    prepare_delegated_client_access_token, read_delegated_client_access_bearer,
+    read_prepared_delegated_client_access_token,
 )
 
 
@@ -32,21 +36,18 @@ class OriginalCredentialPairProvider:
     """Host-only binding; constructor inputs never come from client JSON.
 
     card_kind and refresh_ttl_seconds are the original hosting flow's policy,
-    checked and retained with the refresh signing input. The host owns key and
-    custody ACL/restart qualification; telemetry alone does not establish it.
+    checked and retained with the refresh signing input. The host owns the signing keys (the refresh
+    signing secret and the bundle session secret, read through the secrets manager); no bearer custody.
     """
     def __init__(self, *, refresh_store: PostgresOriginalRefreshStore,
-                 custody: KDCubeIssuanceSecretCustody, custody_namespace: str,
                  refresh_signer: HmacOriginalRefreshSigner, card_kind: str,
-                 refresh_ttl_seconds: int, authority_factory: Any):
-        text(custody_namespace)
+                 refresh_ttl_seconds: int, authority_factory: Any,
+                 custody: Any = None, custody_namespace: str | None = None):
         text(card_kind)
-        if type(custody) is not KDCubeIssuanceSecretCustody or custody.namespace != custody_namespace:
-            raise OriginalExchangeRefused("original_exchange_custody_not_bound")
         if not callable(authority_factory):
             raise OriginalExchangeRefused("original_exchange_authority_not_bound")
-        self.custody, self.authority_factory = custody, authority_factory
-        self.refresh = OriginalRefreshIssuer(store=refresh_store, custody=custody, signer=refresh_signer,
+        self.authority_factory = authority_factory
+        self.refresh = OriginalRefreshIssuer(store=refresh_store, signer=refresh_signer,
                                             card_kind=card_kind, ttl_seconds=refresh_ttl_seconds)
         self.card_kind = card_kind
 
@@ -82,9 +83,8 @@ class OriginalCredentialPairProvider:
             self.refresh.ttl_seconds)
 
     async def prepare_pair(self, *, plan, access_expires_at):
-        await self.custody.qualify()
         await prepare_delegated_client_access_token(plan=plan, expires_at=access_expires_at,
-            custody=self.custody, authority_factory=self.authority_factory)
+            authority_factory=self.authority_factory)
         access = await self._access(plan=plan, access_expires_at=access_expires_at)
         original = await self.refresh.prepare(plan=plan)
         return {"access": access, "refresh": self._refresh(plan=plan, original=original)}
@@ -101,7 +101,17 @@ class OriginalCredentialPairProvider:
         await self.refresh.protect_applied(plan=plan, result=result)
         return await activate_prepared_delegated_client_access_token(
             prepared=PreparedDelegatedClientAccess(credential.context, credential.receipt),
-            result=result, custody=self.custody, authority_factory=self.authority_factory)
+            result=result, authority_factory=self.authority_factory)
+
+    async def bearers(self, *, plan, result, pair) -> dict[str, str]:
+        """Both committed bearers, re-signed from their stored claims; nothing is read from custody."""
+        access = pair["access"]
+        return {
+            "access": await read_delegated_client_access_bearer(
+                prepared=PreparedDelegatedClientAccess(access.context, access.receipt),
+                result=result, authority_factory=self.authority_factory),
+            "refresh": await self.refresh.bearer(plan=plan),
+        }
 
     async def retire_pair(self, *, plan, result, access_expires_at):
         if (type(plan) is not OAuthIssuancePlan or type(result) is not OAuthIssuanceResult
@@ -135,7 +145,7 @@ class OriginalCredentialPairProvider:
                     authority = self.authority_factory(tenant=plan.tenant, project=plan.project)
                     if (getattr(authority, "tenant", None), getattr(authority, "project", None)) != (plan.tenant, plan.project):
                         raise OriginalExchangeRefused("original_exchange_namespace_mismatch")
-                    await authority.retire_prepared_bound_session(context, custody=self.custody)
+                    await authority.retire_prepared_bound_session(context)
             except Exception as exc:
                 error = error or exc
         if error is not None:

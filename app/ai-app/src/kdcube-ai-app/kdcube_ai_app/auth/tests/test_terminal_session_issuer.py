@@ -14,28 +14,57 @@ from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceRefused
 from kdcube_ai_app.auth.bundle.session_store import PostgresBundleSessionStore
 from kdcube_ai_app.auth.bundle.session_schema import TABLE_ISSUANCES, TABLE_ISSUANCE_TERMINALS
 from kdcube_ai_app.auth.tests.test_bound_session_issuance_store import counts, store
-from kdcube_ai_app.auth.tests.test_bound_session_issuer import MemoryCustody, authority
-from kdcube_ai_app.auth.tests.test_planned_session_issuer import (
-    activate, applied, oauth_result, plan, prepare,
-)
+from kdcube_ai_app.auth.tests.test_bound_session_issuer import authority
+from kdcube_ai_app.auth.tests.test_planned_session_issuer import applied, oauth_result, plan
 
 
-class RetirementCustody(MemoryCustody):
-    """Terminal seam fixture, not encrypted-provider durability evidence."""
+class NoCustody:
+    """Former bearer custody: every call fails the test; no bearer is kept outside PostgreSQL."""
     def __init__(self):
-        super().__init__()
-        self.deleted = []
-        self.retired = set()
+        self.calls = []
 
-    async def delete(self, *, secret_ref):
-        self.deleted.append(secret_ref)
-        self.retired.add(secret_ref)
-        self.values.pop(secret_ref, None)
+    async def create(self, **kwargs):
+        self.calls.append("create")
+        pytest.fail("custody create was called")
 
-    async def create(self, *, secret_ref, value, expires_at):
-        if secret_ref in self.retired:
-            return False
-        return await super().create(secret_ref=secret_ref, value=value, expires_at=expires_at)
+    async def get(self, *args, **kwargs):
+        self.calls.append("get")
+        pytest.fail("custody get was called")
+
+    async def delete(self, **kwargs):
+        self.calls.append("delete")
+        pytest.fail("custody delete was called")
+
+
+def issuer(store, signs=None):
+    """An authority whose signing-key resolutions (one per sign) append to signs."""
+    made = authority(store)
+    if signs is not None:
+        resolve = made._resolve_secret
+        async def counted():
+            signs.append(1)
+            return await resolve()
+        made._resolve_secret = counted
+    return made
+
+
+async def prepare(store, custody, bound, signs=None):
+    return await issuer(store, signs).prepare_bound_session(
+        bound, user_id="integration:unit:human", roles=["delegated-client"],
+        permissions=["records:read"], custody=custody,
+    )
+
+
+async def activate(store, custody, result, signs=None):
+    return await issuer(store, signs).activate_prepared_bound_session(result, custody=custody)
+
+
+async def bearer(store, result, signs=None):
+    return await issuer(store, signs).read_bound_session_bearer(result)
+
+
+def sha(value):
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def terminal(bound, *, state="aborted", outcome="released", token_sha256="", **changes):
@@ -50,6 +79,11 @@ async def retire(store, custody, context):
     return await authority(store).retire_prepared_bound_session(context, custody=custody)
 
 
+async def terminals(store):
+    async with store._pool.acquire() as connection:
+        return await connection.fetchval(f"SELECT count(*) FROM {store.schema}.{TABLE_ISSUANCE_TERMINALS}")
+
+
 @pytest.mark.asyncio
 async def test_terminal_api_is_present_before_any_cleanup(store):
     assert callable(getattr(authority(store), "retire_prepared_bound_session", None))
@@ -57,20 +91,20 @@ async def test_terminal_api_is_present_before_any_cleanup(store):
 
 @pytest.mark.asyncio
 async def test_abort_before_prepare_is_a_durable_no_mint_tombstone(store):
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody, signs = plan(store), NoCustody(), []
     result = await retire(store, custody, terminal(bound))
     assert result.identity and result.secret_ref is None
     fresh = PostgresBundleSessionStore(pg_pool=store._pool, tenant=store.tenant, project=store.project)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
-        await prepare(fresh, custody, bound)
+        await prepare(fresh, custody, bound, signs)
     assert await counts(store) == (0, 0, 0)
-    assert not custody.deleted and custody.created == 0
+    assert not signs and not custody.calls
     assert (await retire(fresh, custody, terminal(bound))).identity == result.identity
 
 
 @pytest.mark.asyncio
-async def test_retirement_after_initial_read_fences_reserve_before_any_row_or_custody_write(store):
-    bound, custody = plan(store), RetirementCustody()
+async def test_retirement_after_initial_read_fences_reserve_before_any_row(store):
+    bound, custody = plan(store), NoCustody()
     read, resume = asyncio.Event(), asyncio.Event()
 
     class PausedRead:
@@ -93,11 +127,8 @@ async def test_retirement_after_initial_read_fences_reserve_before_any_row_or_cu
         with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
             await asyncio.wait_for(task, 5)
         assert await counts(store) == (0, 0, 0)
-        assert custody.created == 0 and not custody.values and not custody.deleted
-        async with store._pool.acquire() as connection:
-            assert await connection.fetchval(
-                f"SELECT count(*) FROM {store.schema}.{TABLE_ISSUANCE_TERMINALS}",
-            ) == 1
+        assert not custody.calls
+        assert await terminals(store) == 1
     finally:
         resume.set()
         if not task.done():
@@ -106,9 +137,9 @@ async def test_retirement_after_initial_read_fences_reserve_before_any_row_or_cu
 
 
 @pytest.mark.asyncio
-async def test_retirement_after_custody_read_fences_activation_before_session_insert(store):
+async def test_retirement_after_resign_check_fences_activation_before_session_insert(store):
     from kdcube_ai_app.auth.bundle.session_issuance_store import PostgresSessionIssuanceStore
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     activating, resume = asyncio.Event(), asyncio.Event()
 
@@ -116,8 +147,9 @@ async def test_retirement_after_custody_read_fences_activation_before_session_in
         async def read_issuance(self, identity):
             original = await super().read_issuance(identity)
             # Pause the store's own read before its user/issuance row locks,
-            # after the SDK has already read custody. A second read fence
-            # alone cannot protect the ensuing activation write either.
+            # after the SDK has already re-signed and matched the stored
+            # claims. A second read fence alone cannot protect the ensuing
+            # activation write either.
             activating.set()
             await resume.wait()
             return original
@@ -141,8 +173,9 @@ async def test_retirement_after_custody_read_fences_activation_before_session_in
         with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
             await asyncio.wait_for(task, 5)
         assert await counts(store) == (1, 1, 0)
-        assert custody.created == 1 and not custody.values
-        assert custody.deleted == [first.secret_ref]
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await bearer(store, applied(bound, first))
+        assert not custody.calls
         async with store._pool.acquire() as connection:
             assert await connection.fetchval(
                 f"SELECT state FROM {store.schema}.{TABLE_ISSUANCES}",
@@ -156,8 +189,8 @@ async def test_retirement_after_custody_read_fences_activation_before_session_in
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state,outcome", [("aborted", "released"), ("committed", "superseded")])
-async def test_terminal_retirement_erases_only_inactive_original_and_never_user_authority(store, state, outcome):
-    bound, custody = plan(store), RetirementCustody()
+async def test_terminal_retirement_fences_only_inactive_original_and_never_user_authority(store, state, outcome):
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     sibling = plan(store, transaction_id="2" * 64)
     other = await prepare(store, custody, sibling)
@@ -166,18 +199,20 @@ async def test_terminal_retirement_erases_only_inactive_original_and_never_user_
     context = terminal(bound, state=state, outcome=outcome, token_sha256=first.bearer_sha256)
     retired = await retire(store, custody, context)
     assert retired.secret_ref == first.secret_ref
-    assert custody.deleted == [first.secret_ref] and first.secret_ref not in custody.values
-    assert other.secret_ref in custody.values
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+        await bearer(store, applied(bound, first))
+    assert sha(await bearer(store, applied(sibling, other))) == other.bearer_sha256
     assert await store.get_login_state(bound.credential_subject) == before
     assert await counts(store) == (1, 2, 1)
     fresh = PostgresBundleSessionStore(pg_pool=store._pool, tenant=store.tenant, project=store.project)
     again = await retire(fresh, custody, context)
     assert again.secret_ref == first.secret_ref
+    signs = []
     with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
-        await prepare(fresh, custody, bound)
+        await prepare(fresh, custody, bound, signs)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
-        await activate(fresh, custody, applied(bound, first))
-    assert custody.created == 2
+        await activate(fresh, custody, applied(bound, first), signs)
+    assert not signs and not custody.calls
 
 
 @pytest.mark.asyncio
@@ -186,13 +221,15 @@ async def test_terminal_retirement_erases_only_inactive_original_and_never_user_
     ("aborted", "applied"), ("aborted", "superseded"), ("committed", "released"),
 ])
 async def test_non_terminal_or_applied_result_never_authorizes_cleanup(store, state, outcome):
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_result_not_terminal$"):
         await retire(store, custody, terminal(bound, state=state, outcome=outcome,
                                             token_sha256=first.bearer_sha256))
-    assert not custody.deleted and first.secret_ref in custody.values
+    assert await terminals(store) == 0
+    assert sha(await bearer(store, applied(bound, first))) == first.bearer_sha256
     await activate(store, custody, applied(bound, first))
+    assert not custody.calls
 
 
 @pytest.mark.asyncio
@@ -201,29 +238,33 @@ async def test_non_terminal_or_applied_result_never_authorizes_cleanup(store, st
     ("intent_digest", "0" * 64), ("effect_digest", "0" * 64),
     ("credential_subject", "integration:other:human"), ("card_revision", 3),
 ])
-async def test_changed_terminal_plan_refuses_before_custody(store, field, value):
-    bound, custody = plan(store), RetirementCustody()
+async def test_changed_terminal_plan_refuses_and_keeps_original(store, field, value):
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     changed = SimpleNamespace(**{**vars(bound), field: value})
     with pytest.raises(SessionIssuanceRefused, match="^issuance_identity_conflict$"):
         await retire(store, custody, terminal(changed))
-    assert not custody.deleted and first.secret_ref in custody.values
+    assert await terminals(store) == 0
+    assert sha(await bearer(store, applied(bound, first))) == first.bearer_sha256
+    assert not custody.calls
 
 
 @pytest.mark.asyncio
-async def test_wrong_terminal_token_commitment_refuses_without_deletion(store):
-    bound, custody = plan(store), RetirementCustody()
+async def test_wrong_terminal_token_commitment_refuses_without_retirement(store):
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_commitment_mismatch$"):
         await retire(store, custody, terminal(bound, token_sha256="0" * 64))
-    assert not custody.deleted
+    assert await terminals(store) == 0
     await activate(store, custody, applied(bound, first))
+    assert sha(await bearer(store, applied(bound, first))) == first.bearer_sha256
+    assert not custody.calls
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal_kind", ["abort", "superseded", "expired"])
 async def test_active_session_is_never_retired_by_original_cleanup(store, terminal_kind):
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     await activate(store, custody, applied(bound, first))
     context = terminal(bound)
@@ -234,7 +275,8 @@ async def test_active_session_is_never_retired_by_original_cleanup(store, termin
         context = terminal(bound, state="expired", outcome="expired")
     with pytest.raises(SessionIssuanceRefused, match="^issuance_already_active$"):
         await retire(store, custody, context)
-    assert not custody.deleted and first.secret_ref in custody.values
+    assert await terminals(store) == 0 and not custody.calls
+    assert sha(await bearer(store, applied(bound, first))) == first.bearer_sha256
     assert (await store.read_issuance(hashlib.sha256(json.dumps(
         [bound.tenant, bound.project, bound.transaction_id, bound.slot],
         separators=(",", ":"),
@@ -243,28 +285,31 @@ async def test_active_session_is_never_retired_by_original_cleanup(store, termin
 
 @pytest.mark.asyncio
 async def test_expiry_cleanup_uses_pg_clock_not_caller_or_python_clock(store, monkeypatch):
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     monkeypatch.setattr("kdcube_ai_app.auth.bundle.session_bound_issuer.time.time",
                         lambda: bound.delivery_deadline + 1)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_delivery_not_expired$"):
         await retire(store, custody, terminal(bound, state="expired", outcome="expired"))
-    assert not custody.deleted and first.secret_ref in custody.values
+    monkeypatch.undo()
+    assert await terminals(store) == 0 and not custody.calls
+    assert sha(await bearer(store, applied(bound, first))) == first.bearer_sha256
 
 
 @pytest.mark.asyncio
 async def test_expired_unprepared_plan_can_retire_without_provisioning(store):
     bound, custody = plan(store, delivery_deadline=int(time.time()) - 1,
-                          reserved_until=int(time.time()) - 2), RetirementCustody()
+                          reserved_until=int(time.time()) - 2), NoCustody()
     result = await retire(store, custody, terminal(bound, state="expired", outcome="expired"))
     assert result.secret_ref is None and await counts(store) == (0, 0, 0)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
         await prepare(store, custody, bound)
+    assert not custody.calls
 
 
 @pytest.mark.asyncio
-async def test_lost_retirement_commit_response_never_reaches_custody_then_recovers_same_ref(store):
-    bound, custody = plan(store), RetirementCustody()
+async def test_lost_retirement_commit_response_keeps_tombstone_then_recovers_same_ref(store):
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     class LostCommit:
         def __getattr__(self, name):
@@ -274,54 +319,65 @@ async def test_lost_retirement_commit_response_never_reaches_custody_then_recove
             raise TimeoutError("synthetic lost commit")
     with pytest.raises(SessionIssuanceRefused, match="^issuance_store_unavailable$"):
         await authority(LostCommit()).retire_prepared_bound_session(terminal(bound), custody=custody)
-    assert not custody.deleted and first.secret_ref in custody.values
+    assert await terminals(store) == 1
+    signs = []
     with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
-        await prepare(store, custody, bound)
+        await prepare(store, custody, bound, signs)
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+        await bearer(store, applied(bound, first), signs)
     recovered = await retire(store, custody, terminal(bound))
-    assert recovered.secret_ref == first.secret_ref and not custody.values
+    assert recovered.secret_ref == first.secret_ref
+    assert not signs and not custody.calls
 
 
 @pytest.mark.asyncio
-async def test_lost_custody_delete_response_keeps_tombstone_and_retries_same_ref(store):
-    bound, custody = plan(store), RetirementCustody()
+async def test_retirement_is_the_pg_tombstone_alone_and_retries_same_ref(store):
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
-    original_delete = custody.delete
-    async def lost_delete(**kwargs):
-        await original_delete(**kwargs)
-        raise TimeoutError("synthetic lost delete")
-    custody.delete = lost_delete
-    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_unavailable$"):
-        await retire(store, custody, terminal(bound))
+    assert (await retire(store, custody, terminal(bound))).secret_ref == first.secret_ref
     with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
         await prepare(store, custody, bound)
-    custody.delete = original_delete
     assert (await retire(store, custody, terminal(bound))).secret_ref == first.secret_ref
-    assert custody.created == 1 and custody.deleted == [first.secret_ref, first.secret_ref]
+    assert await terminals(store) == 1 and await counts(store) == (1, 1, 0)
+    assert not custody.calls
 
 
 @pytest.mark.asyncio
-async def test_late_first_custody_write_is_fenced_and_cleaned_after_terminal_commit(store):
-    bound = plan(store)
+async def test_preparation_racing_terminal_commit_refuses_then_nothing_signs_again(store):
+    bound, custody = plan(store), NoCustody()
     entered, resume = asyncio.Event(), asyncio.Event()
-    class DelayedFirstWrite(RetirementCustody):
-        async def create(self, *, secret_ref, value, expires_at):
+    class DelayedReserve:
+        def __getattr__(self, name):
+            return getattr(store, name)
+        async def reserve_issuance(self, *args, **kwargs):
+            reserved = await store.reserve_issuance(*args, **kwargs)
+            # The reservation is committed; retirement commits before the
+            # SDK's durable terminal recheck.
             entered.set()
             await resume.wait()
-            # Simulate an absent-reference delete which cannot fence a first
-            # provider create. The SDK must recheck its durable terminal fence.
-            return await MemoryCustody.create(self, secret_ref=secret_ref, value=value,
-                                              expires_at=expires_at)
-    custody = DelayedFirstWrite()
-    task = asyncio.create_task(prepare(store, custody, bound))
+            return reserved
+    task = asyncio.create_task(prepare(DelayedReserve(), custody, bound))
     try:
         await asyncio.wait_for(entered.wait(), 5)
         retired = await retire(store, custody, terminal(bound))
         resume.set()
         with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
             await asyncio.wait_for(task, 5)
-        assert not custody.values
-        assert custody.deleted == [retired.secret_ref, retired.secret_ref]
+        assert retired.secret_ref is not None
         assert await counts(store) == (1, 1, 0)
+        signs = []
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await prepare(store, custody, bound, signs)
+        async with store._pool.acquire() as connection:
+            token_sha256 = await connection.fetchval(
+                f"SELECT session_record->>'token_sha256' FROM {store.schema}.{TABLE_ISSUANCES}",
+            )
+        result = applied(bound, SimpleNamespace(bearer_sha256=token_sha256))
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await activate(store, custody, result, signs)
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await bearer(store, result, signs)
+        assert not signs and not custody.calls
     finally:
         resume.set()
         if not task.done():
@@ -332,7 +388,7 @@ async def test_late_first_custody_write_is_fenced_and_cleaned_after_terminal_com
 @pytest.mark.asyncio
 async def test_terminal_context_adapts_exact_original_hub_result_and_rejects_dicts(store):
     from kdcube_ai_app.auth.bundle.session_planned_issuance import TerminalIssuanceContext
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     hub = oauth_result(bound, first)
     hub.state, hub.receipt_digest, hub.card_revision = "aborted", "", bound.base_revision
@@ -341,12 +397,13 @@ async def test_terminal_context_adapts_exact_original_hub_result_and_rejects_dic
     assert (await retire(store, custody, context)).secret_ref == first.secret_ref
     with pytest.raises(SessionIssuanceRefused, match="^issuance_result_invalid$"):
         await retire(store, custody, vars(context))
+    assert not custody.calls
 
 
 @pytest.mark.asyncio
 async def test_aborted_original_hub_result_with_absent_slot_fences_first_mint(store):
     from kdcube_ai_app.auth.bundle.session_planned_issuance import TerminalIssuanceContext
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody, signs = plan(store), NoCustody(), []
     hub = SimpleNamespace(
         transaction_id=bound.transaction_id, intent_digest=bound.intent_digest,
         state="aborted", access_id=bound.access_id, card_revision=bound.base_revision,
@@ -358,7 +415,8 @@ async def test_aborted_original_hub_result_with_absent_slot_fences_first_mint(st
     terminal_context = TerminalIssuanceContext.from_oauth_result(bound, hub)
     assert (await retire(store, custody, terminal_context)).secret_ref is None
     with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
-        await prepare(store, custody, bound)
+        await prepare(store, custody, bound, signs)
+    assert not signs and not custody.calls
 
 
 @pytest.mark.asyncio
@@ -370,30 +428,40 @@ async def test_malformed_terminal_inputs_have_finite_refusal_before_store(store,
     context = terminal(plan(store))
     vars(context).update(changes)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_result_(invalid|not_terminal)$"):
-        await retire(store, RetirementCustody(), context)
+        await retire(store, NoCustody(), context)
     assert await counts(store) == (0, 0, 0)
 
 
 @pytest.mark.asyncio
 async def test_changed_terminal_receipt_cannot_replace_first_tombstone(store):
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     await retire(store, custody, terminal(bound, state="committed", outcome="superseded",
                                          token_sha256=first.bearer_sha256))
+    async with store._pool.acquire() as connection:
+        pinned = await connection.fetchval(
+            f"SELECT row_to_json(t)::text FROM {store.schema}.{TABLE_ISSUANCE_TERMINALS} t",
+        )
     changed = terminal(bound, state="committed", outcome="superseded",
                        token_sha256=first.bearer_sha256)
     changed.receipt_digest = "0" * 64
     with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal_conflict$"):
         await retire(store, custody, changed)
-    assert custody.deleted == [first.secret_ref]
+    async with store._pool.acquire() as connection:
+        assert await connection.fetchval(
+            f"SELECT row_to_json(t)::text FROM {store.schema}.{TABLE_ISSUANCE_TERMINALS} t",
+        ) == pinned
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+        await bearer(store, applied(bound, first))
+    assert not custody.calls
 
 
 @pytest.mark.asyncio
 async def test_one_connection_pool_parallel_retirement_is_bounded_and_pins_one_tombstone(store):
     import asyncpg
-    import os
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
+    token = await bearer(store, applied(bound, first))
     pool = await asyncpg.create_pool(os.environ["KDCUBE_TEST_POSTGRES_DSN"], min_size=1, max_size=1)
     fresh = PostgresBundleSessionStore(pg_pool=pool, tenant=store.tenant, project=store.project)
     try:
@@ -408,8 +476,8 @@ async def test_one_connection_pool_parallel_retirement_is_bounded_and_pins_one_t
         encoded = await connection.fetchval(
             f"SELECT row_to_json(t)::text FROM {store.schema}.{TABLE_ISSUANCE_TERMINALS} t",
         )
-    assert first.secret_ref not in encoded and "bearer" not in encoded
-    assert await counts(store) == (1, 1, 0) and custody.created == 1
+    assert first.secret_ref not in encoded and "bearer" not in encoded and token not in encoded
+    assert await counts(store) == (1, 1, 0) and not custody.calls
 
 
 @pytest.mark.asyncio
@@ -417,7 +485,7 @@ async def test_delivery_expiry_is_rechecked_after_real_identity_lock_wait(store)
     from kdcube_ai_app.auth.bundle.session_planned_issuance import PlannedIssuanceContext
     async with store._pool.acquire() as connection:
         deadline = int(await connection.fetchval("SELECT floor(extract(epoch FROM clock_timestamp()))")) + 2
-    bound, custody = plan(store, delivery_deadline=deadline, reserved_until=deadline), RetirementCustody()
+    bound, custody = plan(store, delivery_deadline=deadline, reserved_until=deadline), NoCustody()
     first = await prepare(store, custody, bound)
     identity = PlannedIssuanceContext.from_context(bound).identity
     async with store._pool.acquire() as blocker:
@@ -445,37 +513,42 @@ async def test_delivery_expiry_is_rechecked_after_real_identity_lock_wait(store)
                 await asyncio.gather(task, return_exceptions=True)
                 raise
         assert (await asyncio.wait_for(task, 5)).secret_ref == first.secret_ref
-    assert not custody.values
+    assert await terminals(store) == 1 and not custody.calls
 
 
 @pytest.mark.asyncio
-async def test_retirement_with_real_file_provider_survives_restart_and_cannot_recreate(store, tmp_path):
-    from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileStore
-    class FileCustody:
-        def __init__(self):
-            self.backend = RuntimeFileStore(root=tmp_path, namespace="w585-terminal",
-                                           authorized_namespaces=["w585-terminal"])
-        async def create(self, **kwargs):
-            return self.backend.create(**kwargs)
-        async def get(self, *, secret_ref):
-            return self.backend.get(secret_ref=secret_ref)
-        async def delete(self, *, secret_ref):
-            self.backend.delete(secret_ref=secret_ref)
-    bound, custody = plan(store), FileCustody()
+async def test_retired_identity_after_restart_refuses_and_no_bearer_is_stored(store):
+    import asyncpg
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
+    token = await bearer(store, applied(bound, first))
     await retire(store, custody, terminal(bound))
-    fresh = FileCustody()
-    assert await fresh.get(secret_ref=first.secret_ref) is None
-    assert not await fresh.create(secret_ref=first.secret_ref, value="synthetic-late-value",
-                                  expires_at=bound.expires_at)
-    with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
-        await prepare(store, fresh, bound)
-    assert (await retire(store, fresh, terminal(bound))).secret_ref == first.secret_ref
+    pool = await asyncpg.create_pool(os.environ["KDCUBE_TEST_POSTGRES_DSN"], min_size=1, max_size=1)
+    try:
+        fresh = PostgresBundleSessionStore(pg_pool=pool, tenant=store.tenant, project=store.project)
+        signs = []
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await prepare(fresh, custody, bound, signs)
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await activate(fresh, custody, applied(bound, first), signs)
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_terminal$"):
+            await bearer(fresh, applied(bound, first), signs)
+        assert (await retire(fresh, custody, terminal(bound))).secret_ref == first.secret_ref
+        assert not signs and not custody.calls
+    finally:
+        await pool.close()
+    assert await counts(store) == (1, 1, 0) and await terminals(store) == 1
+    async with store._pool.acquire() as connection:
+        for table in (TABLE_ISSUANCES, TABLE_ISSUANCE_TERMINALS):
+            encoded = await connection.fetchval(
+                f"SELECT coalesce(string_agg(row_to_json(t)::text, ''), '') FROM {store.schema}.{table} t",
+            )
+            assert token not in encoded
 
 
 @pytest.mark.asyncio
 async def test_fresh_interpreter_and_new_pool_recover_original_terminal_reference(store):
-    bound, custody = plan(store), RetirementCustody()
+    bound, custody = plan(store), NoCustody()
     first = await prepare(store, custody, bound)
     retired = await retire(store, custody, terminal(bound))
     source = """
@@ -515,8 +588,8 @@ asyncio.run(main())
 
 
 @pytest.mark.asyncio
-async def test_terminal_namespace_refusal_precedes_storage_or_custody(store):
-    bound = plan(store, tenant="another-tenant")
+async def test_terminal_namespace_refusal_precedes_storage(store):
+    bound, custody = plan(store, tenant="another-tenant"), NoCustody()
     class ForbiddenStore:
         async def retire_issuance(self, context):
             pytest.fail("namespace mismatch reached storage")
@@ -524,8 +597,9 @@ async def test_terminal_namespace_refusal_precedes_storage_or_custody(store):
     with pytest.raises(SessionIssuanceRefused, match="^issuance_namespace_mismatch$"):
         await retire_prepared_bound_session(
             terminal(bound), tenant=store.tenant, project=store.project,
-            store=ForbiddenStore(), custody=RetirementCustody(),
+            store=ForbiddenStore(), custody=custody,
         )
+    assert not custody.calls
 
 
 @pytest.mark.asyncio
@@ -536,7 +610,7 @@ async def test_retirement_store_failure_is_finite_and_does_not_touch_custody(sto
             return getattr(store, name)
         async def retire_issuance(self, context):
             raise failure("synthetic non-public failure")
-    custody = RetirementCustody()
+    custody = NoCustody()
     with pytest.raises(SessionIssuanceRefused, match="^issuance_store_unavailable$") as captured:
         await authority(Unavailable()).retire_prepared_bound_session(terminal(plan(store)), custody=custody)
-    assert captured.value.__suppress_context__ and not custody.deleted
+    assert captured.value.__suppress_context__ and not custody.calls

@@ -121,9 +121,33 @@ creates no credential and completes no Hub decision.
 `activate_prepared_delegated_client_access_token` accepts the host-authenticated
 original result only when its access slot is committed and applied, matches the
 prepared context, and names the original bearer digest. The public session
-authority verifies original custody and activates under its PostgreSQL lock.
-The adapter also checks that the returned session, custody reference, and bearer
-digest remain the prepared original. Pending, aborted, superseded, mismatched,
+authority re-signs the stored original claims, requires the applied digest and
+activates under its PostgreSQL lock. The adapter also checks that the returned
+session, reference, and bearer digest remain the prepared original.
+
+No issued bearer is kept in secret custody (operator, 2026-10-09: "i need the
+stronger version now"). Both original bearers are deterministic signatures over
+claims PostgreSQL stores beside their SHA-256: the access session token over its
+reservation claims with the Bundle session key, the refresh artifact over its
+signing input with the refresh signing key. Delivery and replay re-sign exactly
+those claims; a result that differs from the sealed digest (for example after a
+key change) refuses with `issuance_signing_mismatch`,
+`original_refresh_signing_mismatch` or `original_exchange_signing_mismatch` and
+never yields another bearer. Only the two signing keys are secrets.
+`read_delegated_client_access_bearer` returns the applied access bearer this
+way; the `custody` arguments that remain on these functions are accepted and
+ignored.
+
+**Signing-key rule (operator, 2026-10-09).** The signing keys,
+`platform.services.session_token.secret` and the Hub's refresh signing secret
+(`refresh_signing_secret_ref`), must not change while an original issuance is
+being delivered: from preparation until its delivery deadline. A change in that
+window refuses the retry with `original_exchange_signing_mismatch` (wrapping
+`issuance_signing_mismatch` or `original_refresh_signing_mismatch`) and never
+yields another bearer; re-authorization is the recovery. There is no key
+versioning. Already delivered refresh tokens are redeemed by digest and survive
+a refresh-key change; a session-key change invalidates every session token.
+ Pending, aborted, superseded, mismatched,
 unbound, or older-authority cases never fall back to ordinary login/minting.
 
 These typed values are data, not authentication. The hosting app still owns
@@ -143,14 +167,14 @@ A configured missing, malformed or unavailable capability fails closed. It
 does not fall back to ordinary consume/mint. An absent binding retains the
 existing workflow during source adoption. The host composition must connect
 the durable original mapping, full authenticated plan/result readers, both
-original reservations, live target fence and qualified custody. Those concrete
+original reservations, the signing keys and the live target fence. Those concrete
 provider binding, configured encrypted-provider qualification, and installed/live
 acceptance remain host integration gates; transport selection alone proves none of them.
 Ordinary human login and the existing delegated minter are unchanged.
 
 `read_prepared_delegated_client_access_token` recovers the existing original
 access receipt and signing time through the public session authority's
-`read_prepared_bound_session`. That reader has no signing or custody dependency
+`read_prepared_bound_session`. That reader has no signing dependency
 and uses only a stored issuance lookup. It checks the complete original plan,
 canonical user/role/permission inputs, delivery/access expiry and stored signing
 time. Missing, malformed, terminal or mismatched originals refuse without
@@ -191,8 +215,7 @@ This optional field requires a Hub package containing commit
 `af2cb8decdc24bc497910847489b347cc16e36db` or a qualified descendant in the
 same runtime build. Source tests compose both policy modes with the real Hub
 decision, PostgreSQL/Redis and the SDK pair flow, including an unchanged retry
-and a changed-policy refusal. Their private-file custody fixture is not an
-encrypted or installed-runtime qualification.
+and a changed-policy refusal. They are not an installed-runtime qualification.
 
 Before a local pin exists, recovery selects Hub's read-only
 `read_oauth_issuance_plan_by_request(decision_request_id=...)`. Once pinned,
@@ -213,46 +236,48 @@ reservation would correctly refuse. Missing or changed original issuer metadata
 stays closed and never becomes permission to prepare a replacement.
 
 Refresh metadata retains a canonical commitment to its first signing claims and
-custody reference. Sealing checks that the supplied originals still match those
+opaque reference. Sealing checks that the supplied originals still match those
 stored inputs. Existing rows without this commitment are unknown originals and
 refuse recovery; schema migration adds the nullable field without inventing
 historical claims or a replacement token. Terminal tombstones may have no claims.
 
 Source recovery gates terminate an issuer process after confirmed refresh
-reservation, digest sealing, custody creation and ready-state commit, then
-recover with a fresh process against the same PostgreSQL and private fsynced
-file service. They also lose confirmed PostgreSQL replies and race ABORT with
-an in-flight create. These gates qualify original metadata/reference recovery,
-not encryption, production signing keys, deployed mount lifecycle or a running
-Hub composition; those require the host's separate provider acceptance.
+reservation, digest sealing and ready-state commit, then recover with a fresh
+process against the same PostgreSQL: it re-signs the stored input to the same
+digest, and a restart with a changed key refuses without changing the row.
+They also lose confirmed PostgreSQL replies and race ABORT with an in-flight
+ready seal. These gates qualify original metadata recovery, not production
+signing keys, deployed mount lifecycle or a running Hub composition; those
+require the host's separate provider acceptance.
 
 The flow checks both applied slot digests, re-reads the local pin and invokes the
-host's live-target fence before access activation and again after custody
-reads, before publishing either bearer. The provider must keep refresh
+host's live-target fence before access activation and again after the provider's
+`bearers` re-signs both originals, before publishing either bearer. Each
+re-signed bearer must match its committed digest. The provider must keep refresh
 artifacts distinct from Bundle access sessions. The host still supplies the
-concrete candidate builder, authenticated Hub, qualified custody and live fence;
+concrete candidate builder, authenticated Hub, signing keys and live fence;
 their real deployment qualification remains open.
 
 ## Original credential pair provider
 
 `OriginalCredentialPairProvider` composes the public Bundle access authority
 with `OriginalRefreshIssuer` and `PostgresOriginalRefreshStore`. Its host-only
-constructor binds the tenant/project, exact expected custody namespace,
-original Card kind, refresh TTL and protected signing-key resolver. Preparation
-first qualifies `KDCubeIssuanceSecretCustody`; receipt recovery reads only
-existing access and refresh metadata. The host binds this provider to its
+constructor binds the tenant/project, original Card kind, refresh TTL and
+protected signing-key resolver; it takes no custody. Receipt recovery reads only
+existing access and refresh metadata, and `bearers(plan=, result=, pair=)`
+re-signs both applied originals for delivery. The host binds this provider to its
 authenticated Hub readers and live-target fence.
 
-The refresh metadata table retains one original signing input, opaque custody
+The refresh metadata table retains one original signing input, opaque
 reference and bearer digest. It contains no bearer or signing key. PostgreSQL
 row locks preserve the first identifier, signing time and complete plan;
 conflicting retries refuse. `HmacOriginalRefreshSigner` signs that original
 input with the distinct `kdcube.oauth.original_refresh.v1` purpose and `krt1`
-artifact format. The digest is sealed before create-only external custody, so
-a lost create response recovers the same artifact rather than a new generation.
-A changed key cannot replace an already sealed original.
+artifact format. The digest is sealed first; a lost response re-signs the same
+input to the same artifact rather than a new generation. A changed key cannot
+replace an already sealed original: re-signing refuses.
 
-The artifact's signed expiry and custody deadline retain the original Card cap.
+The artifact's signed expiry retains the original Card cap.
 Hub separately computes the active refresh family's expiry from its first
 reservation time plus the original refresh TTL, capped by that Card deadline.
 The signed cap does not extend the family's usable lifetime or authorize it.
@@ -261,8 +286,9 @@ Hub remains the authority that activates the refresh family.
 Before Bundle access activation, the provider records the authenticated applied
 refresh receipt. That protects the applied original against retirement; it
 records the Hub outcome, not recipient delivery. An authenticated aborted flow
-retires both original slots, committing their terminal metadata before purging
-the exact custody references. Each cleanup is attempted independently.
+retires both original slots by committing their terminal PostgreSQL metadata;
+there is nothing outside PostgreSQL to purge. Each cleanup is attempted
+independently.
 A committed result containing a superseded slot withholds the whole pair and
 retires only the superseded original. An applied refresh slot records its
 protection receipt; an applied access slot is preserved without activation or
@@ -270,15 +296,13 @@ retirement on this path. The complete original result is checked before either
 cleanup, and a missing cleanup capability gives a finite unavailable response.
 
 Source tests exercise PostgreSQL metadata and synthetic signing capabilities.
-Separate encrypted-custody tests compose the real SecretsService client/routes,
-native enrollment ACLs and encrypted disk store. Reconstructed readers recover
-the same original values without more signing or writes; ungranted namespaces
-and revoked enrollment refuse. Transports are in-process, keys are synthetic,
-and persistent-volume classification is a fixture. These tests do not qualify
-installed volumes, network mTLS or encrypted recovery after process termination.
-Qualification of the configured secrets-file, host-vault or AWS deployment,
-host composition and live recipient delivery remain separate gates. Backend
-selection stays behind the configured SecretsService abstraction.
+Every custody operation fails these tests. A reconstructed store and provider
+re-sign the identical original pair; an unavailable or changed key refuses
+delivery without a new bearer. With the actual Hub decision, a crash after the
+seal and before the response recovers the identical pair, a key changed after
+the seal refuses, and nothing is written under the file secrets backend's
+records root. Keys are synthetic; host composition and live recipient delivery
+remain separate gates.
 
 ## Refresh lifetime forwarding
 

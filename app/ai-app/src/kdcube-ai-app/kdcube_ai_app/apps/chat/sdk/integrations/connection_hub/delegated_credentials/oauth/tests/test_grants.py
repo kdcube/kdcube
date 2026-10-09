@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import sys
 import time
 
@@ -14,7 +15,7 @@ from connection_hub.authority_registry import DELEGATED_CLIENT_AUTHORITY_ID
 from connection_hub.delegated_credentials.oauth_issuance import OAuthIssuancePlan, OAuthIssuanceResult, SlotOutcome
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import grants
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceReceipt, SessionIssuanceRefused
-from kdcube_ai_app.auth.bundle.session_planned_issuance import PlannedIssuanceContext
+from kdcube_ai_app.auth.bundle.session_planned_issuance import AppliedIssuanceContext, PlannedIssuanceContext
 from kdcube_ai_app.auth.bundle.sessions import BundleSessionAuthority
 from kdcube_ai_app.auth.tests.test_bound_session_issuance_store import counts, store
 
@@ -154,15 +155,14 @@ class _PlannedAuthority(_FakeAuthority):
 
 @pytest.mark.asyncio
 async def test_planned_adapter_prepares_only_plan_authority_without_publishing_bearer():
-    plan, custody = _plan(), object()
+    plan = _plan()
     authority = _PlannedAuthority(plan)
-    prepared = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                                authority=authority, custody=custody)
+    prepared = await _prepare()(plan=plan, expires_at=plan.delivery_deadline, authority=authority)
     assert authority.calls == []
     context, kwargs = authority.preparations[0]
     assert context == PlannedIssuanceContext.from_oauth_plan(plan, slot="access", expires_at=plan.delivery_deadline)
     assert kwargs == {"user_id": plan.credential_subject, "roles": [DELEGATED_CLIENT_ROLE],
-                      "permissions": ["files:read", "records:read"], "custody": custody}
+                      "permissions": ["files:read", "records:read"]}
     assert prepared.context == context
     assert prepared.receipt == authority.receipt
     assert not hasattr(prepared, "access_token")
@@ -178,8 +178,7 @@ async def test_planned_adapter_factory_uses_plan_namespace_not_default_config():
         seen.append(kwargs)
         return authority
 
-    await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                     authority_factory=factory, custody=object())
+    await _prepare()(plan=plan, expires_at=plan.delivery_deadline, authority_factory=factory)
     assert seen == [{"tenant": plan.tenant, "project": plan.project}]
     assert authority.calls == []
 
@@ -195,7 +194,7 @@ async def test_invalid_planned_identity_refuses_before_authority_factory(changes
     called = []
     with pytest.raises(SessionIssuanceRefused):
         await _prepare()(plan=replace(_plan(), **changes), expires_at=int(time.time()) + 60,
-                         authority_factory=lambda **kw: called.append(kw), custody=object())
+                         authority_factory=lambda **kw: called.append(kw))
     assert called == []
 
 
@@ -204,7 +203,7 @@ async def test_planned_adapter_rejects_caller_json_before_authority_factory():
     called = []
     with pytest.raises(SessionIssuanceRefused):
         await _prepare()(plan=_plan().to_dict(), expires_at=int(time.time()) + 60,
-                         authority_factory=lambda **kw: called.append(kw), custody=object())
+                         authority_factory=lambda **kw: called.append(kw))
     assert called == []
 
 
@@ -213,14 +212,14 @@ async def test_planned_activation_rejects_non_access_slot_with_other_bindings_ma
     plan = _plan()
     authority = _PlannedAuthority(plan)
     original = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                               authority=authority, custody=object())
+                               authority=authority)
     context = replace(original.context, slot="refresh", effect_digest=plan.effect_digests["refresh"])
     prepared = replace(original, context=context)
     result = replace(_result(plan, original.receipt), per_slot={
         "refresh": SlotOutcome("applied", context.effect_digest, original.receipt.bearer_sha256),
     })
     with pytest.raises(SessionIssuanceRefused, match="^issuance_identity_conflict$"):
-        await _activate()(prepared=prepared, result=result, authority=authority, custody=object())
+        await _activate()(prepared=prepared, result=result, authority=authority)
     assert authority.activations == []
     assert authority.calls == []
 
@@ -238,7 +237,7 @@ async def test_planned_prepare_rejects_integration_actor_with_derived_subject_ma
 
     with pytest.raises(SessionIssuanceRefused, match="^issuance_identity_conflict$"):
         await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                         authority_factory=factory, custody=object())
+                         authority_factory=factory)
     assert called == []
     assert authority.preparations == []
     assert authority.calls == []
@@ -258,7 +257,7 @@ async def test_planned_prepare_rejects_invalid_scope_before_authority_factory(sc
 
     with pytest.raises(SessionIssuanceRefused, match="^issuance_authority_invalid$"):
         await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                         authority_factory=factory, custody=object())
+                         authority_factory=factory)
     assert called == []
     assert authority.preparations == []
     assert authority.calls == []
@@ -275,7 +274,7 @@ async def test_planned_adapter_missing_api_or_namespace_never_falls_back_to_logi
     for authority in (old, partial, wrong):
         with pytest.raises(SessionIssuanceRefused):
             await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                             authority=authority, custody=object())
+                             authority=authority)
         assert authority.calls == []
     assert partial.preparations == []
     assert wrong.preparations == []
@@ -287,7 +286,7 @@ async def test_missing_portable_plan_api_refuses_without_ordinary_minter(monkeyp
     monkeypatch.setitem(sys.modules, "connection_hub.delegated_credentials.oauth_issuance", None)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_plan_api_unavailable$"):
         await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                         authority_factory=lambda **kw: called.append(kw), custody=object())
+                         authority_factory=lambda **kw: called.append(kw))
     assert called == []
 
 
@@ -296,11 +295,11 @@ async def test_planned_activation_rejects_malformed_prepared_receipt_before_auth
     plan = _plan()
     authority = _PlannedAuthority(plan)
     prepared = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                                authority=authority, custody=object())
+                                authority=authority)
     for supplied in ({}, replace(prepared, receipt={})):
         with pytest.raises(SessionIssuanceRefused):
             await _activate()(prepared=supplied, result=_result(plan, prepared.receipt),
-                              authority=authority, custody=object())
+                              authority=authority)
     assert authority.activations == []
 
 
@@ -311,10 +310,10 @@ async def test_planned_activation_refuses_non_applied_original_before_authority_
     plan = _plan()
     authority = _PlannedAuthority(plan)
     prepared = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                                authority=authority, custody=object())
+                                authority=authority)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_result_not_applied$"):
         await _activate()(prepared=prepared, result=_result(plan, prepared.receipt, state=state, outcome=outcome),
-                          authority=authority, custody=object())
+                          authority=authority)
     assert authority.activations == []
     assert authority.calls == []
 
@@ -324,56 +323,56 @@ async def test_planned_activation_pins_original_bearer_and_receipt_coordinates()
     plan = _plan()
     authority = _PlannedAuthority(plan)
     prepared = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                                authority=authority, custody=object())
+                                authority=authority)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_commitment_mismatch$"):
         await _activate()(prepared=prepared, result=_result(plan, prepared.receipt, token_sha256="5" * 64),
-                          authority=authority, custody=object())
+                          authority=authority)
     assert authority.activations == []
     authority.receipt = replace(authority.receipt, secret_ref="6" * 32)
     with pytest.raises(SessionIssuanceRefused, match="^issuance_identity_conflict$"):
         await _activate()(prepared=prepared, result=_result(plan, prepared.receipt),
-                          authority=authority, custody=object())
+                          authority=authority)
     assert authority.calls == []
 
 
-class _MemoryCustody:
-    """Synthetic authorized custody; this test is not provider durability qualification."""
+class _NoCustody:
+    """No bearer is kept in custody any more: any custody access fails the test."""
 
-    def __init__(self):
-        self.values = {}
-        self.creates = 0
+    def __getattr__(self, name):
+        pytest.fail(f"custody {name} reached; no bearer is stored")
 
-    async def create(self, *, secret_ref, value, expires_at):
-        self.creates += 1
-        if secret_ref in self.values:
-            return False
-        self.values[secret_ref] = value
-        return True
 
-    async def get(self, *, secret_ref):
-        return self.values.get(secret_ref)
+_SIGNING_KEY = "synthetic-original-adapter-test-signing-key"
+
+
+def _real_authority(plan, store, secret=_SIGNING_KEY):
+    return BundleSessionAuthority(tenant=plan.tenant, project=plan.project, authority_store=store, secret=secret)
+
+
+def _sha(bearer):
+    return hashlib.sha256(bearer.encode("utf-8")).hexdigest()
 
 
 @pytest.mark.asyncio
 async def test_planned_adapter_real_postgres_original_survives_fresh_authority_and_applied_retry(store):
     plan = _plan(tenant=store.tenant, project=store.project)
-    custody = _MemoryCustody()
+    custody = _NoCustody()
 
     def authority():
-        return BundleSessionAuthority(tenant=plan.tenant, project=plan.project, authority_store=store,
-                                      secret="synthetic-original-adapter-test-signing-key")
+        return _real_authority(plan, store)
 
     original = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
                                authority=authority(), custody=custody)
     assert await counts(store) == (1, 1, 0)
-    bearer = await custody.get(secret_ref=original.receipt.secret_ref)
+    result = _result(plan, original.receipt)
+    bearer = await grants.read_delegated_client_access_bearer(prepared=original, result=result, authority=authority())
+    assert _sha(bearer) == original.receipt.bearer_sha256
     replayed = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
                                authority=authority(), custody=custody)
     assert replayed.context == original.context
     assert replayed.receipt.secret_ref == original.receipt.secret_ref
     assert replayed.receipt.bearer_sha256 == original.receipt.bearer_sha256
     assert replayed.receipt.session_id == original.receipt.session_id
-    assert custody.creates == 1
     assert await counts(store) == (1, 1, 0)
     # Neither a later clock-derived expiry nor a changed permission snapshot
     # can turn this original identity into a second preparation.
@@ -381,9 +380,7 @@ async def test_planned_adapter_real_postgres_original_survives_fresh_authority_a
                             (replace(plan, resource_grants={"records": ("records:write",)}), plan.delivery_deadline)):
         with pytest.raises(SessionIssuanceRefused, match="^issuance_identity_conflict$"):
             await _prepare()(plan=changed, expires_at=expiry, authority=authority(), custody=custody)
-    assert custody.creates == 1
     assert await counts(store) == (1, 1, 0)
-    result = _result(plan, original.receipt)
     active = await _activate()(prepared=replayed, result=result, authority=authority(), custody=custody)
     assert active.secret_ref == original.receipt.secret_ref
     assert await counts(store) == (1, 1, 1)
@@ -392,23 +389,74 @@ async def test_planned_adapter_real_postgres_original_survives_fresh_authority_a
     assert profile["permissions"] == ["files:read", "records:read"]
     again = await _activate()(prepared=replayed, result=result, authority=authority(), custody=custody)
     assert again == active
-    assert await custody.get(secret_ref=again.secret_ref) == bearer
-    assert custody.creates == 1
+    assert await grants.read_delegated_client_access_bearer(
+        prepared=replayed, result=result, authority=authority()) == bearer
     assert (await store.read_issuance(original.context.identity)).expires_at == plan.delivery_deadline
 
 
 @pytest.mark.asyncio
-async def test_planned_adapter_real_postgres_missing_activated_custody_never_remints(store):
+async def test_planned_adapter_real_postgres_activated_replay_with_changed_key_never_remints(store):
     plan = _plan(tenant=store.tenant, project=store.project)
-    custody = _MemoryCustody()
-    authority = BundleSessionAuthority(tenant=plan.tenant, project=plan.project, authority_store=store,
-                                      secret="synthetic-original-adapter-test-signing-key")
-    original = await _prepare()(plan=plan, expires_at=plan.delivery_deadline,
-                               authority=authority, custody=custody)
+    authority = _real_authority(plan, store)
+    original = await _prepare()(plan=plan, expires_at=plan.delivery_deadline, authority=authority)
     result = _result(plan, original.receipt)
-    await _activate()(prepared=original, result=result, authority=authority, custody=custody)
-    del custody.values[original.receipt.secret_ref]
-    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_missing$"):
-        await _activate()(prepared=original, result=result, authority=authority, custody=custody)
-    assert custody.creates == 1
+    await _activate()(prepared=original, result=result, authority=authority)
+    bearer = await grants.read_delegated_client_access_bearer(prepared=original, result=result, authority=authority)
+    rotated = _real_authority(plan, store, secret="another-signing-key")
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_signing_mismatch$"):
+        await _activate()(prepared=original, result=result, authority=rotated)
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_signing_mismatch$"):
+        await grants.read_delegated_client_access_bearer(prepared=original, result=result, authority=rotated)
     assert await counts(store) == (1, 1, 1)
+    assert await grants.read_delegated_client_access_bearer(
+        prepared=original, result=result, authority=_real_authority(plan, store)) == bearer
+
+
+@pytest.mark.asyncio
+async def test_read_delegated_access_bearer_is_the_identical_first_issued_bearer(store, monkeypatch):
+    from kdcube_ai_app.auth.bundle import sessions
+
+    plan, issued = _plan(tenant=store.tenant, project=store.project), []
+    make_token = sessions._make_token
+
+    def recording(claims, *, secret):
+        issued.append(make_token(claims, secret=secret))
+        return issued[-1]
+
+    monkeypatch.setattr(sessions, "_make_token", recording)
+    prepared = await _prepare()(plan=plan, expires_at=plan.delivery_deadline, authority=_real_authority(plan, store))
+    assert len(issued) == 1 and _sha(issued[0]) == prepared.receipt.bearer_sha256
+    first = issued[0]
+    monkeypatch.setattr(sessions, "_make_token", make_token)
+    result = _result(plan, prepared.receipt)
+    assert await grants.read_delegated_client_access_bearer(
+        prepared=prepared, result=result, authority=_real_authority(plan, store)) == first
+    await _activate()(prepared=prepared, result=result, authority=_real_authority(plan, store))
+    assert await grants.read_delegated_client_access_bearer(
+        prepared=prepared, result=result,
+        authority_factory=lambda **kw: _real_authority(plan, store)) == first
+    assert first not in repr(prepared) and first not in repr(prepared.receipt.to_public_dict())
+    assert await counts(store) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_read_delegated_access_bearer_refuses_changed_applied_fingerprint(store):
+    plan = _plan(tenant=store.tenant, project=store.project)
+    authority = _real_authority(plan, store)
+    prepared = await _prepare()(plan=plan, expires_at=plan.delivery_deadline, authority=authority)
+    changed = _result(plan, prepared.receipt, token_sha256="5" * 64)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("changed applied fingerprint reached the session authority")
+
+    host = _PlannedAuthority(plan)
+    host.read_bound_session_bearer = forbidden
+    for target in (authority, host):
+        with pytest.raises(SessionIssuanceRefused, match="^issuance_commitment_mismatch$"):
+            await grants.read_delegated_client_access_bearer(prepared=prepared, result=changed, authority=target)
+    # The session authority refuses the same mismatch on its own, before signing.
+    applied = AppliedIssuanceContext.from_oauth_result(prepared.context, changed)
+    authority._resolve_secret = forbidden
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_commitment_mismatch$"):
+        await authority.read_bound_session_bearer(applied)
+    assert await counts(store) == (1, 1, 0)

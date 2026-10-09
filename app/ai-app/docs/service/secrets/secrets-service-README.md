@@ -81,8 +81,10 @@ raw AWS operations do not establish the common custody guarantees merely
 because they support writes. In particular, a cloud idempotency token alone
 does not enforce read expiry or provide a terminal deletion fence.
 
-Recoverable session issuance uses `issuance_secret_custody` from
-`infra.secrets.issuance`. It wraps the original bearer in a versioned,
+Recoverable session issuance no longer stores issued bearers (operator,
+2026-10-09: "i need the stronger version now"); it re-signs the claims
+PostgreSQL keeps. The `issuance_secret_custody` wrapper in
+`infra.secrets.issuance` remains for other callers. It wraps a value in a versioned,
 reference-bound JSON envelope and refuses malformed or expired reads with
 finite `issuance_custody_invalid` / `issuance_custody_expired` reasons. Missing
 records return `None`; provider failures remain unavailable, not absence.

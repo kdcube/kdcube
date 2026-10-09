@@ -133,19 +133,20 @@ def rig(monkeypatch):
             assert plan == r.plan and result.state in {"aborted", "committed"}
             assert access_expires_at == r.original.access_expires_at
             r.retired += 1
-    class Custody:
-        async def get(self, *, secret_ref):
+        async def bearers(self, *, plan, result, pair):
+            # Re-signed from stored claims in production; no custody object exists any more.
+            assert plan == r.plan and result.state == "committed" and set(pair) == set(plan.slots)
             r.gets += 1
-            return next((r.bearers[slot] for slot in r.plan.slots if r.receipts[slot].secret_ref == secret_ref), None)
+            return {slot: r.bearers[slot] for slot in plan.slots}
     async def candidates(*, payload):
         r.candidate_reads += 1
         assert payload == r.payload
         return r.inputs
     async def fence(**value):
         return r.fenced
-    r.ledger, r.hub, r.provider, r.custody = Ledger(), Hub(), Provider(), Custody()
+    r.ledger, r.hub, r.provider = Ledger(), Hub(), Provider()
     r.flow = OriginalCodeExchangeFlow(ledger=r.ledger, grant_store=Grant(), hub=r.hub,
-        provider=r.provider, custody=r.custody, candidate_inputs=candidates, fence_target=fence)
+        provider=r.provider, candidate_inputs=candidates, fence_target=fence)
     monkeypatch.setattr(original_code, "oauth_tenant_project", lambda request: ("unit-tenant", "unit-project"))
     def legacy(request):
         pytest.fail("original flow reached legacy consume/mint")
@@ -264,7 +265,7 @@ async def test_completed_original_is_refenced_before_access_activation(rig, chan
 
 
 @pytest.mark.asyncio
-async def test_missing_original_custody_never_authorizes_replacement(rig):
+async def test_a_resigned_bearer_off_its_fingerprint_never_authorizes_replacement(rig):
     assert (await routes.token(rig.request)).status_code == 200
     rig.bearers["refresh"] = ""
     response = await routes.token(rig.request)
@@ -273,21 +274,20 @@ async def test_missing_original_custody_never_authorizes_replacement(rig):
 
 
 @pytest.mark.asyncio
-async def test_final_target_change_after_custody_read_withholds_both(rig):
-    original_get = rig.custody.get
-    async def moved(*, secret_ref):
-        result = await original_get(secret_ref=secret_ref)
-        if secret_ref == rig.receipts["refresh"].secret_ref:
-            rig.fenced = False
+async def test_final_target_change_after_the_bearer_read_withholds_both(rig):
+    original_bearers = rig.provider.bearers
+    async def moved(**values):
+        result = await original_bearers(**values)
+        rig.fenced = False
         return result
-    rig.custody.get = moved
+    rig.provider.bearers = moved
     response = await routes.token(rig.request)
     assert response.status_code == 400
     assert b"unit-original-access" not in response.body and b"unit-original-refresh" not in response.body
 
 
 @pytest.mark.asyncio
-async def test_original_abort_result_retires_without_prepare_or_custody_read(rig):
+async def test_original_abort_result_retires_without_prepare_or_bearer_read(rig):
     rig.outcome = "aborted"
     response = await routes.token(rig.request)
     assert response.status_code == 400 and rig.retired == 1

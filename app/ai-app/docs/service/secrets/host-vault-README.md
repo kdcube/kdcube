@@ -554,7 +554,10 @@ simply must work regardless of the backend"). The platform's own runtime-record
 purposes are enrolled: `login-attempts`, `card-credentials` and
 `oauth-refresh-tokens` (`runtime_contract.DEFAULT_RUNTIME_NAMESPACES`, selected by `runtime_section_namespaces` from the whole section; the SDK
 settings and the CLI projection use the same list, and `users` is reserved for
-per-user secret folders). The CLI marks the projection
+per-user secret folders). OAuth original issuance no longer stores issued
+bearers (2026-10-09), so nothing writes `oauth-refresh-tokens` any more; it stays
+enrolled only so records written before that remain reachable for an
+operator-requested cleanup. The CLI marks the projection
 `KDCUBE_SECRETS_RUNTIME_DEFAULTED=1`, and every fresh token set written at
 install or refresh (`write_env_overlay`) carries a scope policy granting exactly
 those namespaces to this run's own proc credentials: `read` for the proc read

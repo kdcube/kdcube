@@ -1,4 +1,4 @@
-"""Terminal selection over synthetic capabilities; no physical custody proof."""
+"""Terminal selection over synthetic capabilities; retirement touches no bearer custody."""
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -25,8 +25,8 @@ def terminal_pair():
             r.protected.append("refresh")
     class Authority:
         tenant, project = r.plan.tenant, r.plan.project
-        async def retire_prepared_bound_session(self, terminal, *, custody):
-            assert terminal.plan.slot == "access" and custody is r.custody
+        async def retire_prepared_bound_session(self, terminal):
+            assert terminal.plan.slot == "access"
             r.retired.append("access")
             if r.fail_access:
                 raise TimeoutError("unit-private-provider-canary")
@@ -36,8 +36,7 @@ def terminal_pair():
     # Exercise method selection only. Constructor/backend qualification has
     # separate actual-wrapper/PG tests; this fixture claims neither.
     r.provider = object.__new__(OriginalCredentialPairProvider)
-    r.custody = object()
-    r.provider.refresh, r.provider.custody = Refresh(), r.custody
+    r.provider.refresh = Refresh()
     r.provider.authority_factory = factory
     return r
 

@@ -4,7 +4,7 @@
 """Original code-to-pair composition over the host's durable capabilities.
 
 The host supplies the namespace-bound Hub service, candidate input builder,
-original credential provider, qualified custody and live-target fence. They
+original credential provider, signing provider and live-target fence. They
 are trusted application capabilities, never request-selected implementations.
 Hub owns the sole decision. Lookup and committed replay are read-only until
 activation of the original access session; they never prepare a replacement.
@@ -55,7 +55,8 @@ class OriginalPairProvider(Protocol):
     """Durable original issuer; preparation is idempotent, read never mints.
 
     The refresh artifact has its own purpose and is never activated as a Bundle
-    access session. Records/receipts carry no bearers; custody alone holds them.
+    access session. Records/receipts carry no bearers and nothing stores one: ``bearers`` re-signs the
+    stored claims and the flow checks each against its committed fingerprint.
     """
 
     async def prepare_pair(self, *, plan: OAuthIssuancePlan, access_expires_at: int) -> Mapping[str, PreparedOriginalCredential]: ...
@@ -64,14 +65,16 @@ class OriginalPairProvider(Protocol):
                               credential: PreparedOriginalCredential) -> SessionIssuanceReceipt: ...
     async def retire_pair(self, *, plan: OAuthIssuancePlan, result: OAuthIssuanceResult,
                           access_expires_at: int) -> None: ...
+    async def bearers(self, *, plan: OAuthIssuancePlan, result: OAuthIssuanceResult,
+                      pair: Mapping[str, PreparedOriginalCredential]) -> Mapping[str, str]: ...
 
 
 class OriginalCodeExchangeFlow:
     def __init__(self, *, ledger: Any, grant_store: Any, hub: Any, provider: OriginalPairProvider,
-                 custody: Any, candidate_inputs: Callable[..., Awaitable[Mapping[str, Any]]],
-                 fence_target: Callable[..., Awaitable[bool]]):
+                 candidate_inputs: Callable[..., Awaitable[Mapping[str, Any]]],
+                 fence_target: Callable[..., Awaitable[bool]], custody: Any = None):
         self.ledger, self.grant_store, self.hub = ledger, grant_store, hub
-        self.provider, self.custody = provider, custody
+        self.provider = provider
         self.candidate_inputs, self.fence_target = candidate_inputs, fence_target
 
     def handler(self) -> OriginalCodeExchangeHandler:
@@ -218,14 +221,14 @@ class OriginalCodeExchangeFlow:
             pair = self._pair(plan, expiry, await self.provider.read_pair(plan=plan, access_expires_at=expiry))
         else:
             # Any Hub-held digest proves preparation already crossed the
-            # original reservation boundary. Metadata/custody loss there
+            # original reservation boundary. Metadata loss there
             # refuses; it never authorizes another preparation.
             read_original = any(result.per_slot[slot].token_sha256 for slot in plan.slots)
             if not read_original and await self.fence_target(plan=plan, result=result) is not True:
                 raise OriginalExchangeRefused("original_exchange_target_moved")
             reader = self.provider.read_pair if read_original else self.provider.prepare_pair
             pair = self._pair(plan, expiry, await reader(plan=plan, access_expires_at=expiry))
-            # A concurrent original completion may have won while custody ran.
+            # A concurrent original completion may have won while preparation ran.
             result = self._result(plan, await self.hub.read_oauth_issuance(transaction_id=plan.transaction_id))
             if result.state == "pending":
                 missing = []
@@ -273,12 +276,14 @@ class OriginalCodeExchangeFlow:
                 != (pair["access"].receipt.session_id, pair["access"].receipt.secret_ref,
                     pair["access"].receipt.bearer_sha256)):
             raise OriginalExchangeRefused("original_exchange_pair_mismatch")
+        # Re-signed from the stored claims (no custody); each must be exactly the committed fingerprint.
+        resigned = await self.provider.bearers(plan=plan, result=result, pair=pair)
         bearers = {}
         for slot in plan.slots:
-            bearer = await self.custody.get(secret_ref=pair[slot].receipt.secret_ref)
-            if (type(bearer) is not str or not bearer or hashlib.sha256(bearer.encode()).hexdigest()
-                    != pair[slot].receipt.bearer_sha256):
-                raise OriginalExchangeRefused("original_exchange_custody_mismatch")
+            bearer = resigned.get(slot) if isinstance(resigned, Mapping) else None
+            if (type(bearer) is not str or not bearer or not hmac.compare_digest(
+                    hashlib.sha256(bearer.encode()).hexdigest(), pair[slot].receipt.bearer_sha256)):
+                raise OriginalExchangeRefused("original_exchange_signing_mismatch")
             bearers[slot] = bearer
         # Provider reads can yield while the target changes. Final fence and
         # ledger read precede publication; serving still follows live authority.
