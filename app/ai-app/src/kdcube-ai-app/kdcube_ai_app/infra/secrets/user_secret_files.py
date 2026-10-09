@@ -24,7 +24,9 @@ import tempfile
 from pathlib import Path
 from urllib.parse import unquote
 
-from kdcube_ai_app.infra.secrets.runtime_file import PLATFORM_OWNER
+from kdcube_ai_app.infra.secrets.runtime_file import (
+    PLATFORM_OWNER, RuntimeFileError, adopt, require_writer, secrets_owner_uid,
+)
 
 USERS_FOLDER = "users"
 # Lowercase only: the host share can be case-insensitive (APFS), so every on-disk name must stay unique
@@ -47,6 +49,14 @@ _BUNDLE = re.compile(r"[a-z0-9][a-z0-9._@-]{0,127}")  # lowercase: case-insensit
 
 class UserSecretFileError(RuntimeError):
     """Finite failure without secret material or filesystem paths."""
+
+
+def _owner_uid() -> int:
+    """The canonical owner of every entry under the secrets root (runtime_file.secrets_owner_uid)."""
+    try:
+        return secrets_owner_uid()
+    except RuntimeFileError:
+        raise UserSecretFileError("user_secret_storage_unavailable") from None
 
 
 def encode_segment(text: str) -> str:
@@ -109,12 +119,16 @@ class UserSecretFileStore:
             info = folder.lstat()
         except FileNotFoundError:
             return False
-        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != _owner_uid()
                 or stat.S_IMODE(info.st_mode) != 0o700):
             raise UserSecretFileError("user_secret_storage_unavailable")
         return True
 
     def _existing(self, chain: list[Path]) -> bool:
+        try:
+            require_writer(_owner_uid())  # only the owner or root reads these entries (W677)
+        except RuntimeFileError:
+            raise UserSecretFileError("user_secret_storage_unavailable") from None
         for folder in chain:
             if not self._verify(folder):
                 return False
@@ -123,12 +137,19 @@ class UserSecretFileStore:
         return True
 
     def _create(self, chain: list[Path]) -> None:
+        owner = _owner_uid()
+        try:
+            require_writer(owner)
+        except RuntimeFileError:
+            raise UserSecretFileError("user_secret_storage_unavailable") from None
         for folder in chain:
             try:
                 folder.mkdir(mode=0o700)
                 created = True
             except FileExistsError:
                 created = False
+            if created:
+                adopt(folder, owner)
             if not self._verify(folder):
                 raise UserSecretFileError("user_secret_storage_unavailable")
             if created:  # the new entry is durable in its parent before anything is published inside it
@@ -147,7 +168,7 @@ class UserSecretFileStore:
             info = path.lstat()
         except FileNotFoundError:
             return False
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != _owner_uid()
                 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
             raise UserSecretFileError("user_secret_storage_unavailable")
         return True
@@ -160,7 +181,7 @@ class UserSecretFileStore:
             return None
         try:
             info = os.fstat(descriptor)
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != _owner_uid()
                     or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
                 raise UserSecretFileError("user_secret_storage_unavailable")
             with os.fdopen(descriptor, "rb", closefd=False) as stream:
@@ -209,6 +230,7 @@ class UserSecretFileStore:
             descriptor, temporary = tempfile.mkstemp(prefix=".write-", dir=folder)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
+                    adopt(stream.fileno(), _owner_uid())
                     stream.write(encoded)
                     stream.flush()
                     os.fsync(stream.fileno())

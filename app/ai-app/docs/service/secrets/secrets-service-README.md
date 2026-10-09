@@ -829,8 +829,16 @@ config/secrets/
   <bundle id>/users/<user id>/<key path>.json users.<user>.bundles.<bundle>.secrets.<key path>
 ```
 
-- Every folder is `0700`, every file `0600`, owned by the service user, never
-  a symlink; an unsafe file or folder is refused, never repaired.
+- Every folder is `0700`, every file `0600`, owned by ONE owner uid, never a
+  symlink; an unsafe file or folder is refused, never repaired. The owner is
+  `KDCUBE_SECRETS_OWNER_UID` (compose sets `1000`, the `appuser` the apps run
+  as; unset means the process's own uid). A root process (a `docker exec`
+  session, the one-time migration, `kdcube-secrets`) hands everything it
+  creates to that owner; any other uid is refused. At start, chat-proc's
+  entrypoint and `kdcube-secrets` re-own root-owned entries to the owner
+  (only uid 0; modes untouched; other owners stay refused). The isolated
+  runtime receives the records as a payload, and its root supervisor keeps
+  its own private copy; generated code (uid 1001) cannot read it.
 - User ids and key paths are percent-encoded (everything outside
   `a-z 0-9 . _ @ -`, uppercase letters and a leading dot included), so names
   are unique on case-insensitive host shares. Bundle ids must be lowercase.

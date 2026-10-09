@@ -34,7 +34,24 @@ def selected_server_path(raw_backend: Optional[str] = None) -> str:
         ) from exc
 
 
+def adopt_root_owned_entries(root: Optional[str] = None, owner: Optional[str] = None) -> int:
+    """W677: hand root-owned private entries of the secrets folder to the one owner uid before serving.
+
+    The same repair chat-proc's entrypoint runs before dropping to appuser; the implementation and its
+    guards live in kdcube_ai_app.infra.secrets.ownership_repair (copied into this image).
+    """
+    from kdcube_ai_app.infra.secrets.ownership_repair import repair_secrets_ownership
+
+    root = root if root is not None else (os.environ.get("KDCUBE_SECRETS_RUNTIME_ROOT") or "").strip()
+    owner = owner if owner is not None else (os.environ.get("KDCUBE_SECRETS_OWNER_UID") or "").strip()
+    try:
+        return repair_secrets_ownership(root, owner)
+    except Exception:  # never prevent the service from starting; the stores still refuse unsafe entries
+        return 0
+
+
 def main() -> int:
+    adopt_root_owned_entries()
     try:
         server_path = selected_server_path()
     except ValueError as exc:
