@@ -309,6 +309,17 @@ class PLATFORM_CONFIG(BaseSettings):
             return val
         return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
 
+    def _assembly_bundle_allowlist(self, path: str) -> list[str] | None:
+        value = _load_assembly_plain(path)
+        if value is None:
+            return None
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip() or item != item.strip()
+            for item in value
+        ) or len(set(value)) != len(value):
+            raise ValueError(f"{path} must be null or a list of distinct non-empty app IDs")
+        return value
+
     # ── high-level resolvers: assembly > env > default ────────────────────────
     # Assembly descriptor wins when present; env var is the fallback for cloud
     # deployments that inject env vars without a mounted descriptor; hard-coded
@@ -505,6 +516,9 @@ class ApplicationsConfig(BaseModel):
     BUNDLE_STORAGE_ROOT: str | None = None
     BUNDLES_DESCRIPTOR_PROVIDER: str | None = None
     BUNDLES_INCLUDE_EXAMPLES: bool = True
+    # Descriptor-only deployment inventory. None keeps the existing inventory;
+    # [] permits only the internal platform administration implementation.
+    ALLOWED_BUNDLE_IDS: list[str] | None = None
     BUNDLE_CLEANUP_ENABLED: bool = True
     BUNDLE_CLEANUP_INTERVAL_SECONDS: int = 3600
     BUNDLE_CLEANUP_LOCK_TTL_SECONDS: int = 900
