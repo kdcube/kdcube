@@ -451,9 +451,12 @@ def _secret_records_payload(
     if not (want_users or want_apps):
         return None
     try:
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
         from kdcube_ai_app.infra.secrets.manager import SecretsFileSecretsManager, get_secrets_manager
 
-        manager = get_secrets_manager()
+        # With the process settings: a bare get_secrets_manager() is an empty in-memory manager in the
+        # running proc (W502, 2026-10-09), which would silently send the sandbox no secrets at all.
+        manager = get_secrets_manager(get_settings())
         if not isinstance(manager, SecretsFileSecretsManager):
             return None
         store = manager._user_store()

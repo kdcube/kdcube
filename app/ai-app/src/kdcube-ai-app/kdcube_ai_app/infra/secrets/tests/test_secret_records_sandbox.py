@@ -28,7 +28,12 @@ def test_isolated_execution_receives_the_folder_records_with_the_yaml_copies_sco
     store.set_app(bundle_id=HUB, key="google.client_secret", value="synthetic-app")
     store.set_app(bundle_id=OTHER, key="k", value="synthetic-other-app")
     store.set(user_id=USER, bundle_id=HUB, key="token", value="synthetic-user")
-    monkeypatch.setattr(manager_module, "get_secrets_manager", lambda *args, **kwargs: host)
+    def configured_manager(*args, **kwargs):
+        # The host must ask for the configured manager WITH settings; a bare call is the empty
+        # in-memory manager in the running proc.
+        assert args or kwargs, "platform_env called get_secrets_manager() without settings"
+        return host
+    monkeypatch.setattr(manager_module, "get_secrets_manager", configured_manager)
     exported = {"KDCUBE_RUNTIME_SECRETS_YAML_B64": "x", "KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64": "x"}
     payload = platform_env._secret_records_payload(exported, bundle_id=HUB, descriptor_payload_scope="active_bundle")
     records = json.loads(base64.b64decode(payload))["records"]
