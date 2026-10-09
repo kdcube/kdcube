@@ -27,11 +27,15 @@ def _runtime_secret_manager(settings: Any | None) -> ISecretsManager:
 
 
 class KDCubeEphemeralSecretStore:
-    """Bind portable expiring-secret contracts to one deployment namespace."""
+    """Bind portable expiring-secret contracts to one owner bundle and one deployment namespace.
+
+    ``bundle_id`` names the bundle that owns the records (W670, operator: "these secrets belong to bunlde");
+    ``None`` is a bundle-less, platform-owned caller.
+    """
 
     def __init__(
         self, manager: ISecretsManager, *, namespace: str,
-        durability_required: bool = False,
+        durability_required: bool = False, bundle_id: str | None = None,
     ) -> None:
         # Eligibility is the common asynchronous qualification, not a mode
         # allowlist. This argument is retained for constructor compatibility.
@@ -42,6 +46,9 @@ class KDCubeEphemeralSecretStore:
             )
         self._manager = manager
         self._namespace = str(namespace or "").strip()
+        self._bundle_id = bundle_id
+        # Only an owned store passes the keyword, so a platform caller reaches any manager unchanged.
+        self._owner = {} if bundle_id is None else {"bundle_id": bundle_id}
 
     @property
     def provider_type(self) -> str:
@@ -51,10 +58,14 @@ class KDCubeEphemeralSecretStore:
     def namespace(self) -> str:
         return self._namespace.lower()
 
+    @property
+    def bundle_id(self) -> str | None:
+        return self._bundle_id
+
     async def qualify_durable_backend(self) -> bool:
         """Ask the selected secrets layer for this exact namespace's guarantees."""
         qualify = getattr(self._manager, "qualify_runtime_custody", None)
-        return (await qualify(namespace=self._namespace)) is True if callable(qualify) else False
+        return (await qualify(namespace=self._namespace, **self._owner)) is True if callable(qualify) else False
 
     async def set(
         self,
@@ -65,6 +76,7 @@ class KDCubeEphemeralSecretStore:
     ) -> None:
         await self._manager.set_ephemeral_secret(
             namespace=self._namespace,
+            **self._owner,
             secret_ref=secret_ref,
             value=value,
             expires_at=expires_at,
@@ -79,6 +91,7 @@ class KDCubeEphemeralSecretStore:
     ) -> bool:
         return await self._manager.create_ephemeral_secret(
             namespace=self._namespace,
+            **self._owner,
             secret_ref=secret_ref,
             value=value,
             expires_at=expires_at,
@@ -87,18 +100,21 @@ class KDCubeEphemeralSecretStore:
     async def get(self, *, secret_ref: str) -> str | None:
         return await self._manager.get_ephemeral_secret(
             namespace=self._namespace,
+            **self._owner,
             secret_ref=secret_ref,
         )
 
     async def delete(self, *, secret_ref: str) -> None:
         await self._manager.delete_ephemeral_secret(
             namespace=self._namespace,
+            **self._owner,
             secret_ref=secret_ref,
         )
 
     async def purge_expired(self, *, now: int, limit: int) -> int:
         return await self._manager.purge_expired_ephemeral_secrets(
             namespace=self._namespace,
+            **self._owner,
             now=now,
             limit=limit,
         )
@@ -108,6 +124,7 @@ class KDCubeEphemeralSecretStore:
 
         await self._manager.delete_ephemeral_secret(
             namespace=self._namespace,
+            **self._owner,
             secret_ref=uuid.uuid4().hex,
         )
 
@@ -118,12 +135,13 @@ def ephemeral_secret_store(
     settings: Any | None = None,
     manager: ISecretsManager | None = None,
     durability_required: bool = False,
+    bundle_id: str | None = None,
 ) -> KDCubeEphemeralSecretStore:
-    """Build the deployment-selected, mode-neutral runtime adapter."""
+    """Build the deployment-selected, mode-neutral runtime adapter for one owner bundle."""
 
     selected = manager or _runtime_secret_manager(settings)
     return KDCubeEphemeralSecretStore(
-        selected, namespace=namespace, durability_required=durability_required,
+        selected, namespace=namespace, durability_required=durability_required, bundle_id=bundle_id,
     )
 
 

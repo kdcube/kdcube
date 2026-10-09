@@ -92,7 +92,7 @@ def test_file_bootstrap_create_restart_conflict_expiry_and_purge(monkeypatch, tm
     assert restarted.get(f"{BASE}/secret/{REF}", headers=READ).status_code == 404
     assert restarted.post(f"{BASE}/purge", headers=WRITE,
                           json={"now": clock[0], "limit": 1}).json() == {"status": "ok", "removed": 1}
-    assert CANARY not in (root / f"{NS}.json").read_text()
+    assert CANARY not in (root / "platform" / NS / f"{REF}.json").read_text()
     assert restarted.post(f"{BASE}/create", headers=WRITE,
                           json={**payload, "expires_at": clock[0] + 30}).status_code == 409
 
@@ -101,9 +101,10 @@ def test_file_bootstrap_create_restart_conflict_expiry_and_purge(monkeypatch, tm
 def test_file_bootstrap_refuses_transient_storage_before_record_io(operation, monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_contract, "persistent_filesystem", lambda root: False)
     calls = []
-    for name in ("_load", "_save"):
+    for name in ("_read", "_tombstone"):
         monkeypatch.setattr(runtime_file.RuntimeFileStore, name,
                             lambda *args: calls.append("record-io"))
+    monkeypatch.setattr(runtime_file.tempfile, "mkstemp", lambda *args, **kwargs: calls.append("record-io"))
     _, client, _ = _load("file", monkeypatch, tmp_path)
     if operation == "qualification":
         response = client.get(f"{BASE}/qualification", headers={**READ, **WRITE})

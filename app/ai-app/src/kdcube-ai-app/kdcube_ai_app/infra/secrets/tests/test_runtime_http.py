@@ -68,7 +68,7 @@ def test_authorized_create_conflict_restart_expiry_and_tombstone(rig):
     assert restarted.post(f"{BASE}/purge", headers=WRITE,
                           json={"now": clock[0], "limit": 1}).json() == {"status": "ok", "removed": 1}
     assert create(restarted, clock[0] + 60).status_code == 409
-    assert CANARY not in (root / "custody.json").read_text()
+    assert CANARY not in (root / "platform" / "custody" / f"{REF}.json").read_text()
 
 
 @pytest.mark.parametrize("headers", [{}, READ, {"X-KDCUBE-ADMIN-TOKEN": "unknown"},
@@ -234,7 +234,7 @@ async def test_sdk_service_manager_uses_scoped_expiry_api_end_to_end(rig, monkey
     assert await adapter.purge_expired_ephemeral_secrets(namespace="custody", now=clock[0], limit=1) == 1
     assert not await adapter.create_ephemeral_secret(namespace="custody", secret_ref=REF,
                                                      value="synthetic-rival", expires_at=clock[0] + 60)
-    assert CANARY not in (root / "custody.json").read_text()
+    assert CANARY not in (root / "platform" / "custody" / f"{REF}.json").read_text()
 
 
 @pytest.mark.asyncio
