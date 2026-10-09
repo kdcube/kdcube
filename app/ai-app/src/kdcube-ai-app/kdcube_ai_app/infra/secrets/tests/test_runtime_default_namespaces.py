@@ -1,7 +1,8 @@
-"""W673: the SDK enrolls the platform's own runtime purposes only when secrets.runtime is absent.
+"""W673: the SDK and the CLI enroll the same runtime purposes for every secrets.runtime shape.
 
-The whole section decides, exactly as the CLI projection does (kdcube_cli.host_vault): a declared section
-wins whole, so a root-only or empty one enrolls nothing (Infra review, 2026-10-09).
+Main (2026-10-09): omitted namespaces enroll the 3 defaults in BOTH; an explicit [] enrolls none in both.
+Infra's review found the two disagreeing for a declared section; these tests pin them equal at the real
+consumer boundaries (SDK Settings, CLI compose projection).
 """
 from __future__ import annotations
 
@@ -24,9 +25,9 @@ def test_the_defaults_are_valid_and_never_users():
 
 @pytest.mark.parametrize("section,expected", [
     (None, DEFAULT_RUNTIME_NAMESPACES),
-    ({}, ()),
-    ({"root": "/config/secrets"}, ()),
-    ({"namespaces": None}, ()),
+    ({}, DEFAULT_RUNTIME_NAMESPACES),
+    ({"root": "/config/secrets"}, DEFAULT_RUNTIME_NAMESPACES),
+    ({"namespaces": None}, DEFAULT_RUNTIME_NAMESPACES),
     ({"namespaces": []}, ()),
     ({"namespaces": ["custody"]}, ("custody",)),
     ([], ()), ("runtime", ()), (True, ()),
@@ -36,17 +37,18 @@ def test_the_whole_section_decides(section, expected):
 
 
 RUNTIME_SECTIONS = {
-    "absent": None,
-    "empty section": {},
-    "root only": {"root": "/config/secrets"},
-    "explicit empty": {"namespaces": []},
-    "explicit list": {"namespaces": ["custody"]},
+    "absent": (None, True),
+    "empty section": ({}, True),
+    "root only": ({"root": "/config/secrets"}, True),
+    "null namespaces": ({"namespaces": None}, True),
+    "explicit empty": ({"namespaces": []}, False),
+    "explicit list": ({"namespaces": ["custody"]}, False),
 }
 
 
 @pytest.mark.parametrize("name", sorted(RUNTIME_SECTIONS))
 def test_settings_and_the_cli_projection_enroll_the_same(monkeypatch, tmp_path, name):
-    section = RUNTIME_SECTIONS[name]
+    section, defaults = RUNTIME_SECTIONS[name]
     secrets = {"provider": "secrets-file"}
     if section is not None:
         secrets["runtime"] = section
@@ -56,4 +58,6 @@ def test_settings_and_the_cli_projection_enroll_the_same(monkeypatch, tmp_path, 
     settings = sdk_config.Settings()
     projected = compose_environment(config_from_assembly({"secrets": secrets}))
     assert settings.SECRETS_RUNTIME_NAMESPACES == tuple(json.loads(projected["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]))
-    assert (settings.SECRETS_RUNTIME_NAMESPACES == DEFAULT_RUNTIME_NAMESPACES) is (section is None)
+    assert (settings.SECRETS_RUNTIME_NAMESPACES == DEFAULT_RUNTIME_NAMESPACES) is defaults
+    # The per-run own-credential grant goes with defaulted namespaces when no policy is declared.
+    assert projected["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ("1" if defaults else "")
