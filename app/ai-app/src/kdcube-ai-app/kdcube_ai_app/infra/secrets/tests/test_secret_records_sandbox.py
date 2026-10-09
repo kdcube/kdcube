@@ -62,3 +62,34 @@ def test_isolated_execution_receives_the_folder_records_with_the_yaml_copies_sco
     assert asyncio.run(sandbox.get_secret(_app_key())) == "synthetic-app"
     assert asyncio.run(sandbox.get_secret(_key(key="token"))) == "synthetic-user"
     assert not any("synthetic-" in str(entry) for entry in logged)
+
+
+def test_the_real_factory_with_an_explicit_host_root_feeds_the_payload(tmp_path, monkeypatch):
+    """Infra review of d3bf9bbd: the producer must use the host's configured manager (its settings and an
+    explicit secrets.runtime.root elsewhere than <descriptor-dir>/secrets), through the real factory."""
+    import base64
+    from types import SimpleNamespace
+
+    from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+    from kdcube_ai_app.infra.config import platform_env
+    from kdcube_ai_app.infra.secrets import manager as manager_module
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "secrets.yaml").write_text("platform: {}\n")
+    (config_dir / "bundles.secrets.yaml").write_text("bundles: {version: '1', items: []}\n")
+    explicit_root = tmp_path / "elsewhere" / "runtime-secrets"
+    explicit_root.parent.mkdir()
+    store = UserSecretFileStore(root=explicit_root)
+    store.set_app(bundle_id=HUB, key="google.client_secret", value="synthetic-explicit-root-app")
+    settings = SimpleNamespace(
+        SECRETS_PROVIDER="secrets-file", GATEWAY_COMPONENT="proc", TENANT="t", PROJECT="p",
+        GLOBAL_SECRETS_YAML=(config_dir / "secrets.yaml").as_uri(),
+        BUNDLE_SECRETS_YAML=(config_dir / "bundles.secrets.yaml").as_uri(),
+        SECRETS_RUNTIME_ROOT=str(explicit_root), SECRETS_RUNTIME_NAMESPACES=())
+    monkeypatch.setattr(sdk_config, "get_settings", lambda: settings)
+    monkeypatch.setattr(manager_module, "_manager_cache", None, raising=False)
+    exported = {"KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64": "x"}
+    raw = platform_env._secret_records_payload(exported, bundle_id=None, descriptor_payload_scope=None)
+    assert raw is not None, "the explicit host root was not used"
+    assert json.loads(base64.b64decode(raw))["records"] == {_app_key(): "synthetic-explicit-root-app"}
