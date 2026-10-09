@@ -45,7 +45,10 @@ BEARER = {"Authorization": "Bearer reader"}
 def _session(monkeypatch, redis, grant_record):
     """One delivered session through the real managed MCP guard at the granted resource. The route answers the
     runtime projection and the grant record the guard resolved for this call."""
-    client = _client(monkeypatch, grant_record=grant_record, redis=redis)
+    return _session_over(_client(monkeypatch, grant_record=grant_record, redis=redis))
+
+
+def _session_over(client):
     client.app.router.routes[:] = [r for r in client.app.router.routes if getattr(r, "path", "") != "/guard"]
 
     @client.app.post("/guard")
@@ -417,3 +420,31 @@ def test_a_live_card_without_a_role_keeps_the_grantors_non_privileged_tier(monke
                                                  "grantor_permissions": ["records:read"]}}
     client = _session(monkeypatch, redis, record)
     assert _projection(client)["projection"]["roles"] == ["kdcube:role:paid"]
+
+
+def test_the_tokens_own_admin_role_does_not_restore_privilege_once_the_card_drops_it(monkeypatch):
+    """Main's return on fd76b487: the grantor consent named only ADMIN and the delegated access token itself carries
+    ADMIN; after the live Card drops ADMIN the same session projects no privileged role or permission from either
+    source, is not PRIVILEGED, and the admin entrance refuses it."""
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surface import _roles_user_type
+    from kdcube_ai_app.auth.sessions import UserType
+
+    redis = _Redis()
+    _put(redis, _live_card(resource_grants={GUARD_RESOURCE: (ADMIN, "records:read")}))
+    record = {**_stored(), "grantor_authority": {"grantor_roles": [ADMIN], "grantor_permissions": ["kdcube:*"]}}
+    client = _client(monkeypatch, grant_record=record, redis=redis, user={
+        "sub": "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d", "roles": [ADMIN],
+        "permissions": [ADMIN, "kdcube:*"]})
+    client = _session_over(client)
+    assert _roles_user_type(_projection(client)["projection"]["roles"]) == UserType.PRIVILEGED
+    _put(redis, _live_card(resource_grants={GUARD_RESOURCE: ("records:read",)}))
+    after = _projection(client)["projection"]
+    assert ADMIN not in after["roles"] and ADMIN not in after["permissions"] and "kdcube:*" not in after["permissions"]
+    assert _roles_user_type(after["roles"]) != UserType.PRIVILEGED
+
+    entrance = _Redis()
+    _store_live_card(entrance, _admin_card(grants=(ADMIN, "records:read")))
+    admin = _admin_session(monkeypatch, entrance)  # its token already carries ADMIN as a permission
+    assert _entered(admin)
+    _store_live_card(entrance, _admin_card(grants=("records:read",)))
+    assert not _entered(admin)

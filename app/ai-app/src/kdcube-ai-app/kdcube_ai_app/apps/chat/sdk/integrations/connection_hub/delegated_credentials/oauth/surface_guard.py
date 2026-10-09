@@ -892,7 +892,10 @@ def _delegated_runtime_projection(
         role for role in consent_roles
         if authority_has_platform_privilege((role,)) or role in PRIVILEGED_ROLES
     )
-    if privileged_consent and str(grant_record.get("registry_access_id") or "").strip():
+    live_privileged_consent = bool(
+        privileged_consent and str(grant_record.get("registry_access_id") or "").strip()
+    )
+    if live_privileged_consent:
         # A live Card is the authority (W653). A Card that selects no role keeps
         # the grantor's consent-time tier and permissions for endpoint checks
         # (legacy), but a privileged consent is not carried: privilege must be
@@ -901,6 +904,13 @@ def _delegated_runtime_projection(
         consent_roles = tuple(role for role in consent_roles if role not in privileged_consent)
         consent_permissions = ()
     fallback_roles = consent_roles or _as_list(user.get("roles"))
+    if live_privileged_consent:
+        # Whatever the source (consent or the issuance-time token), a privileged
+        # role is projected only when the live Card selects it.
+        fallback_roles = tuple(
+            role for role in fallback_roles
+            if not authority_has_platform_privilege((role,)) and role not in PRIVILEGED_ROLES
+        )
     role_projection = delegated_role_projection(
         grants,
         fallback_roles=fallback_roles,
@@ -913,9 +923,10 @@ def _delegated_runtime_projection(
         permissions = tuple(grants)
     else:
         permissions = (
-            consent_permissions
-            or _as_list(user.get("permissions"))
-            or tuple(grants)
+            # A stripped privileged consent leaves only the live Card's grants:
+            # the issuance-time token's permissions are not a fallback for it.
+            tuple(grants) if live_privileged_consent
+            else consent_permissions or _as_list(user.get("permissions")) or tuple(grants)
         )
     identity_authority.update(
         {
