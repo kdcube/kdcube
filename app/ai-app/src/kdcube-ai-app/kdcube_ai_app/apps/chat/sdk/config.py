@@ -324,6 +324,68 @@ def _set_nested_value(root: dict[str, Any], path: str, value: Any) -> None:
     cursor[parts[-1]] = value
 
 
+_PUBLISH_FAILURE_LOGGED = False
+
+
+def _user_provider_key(user_id: str, bundle_id: str | None, key: str) -> str:
+    tail = str(key or "").strip().strip(".")
+    return (f"users.{user_id}.bundles.{bundle_id}.secrets.{tail}" if bundle_id
+            else f"users.{user_id}.secrets.{tail}")
+
+
+async def _publish_secret_write(
+    *,
+    scope: str,
+    mode: str,
+    bundle_id: str | None,
+    key: str,
+    user_id: str | None = None,
+) -> None:
+    """Tell every process that this secret changed, on the existing bundles.secrets.update channel.
+
+    Operator (2026-10-09): the per-process secret cache must not stay stale on a cloud deployment, and "in
+    proc we have the config changes listener". The SDK write helpers now publish the same event the admin
+    REST paths do (infra.secrets.projections.publish_bundle_secret_update: identifiers only, never a value),
+    so each process's config listener clears exactly that key. The write already succeeded: a missing
+    bundle id, Redis or publish failure never fails it and is logged once, without values.
+    """
+    global _PUBLISH_FAILURE_LOGGED
+    if not bundle_id:
+        return
+    try:
+        from kdcube_ai_app.infra.redis.client import get_async_redis_client
+        from kdcube_ai_app.infra.secrets.projections import (
+            invalidate_bundle_secret_inventory,
+            publish_bundle_secret_update,
+        )
+
+        _bundle_id, tenant, project = _resolve_current_bundle_scope(bundle_id=bundle_id)
+        if not tenant or not project:
+            return
+        redis = get_async_redis_client(get_settings().REDIS_URL)
+        await invalidate_bundle_secret_inventory(
+            redis, tenant=tenant, project=project, bundle_id=bundle_id, user_id=user_id or None,
+        )
+        await publish_bundle_secret_update(
+            redis,
+            tenant=tenant,
+            project=project,
+            bundle_id=bundle_id,
+            scope=scope,
+            mode=mode,
+            keys={key},
+            actor="sdk",
+            user_id=user_id or None,
+        )
+    except Exception:
+        if not _PUBLISH_FAILURE_LOGGED:
+            _PUBLISH_FAILURE_LOGGED = True
+            _SECRET_LOG.warning(
+                "Secret change saved but not broadcast; other processes see it within the cache TTL "
+                "scope=%s bundle=%s", scope, bundle_id,
+            )
+
+
 async def set_user_secret(
     key: str,
     value: str,
@@ -344,6 +406,10 @@ async def set_user_secret(
         value=value,
     )
     clear_secret_cache(user_id=resolved_user_id, bundle_id=resolved_bundle_id, key=key)
+    await _publish_secret_write(
+        scope="user", mode="set", bundle_id=resolved_bundle_id, user_id=resolved_user_id,
+        key=_user_provider_key(resolved_user_id, resolved_bundle_id, key),
+    )
 
 
 async def set_bundle_secret(
@@ -361,6 +427,7 @@ async def set_bundle_secret(
     secret_key = f"bundles.{resolved_bundle_id}.secrets.{tail}"
     await get_secrets_manager(get_settings()).set_secret(secret_key, value)
     clear_secret_cache(bundle_id=resolved_bundle_id, key=secret_key)
+    await _publish_secret_write(scope="bundle", mode="set", bundle_id=resolved_bundle_id, key=secret_key)
 
 
 async def delete_user_secret(
@@ -381,6 +448,10 @@ async def delete_user_secret(
         key=key,
     )
     clear_secret_cache(user_id=resolved_user_id, bundle_id=resolved_bundle_id, key=key)
+    await _publish_secret_write(
+        scope="user", mode="clear", bundle_id=resolved_bundle_id, user_id=resolved_user_id,
+        key=_user_provider_key(resolved_user_id, resolved_bundle_id, key),
+    )
 
 
 async def get_user_prop(
