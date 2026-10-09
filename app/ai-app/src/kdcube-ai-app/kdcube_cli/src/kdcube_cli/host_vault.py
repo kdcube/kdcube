@@ -6,11 +6,16 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 _RUNTIME_NAMESPACE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _CREDENTIAL_DIGEST = re.compile(r"[0-9a-f]{64}")
+# W673: the platform's own runtime-record purposes, enrolled when secrets.runtime is absent. kdcube-cli is a
+# standalone distribution, so this mirrors kdcube_ai_app.infra.secrets.runtime_contract.DEFAULT_RUNTIME_NAMESPACES;
+# a consumer-contract test keeps the two equal.
+DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refresh-tokens")
+RUNTIME_SCOPE_SCHEMA = "kdcube.runtime_secret_scopes.v1"
 
 EPHEMERAL_BACKEND = "ephemeral"
 HOST_VAULT_BACKEND = "host-vault"
@@ -40,6 +45,9 @@ class HostVaultRuntimeConfig:
     runtime_root: str = ""
     runtime_namespaces: tuple[str, ...] = ()
     runtime_scope_policy: str = ""
+    # W673: True when secrets.runtime is absent; the per-run token overlay then grants the default
+    # namespaces to this deployment's own proc reader/writer credentials only (default_runtime_scope_policy).
+    runtime_defaulted: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -114,7 +122,8 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
     # credentials. Consumer-contract tests keep the two boundaries aligned.
     runtime = secrets.get("runtime")
     if runtime is None:
-        return {}
+        # W673: no runtime configuration enrolls the platform's own purposes, granted per run.
+        return {"runtime_namespaces": DEFAULT_RUNTIME_NAMESPACES, "runtime_defaulted": True}
     if not isinstance(runtime, Mapping) or set(runtime) - {"root", "namespaces", "scope_policy"}:
         raise HostVaultConfigurationError("secrets.runtime must contain only root, namespaces and scope_policy")
     root = runtime.get("root", "")
@@ -127,7 +136,10 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
             or root != root.strip() or any(value in root for value in ("\n", "\r", "\0", "$"))
             or ".." in Path(root).parts))):
         raise HostVaultConfigurationError("secrets.runtime.root must be a dedicated absolute path")
-    namespaces = runtime.get("namespaces", [])
+    # W673 (Main, 2026-10-09): omitted (or null) namespaces enroll the platform's own purposes, as the SDK
+    # does (runtime_contract.runtime_section_namespaces); an explicit list, [] included, is exact.
+    namespaces_defaulted = runtime.get("namespaces") is None
+    namespaces = list(DEFAULT_RUNTIME_NAMESPACES) if namespaces_defaulted else runtime.get("namespaces")
     if (type(namespaces) is not list or len(namespaces) > 64
             or any(type(value) is not str or _RUNTIME_NAMESPACE.fullmatch(value) is None
                    for value in namespaces)
@@ -142,8 +154,11 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
         policy = runtime["scope_policy"]
         if not _valid_runtime_policy(policy, namespaces=namespaces, encoded=raw_policy):
             raise HostVaultConfigurationError("secrets.runtime.scope_policy must grant only declared namespaces")
+    # The per-run own-credential grant applies only to defaulted namespaces without a declared policy;
+    # declared namespaces without a policy stay closed, and a declared policy is projected as it is.
     return {"runtime_root": root, "runtime_namespaces": tuple(namespaces),
-            "runtime_scope_policy": raw_policy}
+            "runtime_scope_policy": raw_policy,
+            "runtime_defaulted": namespaces_defaulted and "scope_policy" not in runtime}
 
 
 def _valid_runtime_policy(policy: object, *, namespaces: list[str], encoded: str) -> bool:
@@ -270,6 +285,7 @@ def compose_environment(config: HostVaultRuntimeConfig) -> dict[str, str]:
         "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": config.runtime_root,
         "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(config.runtime_namespaces), separators=(",", ":")),
         "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": config.runtime_scope_policy,
+        "KDCUBE_SECRETS_RUNTIME_DEFAULTED": "1" if config.runtime_defaulted else "",
     }
     if not config.enabled:
         return values
@@ -286,6 +302,39 @@ def compose_environment(config: HostVaultRuntimeConfig) -> dict[str, str]:
         }
     )
     return values
+
+
+CONTAINER_CONFIG_DIR = PurePosixPath("/config")
+DEFAULT_CONTAINER_RUNTIME_ROOT = CONTAINER_CONFIG_DIR / "secrets"
+
+
+def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_dir: str | Path) -> dict[str, str]:
+    """W670 K2: the runtime-secrets folder for Compose, on every provider.
+
+    Operator, 2026-10-09: the folder lives "in config folder. make the folder secrets". The container root is
+    ``secrets.runtime.root`` or, when absent, ``/config/secrets``; it must lie inside the container config
+    folder ``/config``. The host root is the matching folder under the host config folder (the descriptor's
+    location), never the container path. Processors already mount ``/config``; only the secrets service
+    binds the host root, at the container root.
+    """
+    runtime = _runtime_configuration(_mapping(assembly.get("secrets")))
+    container_root = PurePosixPath(str(runtime.get("runtime_root") or DEFAULT_CONTAINER_RUNTIME_ROOT))
+    try:
+        relative = container_root.relative_to(CONTAINER_CONFIG_DIR)
+    except ValueError:
+        relative = None
+    if relative is None or not relative.parts:
+        raise HostVaultConfigurationError("secrets.runtime.root must be a folder inside the config folder /config")
+    host_config = Path(host_config_dir).expanduser()
+    if not host_config.is_absolute():
+        raise HostVaultConfigurationError("the host config folder must be an absolute path")
+    return {
+        "KDCUBE_SECRETS_RUNTIME_ROOT": str(container_root),
+        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": str(host_config.joinpath(*relative.parts)),
+        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(runtime.get("runtime_namespaces") or ()),
+                                                        separators=(",", ":")),
+        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": str(runtime.get("runtime_scope_policy") or ""),
+    }
 
 
 def validate_assembly_for_start(
@@ -317,3 +366,22 @@ __all__ = [
     "validate_assembly_for_start",
     "validate_configuration",
 ]
+
+
+def default_runtime_scope_policy(*, read_token: str, write_token: str, namespaces: tuple[str, ...]) -> str:
+    """W673: the scope policy for a deployment without secrets.runtime (Infra contract, 2026-10-09).
+
+    Exactly the given namespaces, read for this deployment's own proc read credential and write for its own
+    writer credential, each identified by SHA-256 only. No wildcard, no other credential (ingress gets
+    nothing). An empty or unusable token or namespace list grants nothing.
+    """
+    if (type(read_token) is not str or not read_token or type(write_token) is not str or not write_token
+            or not namespaces or any(type(value) is not str or _RUNTIME_NAMESPACE.fullmatch(value) is None
+                                     for value in namespaces)):
+        return ""
+    import hashlib
+    granted = list(namespaces)
+    policy = {"schema": RUNTIME_SCOPE_SCHEMA,
+              "read": {hashlib.sha256(read_token.encode("utf-8")).hexdigest(): granted},
+              "write": {hashlib.sha256(write_token.encode("utf-8")).hexdigest(): granted}}
+    return json.dumps(policy, sort_keys=True, separators=(",", ":"))

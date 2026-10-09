@@ -62,10 +62,18 @@ services:
       - KDCUBE_HOST_VAULT_SERVER_NAME=${KDCUBE_HOST_VAULT_SERVER_NAME:-}
       - KDCUBE_SECRETS_TENANT=${KDCUBE_SECRETS_TENANT:-}
       - KDCUBE_SECRETS_PROJECT=${KDCUBE_SECRETS_PROJECT:-}
+      - KDCUBE_SECRETS_RUNTIME_ROOT=${KDCUBE_SECRETS_RUNTIME_ROOT:-}
+      - KDCUBE_SECRETS_RUNTIME_NAMESPACES=${KDCUBE_SECRETS_RUNTIME_NAMESPACES:-}
+      - KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY=${KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY:-}
     restart: unless-stopped
     tmpfs:
       - /run/kdcube-secrets
     volumes:
+      - type: bind
+        source: ${HOST_KDCUBE_RUNTIME_SECRETS_ROOT:-/dev/null}
+        target: ${KDCUBE_SECRETS_RUNTIME_ROOT:-/run/kdcube-runtime-secrets}
+        bind:
+          create_host_path: false
       - type: bind
         source: ${HOST_KDCUBE_HOST_VAULT_CLIENT_CERT_PATH:-/dev/null}
         target: /run/kdcube-host-vault-identity/host-vault-client.crt

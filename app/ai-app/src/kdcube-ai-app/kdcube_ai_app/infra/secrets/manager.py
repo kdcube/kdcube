@@ -1839,9 +1839,12 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
             owner = _runtime_owner_segment(bundle_id, "/")
         except SecretsManagerError:
             return False
-        # A signed, read-only provider request checks actual availability and
-        # authentication. Per-operation IAM remains authoritative; deployment
-        # qualification must additionally demonstrate its denied-reader case.
+        # Qualification here is the host's explicit namespace enrollment plus a
+        # signed, read-only request proving AWS is reachable and authenticates
+        # this principal. It is not proof of expiry-aware reads, a
+        # replacement-safe purge or IAM namespace isolation; expired records are
+        # kept until an operator removes them. Per-operation IAM stays
+        # authoritative.
         try:
             async with self._client_cm() as client:
                 result = await client.list_secrets(
@@ -1850,10 +1853,7 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
                 )
             if not isinstance(result, Mapping) or not isinstance(result.get("SecretList"), list):
                 raise SecretsManagerError("Runtime secret qualification is unavailable")
-            # Availability alone cannot establish expiry-aware reads, a
-            # replacement-safe purge or IAM namespace isolation. This lane is
-            # unqualified until those implementations and scope proofs exist.
-            return False
+            return True
         except Exception as exc:
             if self._error_code(exc) in {"AccessDenied", "AccessDeniedException", "UnauthorizedException"}:
                 return False

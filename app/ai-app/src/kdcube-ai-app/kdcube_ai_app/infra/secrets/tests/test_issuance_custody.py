@@ -315,9 +315,9 @@ def test_existing_ephemeral_factory_defaults_remain_compatible():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("enrolled", [False, True], ids=["default-closed", "enrolled-available"])
+@pytest.mark.parametrize("enrolled", [False], ids=["default-closed"])
 async def test_aws_adapter_repeated_create_refuses_without_storage_mutation(monkeypatch, enrolled):
-    """Direct unqualified AWS protocol fake; availability is not custody qualification."""
+    """Without namespace enrollment the AWS lane does not qualify and nothing is sent."""
     monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 10))
     manager = AwsSecretsManagerSecretsManager(SecretsManagerConfig(
         provider="aws-sm", component="ingress", aws_sm_prefix="synthetic/issuance",
@@ -336,9 +336,9 @@ async def test_aws_adapter_repeated_create_refuses_without_storage_mutation(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("enrolled", [False, True], ids=["default-closed", "enrolled-available"])
+@pytest.mark.parametrize("enrolled", [False], ids=["default-closed"])
 async def test_aws_adapter_concurrent_creates_refuse_without_storage_mutation(monkeypatch, enrolled):
-    """Direct unqualified AWS protocol fake; concurrent refusal is not AWS/IAM proof."""
+    """Without namespace enrollment concurrent creates refuse and nothing is sent."""
     monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 10))
     manager = AwsSecretsManagerSecretsManager(SecretsManagerConfig(
         provider="aws-sm", component="ingress", aws_sm_prefix="synthetic/issuance",
@@ -356,6 +356,64 @@ async def test_aws_adapter_concurrent_creates_refuse_without_storage_mutation(mo
     assert len(client.list_calls) == (2 if enrolled else 0)
     assert client.create_calls == [] and client.delete_calls == []
     assert client.data == {} and client.tags == {} and client.version_tokens == {}
+
+
+def _stored_bearers(client):
+    return [json.loads(value)["bearer"] for value in client.data.values()]
+
+
+def _enrolled_aws_custody(monkeypatch):
+    monkeypatch.setattr(issuance_module, "time", SimpleNamespace(time=lambda: 10))
+    manager = AwsSecretsManagerSecretsManager(SecretsManagerConfig(
+        provider="aws-sm", component="ingress", aws_sm_prefix="synthetic/issuance",
+        runtime_secret_namespaces=(NAMESPACE,),
+    ))
+    client = _FakeAwsSecretsClient()
+    manager._session = _FakeAwsSession(client)
+    return issuance_secret_custody(namespace=NAMESPACE, manager=manager), client
+
+
+@pytest.mark.asyncio
+async def test_enrolled_aws_custody_stores_one_record_and_an_identical_replay_reuses_it(monkeypatch):
+    """An enrolled, reachable AWS namespace qualifies (enrollment plus availability, not IAM proof).
+
+    The create sends the reference as AWS's ClientRequestToken, so an identical replay is AWS's
+    idempotent answer for the same version: it reports created again without writing a second value.
+    The issuers' durable reservation and digest comparison decide ownership above this layer.
+    """
+    store, client = _enrolled_aws_custody(monkeypatch)
+    assert await store.create(secret_ref=REF, value=CANARY, expires_at=30) is True
+    assert await store.create(secret_ref=REF, value=CANARY, expires_at=30) is True
+    assert [call["ClientRequestToken"] for call in client.create_calls] == [REF, REF]
+    assert _stored_bearers(client) == [CANARY]
+    assert await store.get(secret_ref=REF) == CANARY
+
+
+@pytest.mark.asyncio
+async def test_enrolled_aws_custody_never_replaces_a_record_with_a_different_value(monkeypatch):
+    store, client = _enrolled_aws_custody(monkeypatch)
+    assert await store.create(secret_ref=REF, value=CANARY, expires_at=30) is True
+    with pytest.raises(SessionIssuanceRefused, match="^issuance_custody_unavailable$") as refused:
+        await store.create(secret_ref=REF, value=CANARY + "-different", expires_at=30)
+    assert CANARY not in "".join(traceback.format_exception(refused.value))
+    assert _stored_bearers(client) == [CANARY]
+    assert await store.get(secret_ref=REF) == CANARY
+
+
+@pytest.mark.asyncio
+async def test_enrolled_aws_concurrent_different_creates_keep_exactly_one_value(monkeypatch):
+    store, client = _enrolled_aws_custody(monkeypatch)
+    values = [CANARY, CANARY + "-different"]
+    results = await asyncio.gather(*[
+        store.create(secret_ref=REF, value=value, expires_at=30) for value in values
+    ], return_exceptions=True)
+    winners = [value for value, result in zip(values, results) if result is True]
+    losers = [result for result in results if result is not True]
+    assert len(winners) == 1
+    assert [type(result) for result in losers] == [SessionIssuanceRefused]
+    assert losers[0].reason == "issuance_custody_unavailable"
+    assert _stored_bearers(client) == winners
+    assert await store.get(secret_ref=REF) == winners[0]
 
 
 def _http_custody():

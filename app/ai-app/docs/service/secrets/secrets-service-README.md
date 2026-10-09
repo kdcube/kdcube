@@ -118,7 +118,22 @@ purge and scope authorization. Its authenticated qualification endpoint is
 `/runtime-secrets/{namespace}/qualification`. Host-owned policy grants exact
 namespaces to read and write credential hashes; neither a namespace supplied
 in a request nor a shared application token is itself a grant. Malformed or
-missing policy denies access. The AWS lane currently returns unqualified.
+missing policy denies access.
+
+The direct `aws-sm` manager stores a runtime record as the AWS secret
+`<prefix>/runtime/<owner>/<namespace>/<ref>` when the caller names an owner
+bundle, and `<prefix>/runtime/<namespace>/<ref>` for a bundle-less caller. It
+qualifies a namespace on a narrower basis. The host must enroll the namespace
+in `secrets.runtime.namespaces`, and one signed, read-only `ListSecrets` call
+under that same prefix (`<prefix>/runtime/<owner>/<namespace>/` or
+`<prefix>/runtime/<namespace>/`) must succeed. An invalid owner bundle does
+not qualify and sends no request. An access denial does not qualify, and any
+other failure or malformed answer is reported as unavailable. This shows that the namespace is enrolled
+and that AWS is reachable and authenticates the principal. It does not show
+expiry-enforced reads, a replacement-safe purge or IAM isolation between
+namespaces. Expired records stay in AWS until an operator removes them,
+and the issuance layer still refuses an expired envelope on read. With no
+namespaces enrolled, every runtime operation is refused.
 The host must still verify real replacement persistence and second-identity
 denial: unit fixtures and configured labels are not deployment evidence.
 
