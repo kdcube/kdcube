@@ -41,10 +41,13 @@ from kdcube_ai_app.infra.secrets import get_secrets_manager
 from kdcube_ai_app.apps.chat.sdk.config_cache import (
     clear_config_cache,
     clear_secret_cache,
+    drop_secret_cache,
+    file_fingerprint,
     get_plain_cache,
     get_secret_cache,
     set_secret_cache,
 )
+from kdcube_ai_app.infra.secrets.manager import build_user_secret_key
 from kdcube_ai_app.apps.chat.sdk.util import LINE_NUMBERS_LINES, normalize_line_numbers_mode
 
 _SECRET_LOG = logging.getLogger("kdcube.settings.secrets")
@@ -83,14 +86,42 @@ def _settings_secret_scope(settings: Any) -> tuple[str, str]:
     )
 
 
+async def _file_validated_secret(manager: Any, cache_key: tuple[str, ...], provider_key: str, read) -> tuple[bool, str | None]:
+    """W670 (operator: "i am also worried about cache and how its populated"): a file-backed secret is cached
+    with its source file's fingerprint and re-read the moment that file changes; a miss is never cached.
+    Returns (handled, value); unhandled callers keep the time-bounded cache."""
+    source = getattr(manager, "secret_source", None)
+    path = source(provider_key) if callable(source) else None
+    if path is None:
+        return False, None
+    before = file_fingerprint(path)
+    if before is not None:
+        hit, value = get_secret_cache(cache_key, fingerprint=before)
+        if hit:
+            return True, value
+    try:
+        value = await read()
+    except Exception:
+        value = None
+    if before is None or value is None or file_fingerprint(path) != before:
+        drop_secret_cache(cache_key)  # absent, a miss, or changed while reading: never cached
+        return True, value or None
+    return True, set_secret_cache(cache_key, value, fingerprint=before)
+
+
 async def _get_provider_secret_cached(settings: Any, provider_key: str) -> str | None:
     tenant, project = _settings_secret_scope(settings)
     cache_key = ("provider", tenant, project, provider_key)
+    manager = get_secrets_manager(settings)
+    handled, value = await _file_validated_secret(
+        manager, cache_key, provider_key, lambda: manager.get_secret(provider_key))
+    if handled:
+        return value
     hit, value = get_secret_cache(cache_key)
     if hit:
         return value
     try:
-        value = await get_secrets_manager(settings).get_secret(provider_key)
+        value = await manager.get_secret(provider_key)
     except Exception:
         value = None
     return set_secret_cache(cache_key, value)
@@ -105,15 +136,24 @@ async def _get_user_secret_cached(
 ) -> str | None:
     tenant, project = _settings_secret_scope(settings)
     cache_key = ("user", tenant, project, user_id, str(bundle_id or "").strip(), key)
+    manager = get_secrets_manager(settings)
+
+    def read():
+        return manager.get_user_secret(user_id=user_id, bundle_id=bundle_id, key=key)
+
+    try:
+        provider_key = build_user_secret_key(user_id=user_id, key=key, bundle_id=bundle_id)
+    except Exception:
+        provider_key = None
+    if provider_key is not None:
+        handled, value = await _file_validated_secret(manager, cache_key, provider_key, read)
+        if handled:
+            return value
     hit, value = get_secret_cache(cache_key)
     if hit:
         return value
     try:
-        value = await get_secrets_manager(settings).get_user_secret(
-            user_id=user_id,
-            bundle_id=bundle_id,
-            key=key,
-        )
+        value = await read()
     except Exception:
         value = None
     return set_secret_cache(cache_key, value)

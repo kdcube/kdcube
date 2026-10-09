@@ -925,6 +925,12 @@ async def test_secrets_file_manager_reads_global_and_bundle_yaml(tmp_path, monke
             BUNDLE_SECRETS_YAML=bundle_file.resolve().as_uri(),
         )
     )
+    # W670 (operator: "the stuff stored in bundles.secrets.yaml is now read from folders"): app secrets are
+    # read from <root>/<bundle>/<key>.json once the one-time migration has moved them.
+    counts = await manager.migrate_user_secrets()
+    assert counts["app_found"] == 1 and counts["bundle_items_kept"] == 1
+    assert "tg-secret" not in bundle_file.read_text(encoding="utf-8")
+    assert "kdcube.copilot@2026-04-03-19-05" in bundle_file.read_text(encoding="utf-8")
 
     assert await manager.get_secret("platform.services.openai.api_key") == "sk-global"
     assert await manager.get_secret("platform.services.anthropic.claude_code_key") == "sk-claude-code"
@@ -986,13 +992,13 @@ async def test_secrets_file_manager_writes_global_and_bundle_yaml(tmp_path, monk
     ]
 
     assert "sk-new" in global_file.read_text(encoding="utf-8")
-    bundle_text = bundle_file.read_text(encoding="utf-8")
-    assert "kdcube.copilot@2026-04-03-19-05" in bundle_text
-    assert "tg-secret" in bundle_text
-    assert "docs-secret" in bundle_text
+    # W670: app secrets are one private file each under the bundle folder, never in bundles.secrets.yaml.
+    assert not bundle_file.exists()
+    record = tmp_path / "secrets" / "kdcube.copilot@2026-04-03-19-05" / "telegram.webhook_secret.json"
+    assert json.loads(record.read_text(encoding="utf-8")) == {"value": "tg-secret"}
     if os.name == "posix":
         assert global_file.stat().st_mode & 0o777 == 0o600
-        assert bundle_file.stat().st_mode & 0o777 == 0o600
+        assert record.stat().st_mode & 0o777 == 0o600
 
     await manager.delete_secret("platform.services.openai.api_key")
     await manager.delete_many(
@@ -1101,11 +1107,11 @@ async def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_pat
         )
         == "sk-user"
     )
-    text = global_file.read_text(encoding="utf-8")
-    assert "users:" in text
-    assert "user-1:" in text
-    assert "rms@06-04-26-156" in text
-    assert "sk-user" in text
+    # W670 (operator: "step 2 should not stay in secrets.yaml. it should be also in folder"): the value is
+    # one private file under its bundle, beside (never in) the descriptor yaml.
+    assert not global_file.exists() or "sk-user" not in global_file.read_text(encoding="utf-8")
+    record = tmp_path / "secrets" / "rms@06-04-26-156" / "users" / "user-1" / "anthropic.api_key.json"
+    assert json.loads(record.read_text(encoding="utf-8")) == {"value": "sk-user"}
     assert await manager.list_user_secret_keys(
         user_id="user-1",
         bundle_id="rms@06-04-26-156",
@@ -1116,7 +1122,8 @@ async def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_pat
         bundle_id="rms@06-04-26-156",
     )
     await manager.set_secret(metadata_key, '["users.user-1.stale"]')
-    assert metadata_key not in global_file.read_text(encoding="utf-8")
+    assert not global_file.exists() or metadata_key not in global_file.read_text(encoding="utf-8")
+    assert await manager.list_user_secret_keys(user_id="user-1", bundle_id="rms@06-04-26-156") == [expected_key]
 
     await manager.delete_user_secret(
         user_id="user-1",
@@ -1542,6 +1549,8 @@ async def test_secrets_file_refuses_all_ephemeral_secret_operations(tmp_path):
             limit=100,
         ),
     )
+    # W670: the runtime root defaults beside the secrets yaml, so the refusal is now the missing namespace
+    # enrollment; runtime values still never enter the tracked descriptors.
     for call in calls:
-        with pytest.raises(SecretsManagerWriteError, match="tracked descriptors"):
+        with pytest.raises(SecretsManagerWriteError, match="runtime_secret_scope_forbidden"):
             await call

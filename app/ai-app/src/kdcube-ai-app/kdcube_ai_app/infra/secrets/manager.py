@@ -938,6 +938,39 @@ def _find_bundle_item(items: list[dict[str, Any]], bundle_id: str) -> dict[str, 
     return None
 
 
+def resolve_runtime_secrets_root(
+    runtime_secrets_root: str | None,
+    *,
+    global_secrets_yaml: str | None = None,
+    bundle_secrets_yaml: str | None = None,
+) -> str | None:
+    """The secrets-file root for runtime records and per-user secrets (W670).
+
+    An explicit ``secrets.runtime.root`` wins. Otherwise the root is ``<folder of the secrets yaml>/secrets``
+    (the global yaml first, then the bundle yaml), when that yaml is a local file. A remote or absent yaml
+    gives ``None``. The root itself is created and checked (0700, owner, no symlink) on use.
+    """
+    explicit = _first_non_empty(runtime_secrets_root)
+    if explicit:
+        return explicit
+    for uri in (global_secrets_yaml, bundle_secrets_yaml):
+        raw = _first_non_empty(uri)
+        if not raw:
+            continue
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"", "file"}:
+            continue
+        path = local_file_uri_path(raw) if parsed.scheme == "file" else raw
+        return str(Path(path).expanduser().resolve().parent / "secrets")
+    return None
+
+
+def _is_user_secret_key(key: str) -> bool:
+    """Per-user and app (bundle) secret keys: the secrets-file provider keeps them in the folder (W670)."""
+    return (key in (USER_SECRET_INVENTORY_KEY, BUNDLE_SECRET_INVENTORY_KEY) or key.startswith("users.")
+            or _split_bundle_secret_key(key) is not None)
+
+
 class SecretsFileSecretsManager(ISecretsManager):
     provider_type = "secrets-file"
     _LOCK_TTL_SECONDS = 30
@@ -962,9 +995,14 @@ class SecretsFileSecretsManager(ISecretsManager):
         self._lock = threading.RLock()
         self._redis = None
 
-        # Runtime records are not descriptor values. The trusted host must
-        # supply a dedicated persistent root and authorize exact namespaces.
-        self._runtime_secrets_root = config.runtime_secrets_root
+        # Runtime records and per-user secrets are not descriptor values. They live
+        # under a dedicated persistent root: the configured one, else the default
+        # <folder of the secrets yaml>/secrets. Runtime namespaces stay exact grants.
+        self._runtime_secrets_root = resolve_runtime_secrets_root(
+            config.runtime_secrets_root,
+            global_secrets_yaml=self._global_uri,
+            bundle_secrets_yaml=self._bundle_uri,
+        )
         self._runtime_secret_namespaces = config.runtime_secret_namespaces
 
     def _load_current_data(self) -> dict[str, str]:
@@ -1038,6 +1076,8 @@ class SecretsFileSecretsManager(ISecretsManager):
 
     async def get_secret(self, key: str) -> Optional[str]:
         key = validate_secret_provider_key(key)
+        if _is_user_secret_key(key):
+            return await asyncio.to_thread(self._read_user_secret, key)
 
         def read_value() -> Optional[str]:
             with self._lock:
@@ -1047,6 +1087,79 @@ class SecretsFileSecretsManager(ISecretsManager):
 
     def can_write(self) -> bool:
         return True
+
+    def _user_store(self):
+        """Per-user and app secrets: <root>/<bundle>/users/<user>/<key>.json and <root>/<bundle>/<key>.json,
+        never the descriptor yaml (W670; operator: "the persons secrets and the stuff stored in
+        bundles.secrets.yaml is now read from folders")."""
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileStore
+
+        if not self._runtime_secrets_root:
+            raise SecretsManagerWriteError("user_secret_storage_unavailable")
+        runtime_root = Path(self._runtime_secrets_root).resolve()
+        for uri in (self._global_uri, self._bundle_uri):
+            parsed = urlparse(uri or "")
+            if parsed.scheme == "file" and runtime_root == Path(parsed.path).resolve().parent:
+                raise SecretsManagerWriteError("runtime_secret_storage_must_be_separate")
+        return UserSecretFileStore(root=self._runtime_secrets_root)
+
+    def _user_secret_call(self, operation: str, key: str, value: str | None = None):
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileError
+
+        try:
+            store = self._user_store()
+            if key == USER_SECRET_INVENTORY_KEY:
+                return store.list_keys()
+            if key == BUNDLE_SECRET_INVENTORY_KEY:
+                return store.list_app_keys()
+            bundle_match = _split_bundle_secret_key(key)
+            if bundle_match is not None:
+                bundle_id, tail = bundle_match
+                if tail == "__keys":
+                    return store.list_app_keys(bundle_id=bundle_id)
+                if operation == "set":
+                    return store.set_app(bundle_id=bundle_id, key=tail, value=value)
+                return getattr(store, f"{operation}_app")(bundle_id=bundle_id, key=tail)
+            user_id, bundle_id, tail = _split_user_secret_key(key)
+            if tail == "__keys":
+                return store.list_keys(user_id=user_id, bundle_id=bundle_id)
+            call = getattr(store, operation)
+            if operation == "set":
+                return call(user_id=user_id, bundle_id=bundle_id, key=tail, value=value)
+            return call(user_id=user_id, bundle_id=bundle_id, key=tail)
+        except UserSecretFileError as exc:
+            raise SecretsManagerWriteError(str(exc)) from None
+
+    def secret_source(self, key: str) -> Path | None:
+        """The exact file a key's value is read from, for a file-validated cache (W670); None when the value
+        is not file-backed here (inventories, a remote yaml): such callers keep their time-bounded cache."""
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileError
+
+        try:
+            key = validate_secret_provider_key(key)
+            if _secret_inventory_prefix(key) is not None or key in (USER_SECRET_INVENTORY_KEY,
+                                                                     BUNDLE_SECRET_INVENTORY_KEY):
+                return None
+            if _is_user_secret_key(key):
+                store = self._user_store()
+                bundle = _split_bundle_secret_key(key)
+                if bundle is not None:
+                    return store.app_path(bundle_id=bundle[0], key=bundle[1])
+                user_id, bundle_id, tail = _split_user_secret_key(key)
+                return store.user_path(user_id=user_id, bundle_id=bundle_id, key=tail)
+            uri = self._global_uri or ""
+            parsed = urlparse(uri)
+            if not uri or parsed.scheme not in {"", "file"}:
+                return None
+            return Path(local_file_uri_path(uri) if parsed.scheme == "file" else uri).expanduser().resolve()
+        except (SecretsManagerError, UserSecretFileError, ValueError):
+            return None
+
+    def _read_user_secret(self, key: str) -> Optional[str]:
+        result = self._user_secret_call("get", key)
+        if isinstance(result, list):
+            return json.dumps(result, ensure_ascii=False) if result else None
+        return result
 
     async def set_secret(self, key: str, value: str) -> None:
         await self.set_many({key: value})
@@ -1160,6 +1273,18 @@ class SecretsFileSecretsManager(ISecretsManager):
             validate_secret_provider_key(key): value
             for key, value in values.items()
         }
+        user_values = {key: value for key, value in normalized_values.items()
+                       if _is_user_secret_key(key) and _secret_inventory_prefix(key) is None}
+        if user_values:
+            def write_user_values() -> None:
+                for key, value in user_values.items():
+                    self._user_secret_call("set", key, value)
+
+            await _run_blocking_critical_section(write_user_values)
+        normalized_values = {key: value for key, value in normalized_values.items()
+                             if not _is_user_secret_key(key)}
+        if not normalized_values:
+            return
         redis, token = await self._acquire_distributed_lock()
 
         def write_values() -> None:
@@ -1214,6 +1339,17 @@ class SecretsFileSecretsManager(ISecretsManager):
 
     async def delete_many(self, keys: Iterable[str]) -> None:
         key_list = [validate_secret_provider_key(key) for key in keys]
+        user_keys = [key for key in key_list
+                     if _is_user_secret_key(key) and _secret_inventory_prefix(key) is None]
+        if user_keys:
+            def delete_user_values() -> None:
+                for key in user_keys:
+                    self._user_secret_call("delete", key)
+
+            await _run_blocking_critical_section(delete_user_values)
+        key_list = [key for key in key_list if not _is_user_secret_key(key)]
+        if not key_list:
+            return
         redis, token = await self._acquire_distributed_lock()
 
         def delete_values() -> None:
@@ -1265,6 +1401,114 @@ class SecretsFileSecretsManager(ISecretsManager):
             await _run_blocking_critical_section(delete_values)
         finally:
             await self._release_distributed_lock(redis, token)
+
+
+    async def migrate_user_secrets(self, *, dry_run: bool = False) -> dict[str, int]:
+        """Move per-user secrets (secrets.yaml users.*) and app secrets (bundles.secrets.yaml, every item's
+        secrets block) into the folder (W670), once.
+
+        Idempotent and value-free: it returns counts only. Before any change it refuses a bundle-less user
+        leaf, an invalid bundle id, and a destination that already holds a different value. It then
+        publishes each value atomically, reads every one back, and only then removes the moved subtrees: the
+        users subtree from secrets.yaml and each item's secrets block from bundles.secrets.yaml (the item and
+        its id stay), one atomic write per file plus a folder fsync. platform.* stays in secrets.yaml. A
+        rerun after a crash at any step finds identical destinations and completes. The host runs it with
+        kdcube stopped and a backup taken.
+        """
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileError
+
+        # No lock (operator: "nolock"): the host runs this once with kdcube stopped.
+
+        def fsync_parent(uri: str) -> None:
+            parsed = urlparse(uri)
+            if parsed.scheme not in {"", "file"}:
+                return
+            path = local_file_uri_path(uri) if parsed.scheme == "file" else uri
+            folder = os.open(Path(path).expanduser().resolve().parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(folder)
+            finally:
+                os.close(folder)
+
+        def migrate() -> dict[str, int]:
+            with self._lock:
+                store = self._user_store()
+                moves: list[tuple[str, str, Any]] = []  # (key, value, (kind, bundle, user, tail))
+                global_data = (_load_yaml_mapping_from_storage(self._global_uri, missing_ok=True)
+                               if self._global_uri else None)
+                bundle_data = (_load_yaml_mapping_from_storage(self._bundle_uri, missing_ok=True)
+                               if self._bundle_uri else None)
+                if global_data is not None:
+                    leaves: dict[str, str] = {}
+                    _flatten_mapping("users", _global_descriptor_root(global_data).get("users"), leaves)
+                    for key, value in leaves.items():
+                        user = _split_user_secret_key(key)
+                        if user is None or user[1] is None or user[2] == "__keys":
+                            raise SecretsManagerWriteError("user_secret_migration_bundle_less_source")
+                        moves.append((key, value, ("user", user[1], user[0], user[2])))
+                app_items = 0
+                if bundle_data is not None:
+                    for item in _bundle_descriptor_items(bundle_data):
+                        if not isinstance(item, dict) or item.get("secrets") is None:
+                            continue
+                        app_items += 1
+                        leaves = {}
+                        _flatten_mapping(f"bundles.{str(item.get('id') or '').strip()}.secrets",
+                                         item.get("secrets"), leaves)
+                        for key, value in leaves.items():
+                            bundle = _split_bundle_secret_key(key)
+                            if bundle is None or bundle[1] == "__keys":
+                                raise SecretsManagerWriteError("user_secret_migration_bundle_invalid")
+                            moves.append((key, value, ("app", bundle[0], None, bundle[1])))
+
+                def read(target):
+                    kind, bundle_id, user_id, tail = target
+                    if kind == "user":
+                        return store.get(user_id=user_id, bundle_id=bundle_id, key=tail)
+                    return store.get_app(bundle_id=bundle_id, key=tail)
+
+                pending, present = [], 0
+                for key, value, target in moves:
+                    current = read(target)  # also validates the bundle id and every folder level
+                    if current is None:
+                        pending.append((key, value, target))
+                    elif current == value:
+                        present += 1
+                    else:
+                        raise SecretsManagerWriteError("user_secret_migration_destination_conflict")
+                user_found = sum(1 for _key, _value, target in moves if target[0] == "user")
+                counts = {"found": len(moves), "user_found": user_found, "app_found": len(moves) - user_found,
+                          "written": 0, "already_present": present, "removed_from_yaml": 0,
+                          "bundle_items_kept": app_items}
+                if dry_run:
+                    counts["would_write"] = len(pending)
+                    return counts
+                for _key, value, (kind, bundle_id, user_id, tail) in pending:
+                    if kind == "user":
+                        store.set(user_id=user_id, bundle_id=bundle_id, key=tail, value=value)
+                    else:
+                        store.set_app(bundle_id=bundle_id, key=tail, value=value)
+                    counts["written"] += 1
+                for _key, value, target in moves:
+                    if read(target) != value:
+                        raise SecretsManagerWriteError("user_secret_migration_readback_mismatch")
+                if global_data is not None and "users" in _global_descriptor_root(global_data):
+                    _global_descriptor_root(global_data).pop("users")
+                    _write_yaml_mapping_to_storage(self._global_uri, global_data)
+                    fsync_parent(self._global_uri)
+                if bundle_data is not None and app_items:
+                    for item in _bundle_descriptor_items(bundle_data):
+                        if isinstance(item, dict):
+                            item.pop("secrets", None)
+                    _write_yaml_mapping_to_storage(self._bundle_uri, bundle_data)
+                    fsync_parent(self._bundle_uri)
+                counts["removed_from_yaml"] = len(moves)
+                return counts
+
+        try:
+            return await _run_blocking_critical_section(migrate)
+        except UserSecretFileError as exc:
+            raise SecretsManagerWriteError(str(exc)) from None
 
 
 class SecretsServiceSecretsManager(ISecretsManager):

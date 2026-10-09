@@ -265,6 +265,8 @@ def _materialize_runtime_descriptor_payloads(logger: AgentLogger) -> pathlib.Pat
         ("KDCUBE_RUNTIME_SECRETS_YAML_B64", "secrets.yaml", "GLOBAL_SECRETS_YAML"),
         ("KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64", "bundles.secrets.yaml", "BUNDLE_SECRETS_YAML"),
     )
+    # Taken first, so the records never stay in the environment of user code, whatever happens below.
+    secret_records = os.environ.pop("KDCUBE_RUNTIME_SECRET_RECORDS_B64", None)
     payload_values = [
         (payload_env, filename, target_env, (os.environ.get(payload_env) or "").strip())
         for payload_env, filename, target_env in descriptor_specs
@@ -298,6 +300,7 @@ def _materialize_runtime_descriptor_payloads(logger: AgentLogger) -> pathlib.Pat
 
     if not written:
         return None
+    _materialize_secret_records(runtime_dir, logger, secret_records or "")
 
     os.environ["PLATFORM_DESCRIPTORS_DIR"] = str(runtime_dir)
     logger.log(
@@ -305,6 +308,60 @@ def _materialize_runtime_descriptor_payloads(logger: AgentLogger) -> pathlib.Pat
         "INFO",
     )
     return runtime_dir
+
+
+def _materialize_secret_records(runtime_dir: pathlib.Path, logger: AgentLogger, raw: str | None = None) -> None:
+    """W670: per-user and app secrets live in folders on the host, so they arrive as one records payload.
+
+    They are written as the same private files into <runtime_dir>/secrets, the folder the copied descriptors
+    resolve as their secrets root; a copied assembly that names an explicit secrets.runtime.root is pointed
+    there too. Values are never logged.
+    """
+    if raw is None:
+        raw = os.environ.pop("KDCUBE_RUNTIME_SECRET_RECORDS_B64", None)
+    raw = (raw or "").strip()
+    if not raw:
+        return
+    try:
+        import json
+
+        import yaml
+
+        from kdcube_ai_app.infra.secrets.manager import _split_bundle_secret_key, _split_user_secret_key
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileStore
+
+        records = json.loads(base64.b64decode(raw.encode("ascii")))["records"]
+        root = runtime_dir / "secrets"
+        store = UserSecretFileStore(root=root)
+        written = skipped = 0
+        for key, value in records.items():
+            # Each record independently: one unusable record never drops the others (review F2).
+            try:
+                bundle = _split_bundle_secret_key(key)
+                if bundle is not None:
+                    store.set_app(bundle_id=bundle[0], key=bundle[1], value=value)
+                    written += 1
+                    continue
+                user = _split_user_secret_key(key)
+                if user is None or user[1] is None:
+                    raise ValueError
+                store.set(user_id=user[0], bundle_id=user[1], key=user[2], value=value)
+                written += 1
+            except Exception:
+                skipped += 1
+        assembly = runtime_dir / "assembly.yaml"
+        if assembly.is_file():
+            data = yaml.safe_load(assembly.read_text(encoding="utf-8")) or {}
+            runtime = (data.get("secrets") or {}).get("runtime") if isinstance(data, dict) else None
+            if isinstance(runtime, dict) and runtime.get("root"):
+                runtime["root"] = str(root)
+                os.chmod(assembly, 0o600)
+                assembly.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+                os.chmod(assembly, 0o400)
+        logger.log(f"[exec.descriptors] Materialized {written} secret record(s) into {root}; skipped {skipped}",
+                   "WARNING" if skipped else "INFO")
+    except Exception as exc:
+        logger.log(f"[exec.descriptors] Secret records were not materialized ({type(exc).__name__})", "ERROR")
 
 
 def _prepare_runtime_environment(logger: AgentLogger) -> None:

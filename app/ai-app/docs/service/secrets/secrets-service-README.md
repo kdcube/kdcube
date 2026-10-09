@@ -712,12 +712,14 @@ Configured URIs:
 - `GLOBAL_SECRETS_YAML`
 - `BUNDLE_SECRETS_YAML`
 
-Descriptor placement:
+Where values live:
 
-- `secrets.yaml` contains only the `platform` and `users` top-level roots
-- `bundles.secrets.yaml` contains deployment-bundle values
-- no separate `USER_SECRETS_YAML` is needed; whole administrator export
-  reconstructs user values under `users` in the ordinary `secrets.yaml`
+- `platform.*` stays in `secrets.yaml` (its `platform` root).
+- App (bundle) secrets and per-user secrets are **not** in the YAML files.
+  They are one private file per secret in the secrets folder, see
+  [File backend: app and per-user secrets in folders](#file-backend-app-and-per-user-secrets-in-folders).
+- `bundles.secrets.yaml` keeps each bundle item and its `id` (and any other
+  non-secret field); its `secrets` blocks move to the folder.
 
 Restart behavior:
 
@@ -727,13 +729,19 @@ Restart behavior:
 
 Read behavior:
 
-- rereads YAML on every `get_secret()`
-- no in-memory secret-value cache
+- `platform.*`: rereads `secrets.yaml`
+- app and per-user secrets: read the one record file; no YAML fallback
+- the SDK secret cache keeps a file-backed value together with its source
+  file's fingerprint (inode, size, mtime, ctime) and re-reads on any change,
+  so a write by another process is visible on the next read; a missing
+  file-backed secret is never cached
 
 Write behavior:
 
-- writes are serialized with a distributed Redis lock when Redis is configured
-- reads do not rely on Redis
+- `platform.*` YAML writes are serialized with a distributed Redis lock when
+  Redis is configured
+- app and per-user secret files: write a private temporary file, fsync,
+  atomic replace; delete unlinks; no lock
 
 So after restart:
 
@@ -773,7 +781,8 @@ bundles:
 
 ### User-scoped bundle secrets
 
-Current `secrets-file` implementation stores them in `GLOBAL_SECRETS_YAML`.
+The YAML layout below is the **pre-migration** form. Current `secrets-file`
+stores app and per-user secrets in the secrets folder; see the next section.
 
 After one RMS user saves:
 
@@ -795,7 +804,83 @@ users:
             http_user: x-access-token
 ```
 
-That is the state that survives restart.
+That was the state that survived restart before the move into folders.
+
+### File backend: app and per-user secrets in folders
+
+The `secrets-file` provider keeps app (bundle) secrets and per-user secrets
+in the secrets folder, one private file per secret. `platform.*` stays in
+`secrets.yaml`.
+
+Folder (the runtime secrets root):
+
+- `secrets.runtime.root` in the assembly when set (it must be inside the
+  config folder), else `<folder of secrets.yaml>/secrets`, i.e.
+  `<workdir>/config/secrets` on the host and `/config/secrets` in the
+  containers.
+
+Layout:
+
+```text
+config/secrets/
+  <bundle id>/<key path>.json                 bundles.<bundle>.secrets.<key path>
+  <bundle id>/users/<user id>/<key path>.json users.<user>.bundles.<bundle>.secrets.<key path>
+```
+
+- Every folder is `0700`, every file `0600`, owned by the service user, never
+  a symlink; an unsafe file or folder is refused, never repaired.
+- User ids and key paths are percent-encoded (everything outside
+  `a-z 0-9 . _ @ -`, uppercase letters and a leading dot included), so names
+  are unique on case-insensitive host shares. Bundle ids must be lowercase.
+- A per-user secret always belongs to a bundle; `users.<user>.secrets.<key>`
+  without a bundle is refused.
+- There is no fallback to the YAML files.
+
+#### One-time move (run once, before deploying this version)
+
+Run it on the host, with kdcube **stopped**, after taking a backup of
+`secrets.yaml` and `bundles.secrets.yaml`:
+
+```bash
+python -m kdcube_ai_app.infra.secrets.user_secret_files migrate --config-dir <workdir>/config --dry-run
+python -m kdcube_ai_app.infra.secrets.user_secret_files migrate --config-dir <workdir>/config
+```
+
+- `--config-dir` selects `<dir>/secrets.yaml`, `<dir>/bundles.secrets.yaml`
+  (when present) and the folder `<dir>/secrets`.
+  `--global-secrets-yaml`, `--bundle-secrets-yaml` and `--runtime-root`
+  override them.
+- Python with this SDK and PyYAML must be importable, for example
+  `PYTHONPATH=<checkout>/app/ai-app/src/kdcube-ai-app`.
+- Run it as the user the containers run as (on Docker Desktop host shares the
+  host user is presented as the container user; on a native Linux bind mount
+  run it as that uid, or inside the proc container against `/config`).
+
+What it does:
+
+- moves every `users.*` leaf of `secrets.yaml` and every bundle item's
+  `secrets` block of `bundles.secrets.yaml` into the folder, then reads every
+  value back;
+- only then removes the `users` subtree from `secrets.yaml` and the `secrets`
+  blocks from `bundles.secrets.yaml` (bundle items and ids stay), one atomic
+  write per file;
+- is idempotent: a rerun, also after an interruption, finds identical files
+  and completes.
+
+Output is JSON counts only, never a value or a path: `found`, `user_found`,
+`app_found`, `written` (`would_write` on `--dry-run`), `already_present`,
+`removed_from_yaml`, `bundle_items_kept`.
+
+It refuses, before changing anything, with one of these reasons:
+
+| reason | meaning |
+| --- | --- |
+| `user_secret_migration_bundle_less_source` | a `users.<user>.secrets.<key>` leaf without a bundle |
+| `user_secret_migration_bundle_invalid` / `user_secret_bundle_invalid` | a bundle id the folder layout refuses (uppercase, a `secrets` segment, `platform`) |
+| `user_secret_migration_destination_conflict` | the folder already holds a different value for a key |
+| `user_secret_storage_unavailable` | a folder or file is not private/owned, or cannot be written |
+| `user_secret_migration_readback_mismatch` | a written value did not read back identically (YAML left unchanged) |
+| `migration_unavailable` | anything else (for example an unreadable YAML) |
 
 ## 6. Multiple workers / replicas
 

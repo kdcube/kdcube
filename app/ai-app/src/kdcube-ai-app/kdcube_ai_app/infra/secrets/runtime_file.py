@@ -29,7 +29,8 @@ from typing import Iterable
 
 _NAMESPACE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 # One path segment: no separator, no dot (so no traversal and no ambiguity in dotted provider keys).
-_OWNER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_@-]{0,127}")
+# Lowercase only: the folder may live on a case-insensitive host share (APFS).
+_OWNER = re.compile(r"[a-z0-9][a-z0-9_@-]{0,127}")
 _REF = re.compile(r"[0-9a-f]{32}")
 _RECORD_FILE = re.compile(r"[0-9a-f]{32}\.json")
 PLATFORM_OWNER = "platform"
@@ -78,7 +79,8 @@ class RuntimeFileStore:
 
     def __init__(self, *, root: str | Path, namespace: str, authorized_namespaces: Iterable[str],
                  owner: str | None = None):
-        if type(namespace) is not str or _NAMESPACE.fullmatch(namespace) is None:
+        # "users" is reserved: <root>/<bundle>/users/ holds per-user secrets (user_secret_files).
+        if type(namespace) is not str or _NAMESPACE.fullmatch(namespace) is None or namespace == "users":
             raise RuntimeFileError("runtime_secret_scope_invalid")
         if (isinstance(authorized_namespaces, (str, bytes))
                 or namespace not in frozenset(authorized_namespaces)):
@@ -104,7 +106,17 @@ class RuntimeFileStore:
         # a configured broad/public directory or a symlink is refused, never chmod-ed or followed.
         try:
             for folder in (self._root, self._root / self._owner, self._folder):
-                folder.mkdir(mode=0o700, exist_ok=True)
+                try:
+                    folder.mkdir(mode=0o700)
+                    created = True
+                except FileExistsError:
+                    created = False
+                if created:  # a new entry is durable in its parent before anything is published inside it
+                    parent = os.open(folder.parent, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(parent)
+                    finally:
+                        os.close(parent)
                 info = folder.lstat()
                 if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
                         or stat.S_IMODE(info.st_mode) != 0o700):

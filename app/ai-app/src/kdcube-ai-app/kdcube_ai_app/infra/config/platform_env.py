@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 from urllib.parse import unquote, urlparse
@@ -83,6 +84,7 @@ PLATFORM_ENV_GROUPS: dict[str, tuple[str, ...]] = {
         "KDCUBE_RUNTIME_GATEWAY_YAML_B64",
         "KDCUBE_RUNTIME_SECRETS_YAML_B64",
         "KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64",
+        "KDCUBE_RUNTIME_SECRET_RECORDS_B64",
     ),
     "platform_secret_exports": (
         "KDCUBE_PLATFORM_SECRETS_JSON",
@@ -427,7 +429,61 @@ def _collect_descriptor_payload_env(
         )
         if payload:
             exported[env_name] = payload
+    records = _secret_records_payload(
+        exported, bundle_id=bundle_id, descriptor_payload_scope=descriptor_payload_scope,
+    )
+    if records:
+        exported["KDCUBE_RUNTIME_SECRET_RECORDS_B64"] = records
     return exported
+
+
+def _secret_records_payload(
+    exported: Mapping[str, str],
+    *,
+    bundle_id: str | None,
+    descriptor_payload_scope: str | None,
+) -> str | None:
+    """W670: the secrets-file provider keeps per-user and app secrets in folders, not in the yaml copies an
+    isolated runtime receives. Carry those records with exactly the yaml copies' scope: users.* when the
+    secrets.yaml copy is exported, app secrets when the bundles.secrets.yaml copy is (only the active
+    bundle's when that copy is scoped). Never logged."""
+    want_users = "KDCUBE_RUNTIME_SECRETS_YAML_B64" in exported
+    want_apps = "KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64" in exported
+    if not (want_users or want_apps):
+        return None
+    try:
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
+        from kdcube_ai_app.infra.secrets.manager import SecretsFileSecretsManager, get_secrets_manager
+
+        # With the process settings: a bare get_secrets_manager() is an empty in-memory manager in the
+        # running proc (W502, 2026-10-09), which would silently send the sandbox no secrets at all.
+        manager = get_secrets_manager(get_settings())
+        if not isinstance(manager, SecretsFileSecretsManager):
+            return None
+        store = manager._user_store()
+        keys: list[str] = []
+        if want_users:
+            keys.extend(store.list_keys())
+        if want_apps:
+            active_only = _normalize_descriptor_payload_scope(descriptor_payload_scope) == "active_bundle"
+            scoped = str(bundle_id or "").strip()
+            if not active_only:
+                keys.extend(store.list_app_keys())
+            elif scoped:
+                keys.extend(store.list_app_keys(bundle_id=scoped))
+        records = {}
+        for key in keys:
+            value = manager._read_user_secret(key)
+            if value is not None:
+                records[key] = value
+        if not records:
+            return None
+        return base64.b64encode(json.dumps({"records": records}, ensure_ascii=True).encode("ascii")).decode("ascii")
+    except Exception as exc:
+        # One fixed, value-free line: the isolated runtime gets no folder-stored secrets this time.
+        reason = str(exc) if str(exc).startswith(("user_secret_", "runtime_secret_")) else type(exc).__name__
+        logging.getLogger("kdcube.platform_env").warning("[secrets] sandbox records unavailable reason=%s", reason)
+        return None
 
 
 def collect_platform_env_groups(

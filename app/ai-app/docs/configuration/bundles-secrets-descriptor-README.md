@@ -35,6 +35,13 @@ bundles:
           sheets_integration_credentials_file_content: null
 ```
 
+
+> **File backend:** app (bundle) and per-user secrets now live in the secrets
+> folder (`config/secrets/<bundle>/<key>.json`,
+> `config/secrets/<bundle>/users/<user>/<key>.json`), not in the YAML. See
+> [File backend: app and per-user secrets in folders](../service/secrets/secrets-service-README.md#file-backend-app-and-per-user-secrets-in-folders)
+> for the layout and the one-time move.
+
 ## What it is for
 
 Use this file for bundle-specific secrets such as:
