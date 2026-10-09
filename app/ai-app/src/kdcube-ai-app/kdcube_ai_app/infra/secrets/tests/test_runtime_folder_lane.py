@@ -228,6 +228,8 @@ async def test_delete_is_idempotent_for_a_used_and_an_unknown_reference(backend)
 @pytest.mark.asyncio
 async def test_records_live_in_the_runtime_folder_never_in_the_descriptor_yaml_or_listing(folder):
     manager = folder.open()
+    # An app secret, written and read through the manager as any app does.
+    await manager.set_secret(f"bundles.{OWNER}.secrets.descriptor_secret", "existing-descriptor-value")
     assert await _store(manager).create(secret_ref=REF, value=CANARY, expires_at=_later()) is True
     assert CANARY not in folder.bundle_yaml.read_text()
     assert CANARY in _folder_text(folder)
