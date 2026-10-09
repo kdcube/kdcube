@@ -11,6 +11,8 @@ from __future__ import annotations
 import dataclasses
 import json
 
+import pytest
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -448,3 +450,30 @@ def test_the_tokens_own_admin_role_does_not_restore_privilege_once_the_card_drop
     assert _entered(admin)
     _store_live_card(entrance, _admin_card(grants=("records:read",)))
     assert not _entered(admin)
+
+
+@pytest.mark.parametrize("consent_roles, expected_roles", [(["kdcube:role:paid"], ["kdcube:role:paid"]), ([], [])])
+def test_a_token_admin_role_never_projects_for_a_live_card_with_a_non_privileged_consent(
+        monkeypatch, consent_roles, expected_roles):
+    """Main's return on 3db42f52: the filter is keyed on the live record alone. The consent names a paid role, or no
+    role at all (so the fallback reaches the token), the delegated access token itself carries ADMIN and kdcube:*, and
+    the live Card selects no role: nothing privileged projects, the session is not PRIVILEGED, and the admin entrance
+    refuses it."""
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surface import _roles_user_type
+    from kdcube_ai_app.auth.sessions import UserType
+
+    redis = _Redis()
+    _put(redis, _live_card())
+    record = {**_stored(), "grantor_authority": {"grantor_roles": list(consent_roles)}}
+    client = _session_over(_client(monkeypatch, grant_record=record, redis=redis, user={
+        "sub": "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d", "roles": [ADMIN],
+        "permissions": [ADMIN, "kdcube:*"]}))
+    projection = _projection(client)["projection"]
+    assert ADMIN not in projection["roles"] and ADMIN not in projection["permissions"]
+    assert "kdcube:*" not in projection["permissions"]
+    assert projection["roles"] == expected_roles
+    assert _roles_user_type(projection["roles"]) != UserType.PRIVILEGED
+
+    entrance = _Redis()
+    _store_live_card(entrance, _admin_card(grants=("records:read",)))
+    assert not _entered(_admin_session(monkeypatch, entrance, grantor_roles=tuple(consent_roles)))

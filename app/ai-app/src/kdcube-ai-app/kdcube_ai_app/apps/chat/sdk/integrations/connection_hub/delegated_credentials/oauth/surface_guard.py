@@ -888,29 +888,27 @@ def _delegated_runtime_projection(
         _as_list(identity_authority.get("permissions"))
         or _as_list(grantor_authority.get("grantor_permissions"))
     )
-    privileged_consent = tuple(
-        role for role in consent_roles
-        if authority_has_platform_privilege((role,)) or role in PRIVILEGED_ROLES
-    )
-    live_privileged_consent = bool(
-        privileged_consent and str(grant_record.get("registry_access_id") or "").strip()
-    )
-    if live_privileged_consent:
-        # A live Card is the authority (W653). A Card that selects no role keeps
-        # the grantor's consent-time tier and permissions for endpoint checks
-        # (legacy), but a privileged consent is not carried: privilege must be
-        # selected on the Card as it is now, so neither the privileged roles nor
-        # the permissions of the admin edge they selected at consent project.
-        consent_roles = tuple(role for role in consent_roles if role not in privileged_consent)
-        consent_permissions = ()
-    fallback_roles = consent_roles or _as_list(user.get("roles"))
-    if live_privileged_consent:
-        # Whatever the source (consent or the issuance-time token), a privileged
-        # role is projected only when the live Card selects it.
-        fallback_roles = tuple(
-            role for role in fallback_roles
-            if not authority_has_platform_privilege((role,)) and role not in PRIVILEGED_ROLES
+    def _unprivileged(values):
+        return tuple(
+            value for value in values
+            if not authority_has_platform_privilege((value,)) and value not in PRIVILEGED_ROLES
         )
+
+    live_record = bool(str(grant_record.get("registry_access_id") or "").strip())
+    privileged_consent = len(_unprivileged(consent_roles)) != len(consent_roles)
+    if live_record:
+        # A live Card is the authority (W653). A Card that selects no role keeps
+        # the grantor's non-privileged consent tier and ambient permissions
+        # (legacy), but privilege is projected only when the Card as it is now
+        # selects it: a privileged consent carries neither its roles nor its admin
+        # edge's permissions.
+        consent_roles = _unprivileged(consent_roles)
+        if privileged_consent:
+            consent_permissions = ()
+    fallback_roles = consent_roles or _as_list(user.get("roles"))
+    if live_record:
+        # The issuance-time token's roles are not tied to the consent either.
+        fallback_roles = _unprivileged(fallback_roles)
     role_projection = delegated_role_projection(
         grants,
         fallback_roles=fallback_roles,
@@ -923,9 +921,9 @@ def _delegated_runtime_projection(
         permissions = tuple(grants)
     else:
         permissions = (
-            # A stripped privileged consent leaves only the live Card's grants:
-            # the issuance-time token's permissions are not a fallback for it.
-            tuple(grants) if live_privileged_consent
+            # For a live record the issuance-time token's permissions are no
+            # fallback: the consent's ambient permissions, else the Card's grants.
+            consent_permissions or tuple(grants) if live_record
             else consent_permissions or _as_list(user.get("permissions")) or tuple(grants)
         )
     identity_authority.update(
