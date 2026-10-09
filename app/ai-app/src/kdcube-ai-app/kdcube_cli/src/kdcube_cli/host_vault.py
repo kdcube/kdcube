@@ -288,6 +288,23 @@ def compose_environment(config: HostVaultRuntimeConfig) -> dict[str, str]:
     return values
 
 
+def runtime_compose_environment(assembly: Mapping[str, object]) -> dict[str, str]:
+    """W670 F1: the assembly's ``secrets.runtime`` folder and namespaces for Compose, on EVERY provider.
+
+    The secrets-file backend keeps runtime records in that folder (one private file per namespace); the
+    processors and the secrets service mount the host folder at the same path. Empty when not configured.
+    """
+    runtime = _runtime_configuration(_mapping(assembly.get("secrets")))
+    root = str(runtime.get("runtime_root") or "")
+    return {
+        "KDCUBE_SECRETS_RUNTIME_ROOT": root,
+        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": root,
+        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(runtime.get("runtime_namespaces") or ()),
+                                                        separators=(",", ":")),
+        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": str(runtime.get("runtime_scope_policy") or ""),
+    }
+
+
 def validate_assembly_for_start(
     assembly: Mapping[str, object],
     *,
