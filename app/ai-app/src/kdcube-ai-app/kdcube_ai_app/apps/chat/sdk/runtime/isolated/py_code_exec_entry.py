@@ -298,6 +298,7 @@ def _materialize_runtime_descriptor_payloads(logger: AgentLogger) -> pathlib.Pat
 
     if not written:
         return None
+    _materialize_secret_records(runtime_dir, logger)
 
     os.environ["PLATFORM_DESCRIPTORS_DIR"] = str(runtime_dir)
     logger.log(
@@ -305,6 +306,49 @@ def _materialize_runtime_descriptor_payloads(logger: AgentLogger) -> pathlib.Pat
         "INFO",
     )
     return runtime_dir
+
+
+def _materialize_secret_records(runtime_dir: pathlib.Path, logger: AgentLogger) -> None:
+    """W670: per-user and app secrets live in folders on the host, so they arrive as one records payload.
+
+    They are written as the same private files into <runtime_dir>/secrets, the folder the copied descriptors
+    resolve as their secrets root; a copied assembly that names an explicit secrets.runtime.root is pointed
+    there too. Values are never logged.
+    """
+    raw = (os.environ.pop("KDCUBE_RUNTIME_SECRET_RECORDS_B64", None) or "").strip()
+    if not raw:
+        return
+    try:
+        import json
+
+        import yaml
+
+        from kdcube_ai_app.infra.secrets.manager import _split_bundle_secret_key, _split_user_secret_key
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileStore
+
+        records = json.loads(base64.b64decode(raw.encode("ascii")))["records"]
+        root = runtime_dir / "secrets"
+        store = UserSecretFileStore(root=root)
+        for key, value in records.items():
+            bundle = _split_bundle_secret_key(key)
+            if bundle is not None:
+                store.set_app(bundle_id=bundle[0], key=bundle[1], value=value)
+                continue
+            user = _split_user_secret_key(key)
+            if user is not None and user[1] is not None:
+                store.set(user_id=user[0], bundle_id=user[1], key=user[2], value=value)
+        assembly = runtime_dir / "assembly.yaml"
+        if assembly.is_file():
+            data = yaml.safe_load(assembly.read_text(encoding="utf-8")) or {}
+            runtime = (data.get("secrets") or {}).get("runtime") if isinstance(data, dict) else None
+            if isinstance(runtime, dict) and runtime.get("root"):
+                runtime["root"] = str(root)
+                os.chmod(assembly, 0o600)
+                assembly.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+                os.chmod(assembly, 0o400)
+        logger.log(f"[exec.descriptors] Materialized {len(records)} secret record(s) into {root}", "INFO")
+    except Exception as exc:
+        logger.log(f"[exec.descriptors] Secret records were not materialized ({type(exc).__name__})", "ERROR")
 
 
 def _prepare_runtime_environment(logger: AgentLogger) -> None:
