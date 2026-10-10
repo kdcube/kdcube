@@ -15,7 +15,9 @@ import yaml
 
 from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 from kdcube_ai_app.apps.chat.sdk.config_cache import clear_secret_cache
-from kdcube_ai_app.infra.secrets.manager import SecretsFileSecretsManager, SecretsManagerConfig
+from kdcube_ai_app.infra.secrets.manager import (
+    SecretsFileSecretsManager, SecretsManagerConfig, SecretsManagerWriteError,
+)
 from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileStore
 
 HUB, USER = "connection-hub@1-0", "user-1"
@@ -110,6 +112,55 @@ async def test_a_record_made_unsafe_is_re_read_and_refused(rig):
     os.symlink(moved, path)
     assert await _get(APP_KEY) is None
     assert len(rig.reads) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", ["secrets root", "bundle folder"])
+async def test_a_warm_entry_is_not_served_once_a_private_folder_above_it_becomes_broad(rig, level):
+    """W670 review R/U-CACHE-1 (Infra, exact cc45723d): a warm SDK cache still returned the value after a
+    private secrets folder became 0755, while a direct manager read refused it."""
+    rig.other.set_app(bundle_id=HUB, key="google.client_secret", value="synthetic-1")
+    assert await _get(APP_KEY) == "synthetic-1"  # warm
+    folder = rig.config / "secrets" if level == "secrets root" else rig.config / "secrets" / HUB
+    folder.chmod(0o755)
+    try:
+        with pytest.raises(SecretsManagerWriteError, match="user_secret_storage_unavailable"):
+            await rig.manager.get_secret(APP_KEY)  # the direct read refuses
+        assert await _get(APP_KEY) is None  # and the warm cache no longer answers (the getter maps a refusal to None)
+    finally:
+        folder.chmod(0o700)
+    assert await _get(APP_KEY) == "synthetic-1"  # private again: read afresh, not from the dropped entry
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("level", ["users folder", "user folder", "user bundle folder"])
+async def test_a_warm_user_secret_is_not_served_once_a_private_folder_above_it_becomes_broad(rig, level):
+    async def get_user():
+        return await sdk_config._get_user_secret_cached(SETTINGS, user_id=USER, bundle_id=HUB, key="token")
+
+    rig.other.set(user_id=USER, bundle_id=HUB, key="token", value="synthetic-user-1")
+    assert await get_user() == "synthetic-user-1"
+    record = next((rig.config / "secrets").rglob("token.json"))
+    chain = [path for path in record.parents if (rig.config / "secrets") in path.parents]
+    folder = {"users folder": chain[-2], "user folder": chain[-3] if len(chain) > 2 else chain[0],
+              "user bundle folder": chain[0]}[level]
+    folder.chmod(0o755)
+    try:
+        assert await get_user() is None
+    finally:
+        folder.chmod(0o700)
+    assert await get_user() == "synthetic-user-1"
+
+
+@pytest.mark.asyncio
+async def test_a_warm_entry_is_not_served_once_its_folder_is_replaced(rig):
+    rig.other.set_app(bundle_id=HUB, key="google.client_secret", value="synthetic-1")
+    assert await _get(APP_KEY) == "synthetic-1"
+    folder = rig.config / "secrets" / HUB
+    moved = folder.with_name("moved")
+    folder.rename(moved)
+    os.symlink(moved, folder)  # same file, same inode, reached through a symlinked folder now
+    assert await _get(APP_KEY) is None
 
 
 def test_only_a_file_backed_miss_is_never_cached():
