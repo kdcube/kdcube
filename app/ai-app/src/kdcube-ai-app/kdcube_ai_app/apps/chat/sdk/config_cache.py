@@ -116,14 +116,30 @@ def drop_secret_cache(cache_key: tuple[str, ...]) -> None:
 
 
 def file_fingerprint(path: Any) -> tuple | None:
-    """(inode, size, mtime_ns, ctime_ns) of the file itself (not a symlink target); None when absent."""
+    """(inode, size, mtime_ns, ctime_ns) of the file itself (not a symlink target), plus (inode, mode, owner) of
+    every folder above it; None when absent.
+
+    A direct read refuses a record whose private folder chain became broad, changed owner or was replaced
+    (W670 review R/U-CACHE-1: a warm entry still answered after a secrets folder became 0755). Any such
+    change to a folder changes this fingerprint, so the cached value is dropped and the next get re-reads
+    through the store's own checks. A folder's mtime is left out: writing a sibling secret changes it.
+    """
     import os
 
     try:
         info = os.lstat(path)
+        folders = []
+        folder = os.path.dirname(os.path.abspath(os.fspath(path)))
+        while True:
+            state = os.lstat(folder)
+            folders.append((state.st_ino, state.st_mode, state.st_uid))
+            parent = os.path.dirname(folder)
+            if parent == folder:
+                break
+            folder = parent
     except (OSError, TypeError, ValueError):
         return None
-    return (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    return (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, tuple(folders))
 
 
 def clear_plain_cache() -> int:
