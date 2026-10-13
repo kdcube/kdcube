@@ -79,6 +79,12 @@ For the operational local workflow for reusing a runtime, changing bundle roots,
 
 ### Application readiness policy
 
+Processor Data Bus diagnostic timing is a platform service setting, not a
+bundle property: `platform.services.proc.service.data_bus_timing` has typed
+`enabled` (default `false`) and `expires_at` (UTC ISO, at most 15 minutes away
+when enabled). Its no-request-IO memory capture, limits and explicit collection
+contract are documented in [Data Bus observability](../service/comm/data-bus-README.md#bounded-uuid-timing-default-off).
+
 Every configured app is prepared and admission-gated by proc. The optional
 bundle-item `service.readiness` field controls only whether that app contributes
 to aggregate proc readiness:

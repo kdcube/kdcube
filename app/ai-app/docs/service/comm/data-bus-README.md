@@ -773,6 +773,56 @@ revision or object creation:
 
 Do not log user-authored payload bodies in ingress or storage metadata logs.
 
+### Bounded UUID timing (default off)
+
+The processor supports descriptor-owned, process-memory diagnostics:
+
+```yaml
+platform:
+  services:
+    proc:
+      service:
+        data_bus_timing:
+          enabled: false
+          expires_at: ""
+```
+
+Enablement requires a separately authorized diagnostic window and an absolute
+UTC ISO expiry no more than 15 minutes away. There is no environment-only
+switch. The typed SDK value is `PLATFORM.SERVICE.DATA_BUS_TIMING`. Reconnects,
+new bundle workers and drain calls do not reset process-lifetime budgets.
+At most 100 claims are sampled per process, each record is at most 512 bytes
+(including a 128-byte logging prefix reserve), and cumulative admitted bytes
+never exceed 256 KiB. Contended/full admission drops immediately and counts
+records/bytes; it never waits for collection. Expiry is checked against both
+UTC and a local monotonic deadline. Records already captured remain in memory
+until explicit collection or process exit; they are never automatically written.
+
+Request handling does **no diagnostic file, logger, network or store IO** and
+creates no writer, thread, task, timer or executor. Outside all request/bundle
+contexts, a separately authorized caller in the same process can call
+`runtime.data_bus.timing.CAPTURE.drain(max_records=100)` to collect immutable
+JSON lines, or `drain_to_logger(max_records=100)` to send them to existing
+logging. The latter is synchronous and **may block outside handling**. No
+remote endpoint, automatic collector or new durable state is provided. Capture
+is not permission to inspect bodies or activate collection.
+
+The allowlist is fixed schema/phase/outcome enums, the existing validated UUID,
+numeric retry attempt, UTC boundary, local monotonic elapsed seconds and drop
+counters. No tenant/project/bundle/Card/session/actor/object identifiers,
+subjects, URLs, bodies, headers, idempotency keys or raw exceptions are copied.
+Server records join the client's known-operation labels by UUID; the processor
+does not inspect the opaque business payload to discover operations.
+
+Boundaries cover claim entry, readiness, live delegated-authority resolution,
+serial lock acquisition (including its existing retry), handler preparation,
+actual handler entry/return and actual reply send/return. Reply records cover
+direct, default and terminal replies, missing routes, failures and cancellation.
+Direct replies can finish before the handler returns: reconstruct this partial
+order, not a mandatory linear pipeline. Early failure can leave a start without
+its matching end; claim finish records distinguish failure/cancellation from a
+normal return. Timing is diagnostic evidence, not an audit or authority verdict.
+
 ## Collaborative Object Example
 
 In a bundle with a collaborative object:

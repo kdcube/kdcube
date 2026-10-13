@@ -1,11 +1,13 @@
 import os
+import time
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings
 
 def _descriptors_dir() -> Path | None:
@@ -373,7 +375,32 @@ class LOGConfig(BaseModel):
 # ─── PLATFORM.SERVICE ─────────────────────────────────────────────────────────
 # Per-service runtime knobs (read from platform.services.<component>.service.*)
 
+class DataBusTimingConfig(BaseModel):
+    """Descriptor-owned opt-in diagnostics, never a hidden environment knob."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    enabled: bool = Field(default=False, strict=True)
+    expires_at: str = Field(default="", strict=True)
+
+    @classmethod
+    def from_descriptor(cls, path: str):
+        value = _load_assembly_plain(path)
+        return cls.model_validate({} if value is None else value)
+
+    @model_validator(mode="after")
+    def bounded_expiry(self):
+        if self.enabled:
+            try:
+                expiry = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+                if expiry.tzinfo is None or expiry.utcoffset().total_seconds() != 0 or expiry.timestamp() > time.time() + 900:
+                    raise ValueError
+            except (ValueError, OverflowError, AttributeError):
+                raise ValueError("Data Bus timing requires a UTC expiry within 15 minutes") from None
+        return self
+
+
 class ServiceConfig(BaseModel):
+    DATA_BUS_TIMING: DataBusTimingConfig = Field(default_factory=DataBusTimingConfig)
     UVICORN_RELOAD: bool = False
     HEARTBEAT_INTERVAL: int = 5
     CB_RELAY_IDENTITY: str | None = None
