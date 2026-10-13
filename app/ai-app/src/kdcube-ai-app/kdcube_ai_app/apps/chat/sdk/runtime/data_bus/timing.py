@@ -176,9 +176,11 @@ CAPTURE = MemoryCapture()
 
 def observe(phase: Phase, outcome: Outcome = Outcome.OK, *, message_id: str | None = None) -> None:
     span = CURRENT.get()
-    if span is None or (message_id is not None and span.message_id != message_id):
+    if span is None:
         return
     try:
+        if message_id is not None and str(uuid.UUID(message_id)) != span.message_id:
+            return
         CAPTURE.record(span, phase, outcome)
     except (Exception, asyncio.CancelledError):
         # An observation must never change an application result.

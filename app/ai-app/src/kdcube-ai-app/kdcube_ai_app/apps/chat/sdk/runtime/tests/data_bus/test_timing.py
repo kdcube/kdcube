@@ -168,6 +168,21 @@ async def test_reply_failure_no_route_and_cancellation_unchanged(capture, failur
 
 
 @pytest.mark.asyncio
+async def test_uuid_normalization_is_diagnostic_only(capture):
+    msg = replace(message(), message_id=str(uuid.uuid4()).upper())
+    sent = []
+    token = timing.CURRENT.set(capture.begin(msg.message_id))
+    try:
+        await DataBusReply(message=msg, comm=SimpleNamespace(service_event=lambda **kwargs: sent.append(kwargs))).ok({})
+    finally:
+        timing.CURRENT.reset(token)
+    rows = [json.loads(row) for row in capture.drain()]
+    assert len(rows) == 2
+    assert all(row["message_id"] == msg.message_id.lower() for row in rows)
+    assert sent[0]["data"]["message_id"] == msg.message_id
+
+
+@pytest.mark.asyncio
 async def test_real_handler_preparation_direct_reply_partial_order(capture, monkeypatch):
     msg = message()
 
