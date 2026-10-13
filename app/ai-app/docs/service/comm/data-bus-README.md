@@ -716,13 +716,43 @@ Retention is operational policy:
 - result stream: short retention for debugging and near-term reconnects;
 - DLQ stream: longer retention and alertable.
 
-The built-in message-stream cap is 50,000 entries. A six-hour window at the
-measured incident rate of 8,353 entries per hour is accepted for this transport
-buffer: the stream supports recovery and diagnosis, while application storage,
-receipts, and journals own durable audit history. A deployment that requires a
-longer recovery window sizes the cap from its measured peak entry rate and the
-required duration. Any exposed override belongs in deployment descriptors; an
-environment-only override is not a public configuration contract.
+The message stream is bounded by age, never by a count cap on insert (W827). A
+count cap (`XADD ... MAXLEN`) removed the oldest entries whether or not every
+consumer group had read and acknowledged them, so an unread or pending message
+could lose its body while still listed as pending.
+
+- **Message stream: six hours, acknowledged entries only.** An entry older
+  than the window is removed only after every consumer group has read and
+  acknowledged it. Unread entries, pending entries, and any entry of a stream
+  whose groups are unknown stay. `publish` creates the handler group before
+  the first entry. On Redis 8.2+ the trim is `XTRIM key MINID ~ <age> LIMIT n
+  ACKED`. On older Redis, one Lua script computes the boundary from every
+  group's earliest pending ID and last-delivered ID, then trims below it.
+  Either way it is a single atomic call.
+- **Result and DLQ streams: unchanged count caps.** They have no consumer
+  group and keep `DATA_BUS_RESULT_STREAM_MAXLEN` and `DATA_BUS_DLQ_STREAM_MAXLEN`
+  (10,000 each). A time window for them is a separate policy decision.
+- **When trimming runs.** After a terminal acknowledgement, at most once per
+  stream every five seconds per process. One call removes at most 1,000
+  entries. Nothing runs on a timer.
+
+The six-hour window was accepted at the measured incident rate of 8,353
+entries per hour: the stream supports recovery and diagnosis, while
+application storage, receipts, and journals own durable audit history. Redis
+memory is backstopped by the server's `maxmemory` with `noeviction`, never by
+dropping work. At that limit Redis refuses new writes. This is not yet a byte
+budget: byte admission with completion reserves, and references for large
+bodies, are separate work.
+
+The local and all-in-one compose files pass `REDIS_MAXMEMORY` (default `0`,
+unlimited) and `REDIS_MAXMEMORY_POLICY` (default `noeviction`). Set the
+ceiling only after the protected backlog fits under it.
+
+Built-in defaults: `DATA_BUS_MESSAGE_RETENTION_SECONDS=21600`,
+`DATA_BUS_TRIM_LIMIT=1000` and `DATA_BUS_TRIM_INTERVAL_SECONDS=5`. The former
+`DATA_BUS_STREAM_MAXLEN` is ignored and logged. Any exposed override belongs in deployment
+descriptors; an environment-only override is not a public configuration
+contract.
 
 ## Security
 

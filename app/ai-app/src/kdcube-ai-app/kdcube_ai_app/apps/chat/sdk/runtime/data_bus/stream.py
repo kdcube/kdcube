@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -18,10 +19,76 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
 
 logger = logging.getLogger("kdcube.data_bus.stream")
 
-DATA_BUS_STREAM_MAXLEN = max(128, int(os.getenv("DATA_BUS_STREAM_MAXLEN", "50000") or "50000"))
+DATA_BUS_AUTOCLAIM_IDLE_MS = max(1000, int(os.getenv("DATA_BUS_AUTOCLAIM_IDLE_MS", "60000") or "60000"))
+
+# Results and DLQ have no consumer group: their existing count caps stay (a changed window is a policy decision).
 DATA_BUS_RESULT_STREAM_MAXLEN = max(128, int(os.getenv("DATA_BUS_RESULT_STREAM_MAXLEN", "10000") or "10000"))
 DATA_BUS_DLQ_STREAM_MAXLEN = max(128, int(os.getenv("DATA_BUS_DLQ_STREAM_MAXLEN", "10000") or "10000"))
-DATA_BUS_AUTOCLAIM_IDLE_MS = max(1000, int(os.getenv("DATA_BUS_AUTOCLAIM_IDLE_MS", "60000") or "60000"))
+
+# W827: the message stream is bounded by age, never by count on insert. A count cap (XADD MAXLEN) removed the
+# oldest entries whether or not every consumer group had read and acknowledged them, so a pending message lost its
+# body while still listed as pending; when the client lacked the argument the cap silently disappeared instead.
+# Messages keep the six-hour transport window of the data-bus README; an entry older than it is removed only once
+# every group has acknowledged it.
+DATA_BUS_MESSAGE_RETENTION_SECONDS = max(60, int(os.getenv("DATA_BUS_MESSAGE_RETENTION_SECONDS", "21600") or "21600"))
+# One trim removes at most this many entries (XTRIM ... LIMIT), so no single call blocks Redis for long.
+DATA_BUS_TRIM_LIMIT = max(1, int(os.getenv("DATA_BUS_TRIM_LIMIT", "1000") or "1000"))
+# A process trims one stream at most this often; the trim follows acknowledgements and appends, not a timer.
+DATA_BUS_TRIM_INTERVAL_SECONDS = max(0.0, float(os.getenv("DATA_BUS_TRIM_INTERVAL_SECONDS", "5") or "5"))
+
+if os.getenv("DATA_BUS_STREAM_MAXLEN"):
+    logger.warning("[data_bus.retention] DATA_BUS_STREAM_MAXLEN is no longer applied: the message stream is bounded "
+                   "by DATA_BUS_MESSAGE_RETENTION_SECONDS over acknowledged entries, never by count")
+
+# Atomic: the age boundary comes from the server clock and the group state is read in the same call, so no
+# group can be created, read or acknowledged between the check and the trim.
+#   KEYS[1]  stream
+#   ARGV[1]  retention in milliseconds
+#   ARGV[2]  per-call entry limit
+#   ARGV[3]  "1": use XTRIM ... ACKED (Redis 8.2+); "0": compute the acknowledged boundary here
+# Every consumer group must have acknowledged an entry; a stream with no group is kept.
+# Returns the number of entries removed, or -1 when the stream is kept because no group is known.
+_TRIM_SCRIPT = """
+local key = KEYS[1]
+if redis.call('EXISTS', key) == 0 then return 0 end
+local now = redis.call('TIME')
+local age_ms = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000) - tonumber(ARGV[1])
+if age_ms <= 0 then return 0 end
+local boundary = tostring(age_ms) .. '-0'
+local limit = ARGV[2]
+local groups = redis.call('XINFO', 'GROUPS', key)
+if #groups == 0 then return -1 end
+if ARGV[3] == '1' then
+  return redis.call('XTRIM', key, 'MINID', '~', boundary, 'LIMIT', limit, 'ACKED')
+end
+local function before(a, b)
+  local ams, aseq = string.match(a, '^(%d+)-(%d+)$')
+  local bms, bseq = string.match(b, '^(%d+)-(%d+)$')
+  ams, aseq, bms, bseq = tonumber(ams), tonumber(aseq), tonumber(bms), tonumber(bseq)
+  return ams < bms or (ams == bms and aseq < bseq)
+end
+for _, group in ipairs(groups) do
+  local info = {}
+  for i = 1, #group, 2 do info[group[i]] = group[i + 1] end
+  local delivered = info['last-delivered-id']
+  if type(delivered) ~= 'string' or not string.match(delivered, '^%d+-%d+$') then return -1 end
+  -- Entries after last-delivered-id are unread by this group: keep them (and the last delivered one).
+  if before(delivered, boundary) then boundary = delivered end
+  if tonumber(info['pending'] or 0) > 0 then
+    local summary = redis.call('XPENDING', key, info['name'])
+    local oldest = summary[2]
+    if type(oldest) ~= 'string' then return -1 end
+    if before(oldest, boundary) then boundary = oldest end
+  end
+end
+return redis.call('XTRIM', key, 'MINID', '~', boundary, 'LIMIT', limit)
+"""
+
+# Per Redis client: whether XTRIM accepts ACKED (learned from the first refusal; never re-probed per call).
+_ACKED_SUPPORT: dict[int, bool] = {}
+_LAST_TRIM: dict[tuple[int, str], float] = {}
+# Groups this process has created or found, so publish checks a stream's group once, not on every message.
+_GROUP_READY: set[tuple[int, str, str]] = set()
 
 
 def _decode(value: Any) -> str:
@@ -69,9 +136,11 @@ class RedisDataBusStream:
         project: str,
         bundle_id: str,
         group_name: str | None = None,
-        stream_maxlen: int = DATA_BUS_STREAM_MAXLEN,
+        message_retention_seconds: int = DATA_BUS_MESSAGE_RETENTION_SECONDS,
         result_stream_maxlen: int = DATA_BUS_RESULT_STREAM_MAXLEN,
         dlq_stream_maxlen: int = DATA_BUS_DLQ_STREAM_MAXLEN,
+        trim_limit: int = DATA_BUS_TRIM_LIMIT,
+        trim_interval_seconds: float = DATA_BUS_TRIM_INTERVAL_SECONDS,
     ) -> None:
         self.redis = redis
         self.tenant = tenant
@@ -82,9 +151,11 @@ class RedisDataBusStream:
             project=project,
             bundle_id=bundle_id,
         )
-        self.stream_maxlen = max(0, int(stream_maxlen or 0))
+        self.message_retention_ms = max(1, int(message_retention_seconds)) * 1000
         self.result_stream_maxlen = max(0, int(result_stream_maxlen or 0))
         self.dlq_stream_maxlen = max(0, int(dlq_stream_maxlen or 0))
+        self.trim_limit = max(1, int(trim_limit))
+        self.trim_interval_seconds = max(0.0, float(trim_interval_seconds))
 
     @property
     def messages_key(self) -> str:
@@ -114,11 +185,13 @@ class RedisDataBusStream:
         )
 
     async def publish(self, message: DataBusMessage) -> DataBusPublishResult:
-        stream_id = await self._xadd(
-            self.messages_key,
-            {"json": message.to_json()},
-            maxlen=self.stream_maxlen,
-        )
+        # The handler group exists before the first entry, so retention always has a group that must read and
+        # acknowledge it; a stream without a group is never trimmed.
+        marker = (id(self.redis), self.messages_key, self.group_name)
+        if marker not in _GROUP_READY:
+            await self.ensure_group()
+            _GROUP_READY.add(marker)
+        stream_id = await self._xadd(self.messages_key, {"json": message.to_json()})
         return DataBusPublishResult(
             message_id=message.message_id,
             stream_key=self.messages_key,
@@ -225,11 +298,7 @@ class RedisDataBusStream:
         payload = result.to_dict()
         if stream_id:
             payload["source_stream_id"] = stream_id
-        return await self._xadd(
-            self.results_key,
-            {"json": _json_dump(payload)},
-            maxlen=self.result_stream_maxlen,
-        )
+        return await self._xadd(self.results_key, {"json": _json_dump(payload)}, maxlen=self.result_stream_maxlen)
 
     async def write_dlq(
         self,
@@ -244,11 +313,7 @@ class RedisDataBusStream:
             "details": dict(details or {}),
             "message": message.to_dict(),
         }
-        return await self._xadd(
-            self.dlq_key,
-            {"json": _json_dump(payload)},
-            maxlen=self.dlq_stream_maxlen,
-        )
+        return await self._xadd(self.dlq_key, {"json": _json_dump(payload)}, maxlen=self.dlq_stream_maxlen)
 
     async def write_dlq_raw(
         self,
@@ -264,11 +329,7 @@ class RedisDataBusStream:
             "stream_id": stream_id,
             "fields": safe_fields,
         }
-        return await self._xadd(
-            self.dlq_key,
-            {"json": _json_dump(payload)},
-            maxlen=self.dlq_stream_maxlen,
-        )
+        return await self._xadd(self.dlq_key, {"json": _json_dump(payload)}, maxlen=self.dlq_stream_maxlen)
 
     async def ack(self, claim: DataBusClaim) -> None:
         await self.ack_stream_id(stream_id=claim.stream_id)
@@ -287,6 +348,40 @@ class RedisDataBusStream:
                 stream_id,
                 exc_info=True,
             )
+            return
+        await self.trim()
+
+    async def trim(self, *, force: bool = False) -> int | None:
+        """Remove message entries older than the retention window that every consumer group acknowledged.
+
+        Returns the number removed, -1 when the stream is kept because its group state is unknown, or None when
+        this process trimmed the stream too recently or Redis refused. A failed trim never fails the caller.
+        """
+        clock = time.monotonic()
+        stream_key = self.messages_key
+        marker = (id(self.redis), stream_key)
+        if not force and clock - _LAST_TRIM.get(marker, float("-inf")) < self.trim_interval_seconds:
+            return None
+        _LAST_TRIM[marker] = clock
+        evaluate = getattr(self.redis, "eval", None)
+        if not callable(evaluate):
+            return None
+        client = id(self.redis)
+        acked = _ACKED_SUPPORT.get(client, True)
+        try:
+            removed = await evaluate(_TRIM_SCRIPT, 1, stream_key, self.message_retention_ms, self.trim_limit,
+                                     "1" if acked else "0")
+        except Exception as exc:
+            if acked and "syntax" in str(exc).lower():
+                # Redis before 8.2 has no ACKED: compute the acknowledged boundary in the script from now on.
+                _ACKED_SUPPORT[client] = False
+                _LAST_TRIM.pop(marker, None)
+                return await self.trim(force=True)
+            logger.warning("[data_bus.retention] trim refused stream=%s", stream_key, exc_info=True)
+            return None
+        if acked:
+            _ACKED_SUPPORT[client] = True
+        return int(removed or 0)
 
     async def ensure_group(self) -> None:
         try:
@@ -295,16 +390,16 @@ class RedisDataBusStream:
             if "BUSYGROUP" not in str(exc):
                 raise
 
-    async def _xadd(self, stream_key: str, fields: dict[str, str], *, maxlen: int) -> str:
-        try:
-            stream_id = await self.redis.xadd(
-                stream_key,
-                fields,
-                maxlen=maxlen or None,
-                approximate=True,
-            )
-        except TypeError:
+    async def _xadd(self, stream_key: str, fields: dict[str, str], *, maxlen: int = 0) -> str:
+        # The message stream passes no maxlen: a count cap would drop unread or pending entries (W827); its
+        # retention is trim(). Results and DLQ keep their existing approximate count caps.
+        if not maxlen:
             stream_id = await self.redis.xadd(stream_key, fields)
+        else:
+            try:
+                stream_id = await self.redis.xadd(stream_key, fields, maxlen=maxlen, approximate=True)
+            except TypeError:
+                stream_id = await self.redis.xadd(stream_key, fields)
         if isinstance(stream_id, bytes):
             stream_id = stream_id.decode("utf-8")
         return str(stream_id or "")

@@ -36,6 +36,11 @@ class FakeRedis:
         self.streams.setdefault(key, []).append((stream_id, dict(fields)))
         return stream_id
 
+    async def xgroup_create(self, key, group, id="0-0", mkstream=True):
+        # W827: publish creates the handler group before the first entry.
+        self.streams.setdefault(key, [])
+        self.groups = getattr(self, "groups", set()) | {(key, group)}
+
     async def setex(self, key, ttl, value):
         del ttl
         self.values[key] = value
