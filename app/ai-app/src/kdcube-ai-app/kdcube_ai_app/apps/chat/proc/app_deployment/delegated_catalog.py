@@ -298,6 +298,7 @@ async def check_authoritative_delegated_catalog(
     pg_pool: Any,
     redis: Any,
 ) -> dict[str, Any]:
+    """Compare descriptor authority and the serving catalog as wire-safe documents."""
     context = await assemble_authoritative_delegated_catalog(
         registry=registry,
         tenant=tenant,
@@ -334,7 +335,7 @@ async def check_authoritative_delegated_catalog(
         }
 
     differences = catalog_connection_differences(
-        expected=context.assembly.connections,
+        expected=expected.connections,
         actual=active.connections,
     )
     counts: dict[str, int] = {}
