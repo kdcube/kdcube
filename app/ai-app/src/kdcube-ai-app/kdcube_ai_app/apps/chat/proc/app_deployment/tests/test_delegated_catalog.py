@@ -7,7 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from connection_hub.delegated_credentials.catalog.models import CatalogDocument
+from connection_hub.delegated_credentials.catalog.models import (
+    CatalogDocument,
+    CatalogNotWireSafe,
+)
 from kdcube_ai_app.apps.chat.proc.app_deployment import delegated_catalog
 from kdcube_ai_app.infra.plugin.bundle_store import BundleEntry, BundlesRegistry
 
@@ -182,6 +185,119 @@ async def test_authoritative_check_compares_against_request_serving_catalog(
             "connections.delegated_credentials.oauth.resources.*/served*",
         ),
     }
+
+
+async def _check_timeout_catalog(monkeypatch, tmp_path, expected_value, active_value):
+    registry = _registry(tmp_path)
+
+    def connections(value):
+        return {
+            "delegated_credentials": {
+                "oauth": {
+                    "client_id_metadata_documents": {"fetch_timeout_seconds": value}
+                }
+            }
+        }
+
+    expected_connections = connections(expected_value)
+    context = delegated_catalog.AuthoritativeCatalogAssembly(
+        assembly=delegated_catalog.DelegatedCatalogAssembly(
+            connections=expected_connections,
+            contributors=("example@1-0",),
+        ),
+        connection_hub_entry=registry.bundles["connection-hub@1-0"],
+        storage_root=tmp_path,
+    )
+    active = CatalogDocument.build(connections(active_value))
+
+    async def assemble(**kwargs):
+        del kwargs
+        return context
+
+    class Resolver:
+        def __init__(self, **kwargs):
+            del kwargs
+
+        async def resolve_active(self):
+            return active
+
+    monkeypatch.setattr(
+        delegated_catalog, "assemble_authoritative_delegated_catalog", assemble
+    )
+    monkeypatch.setattr(delegated_catalog, "DelegatedCatalogResolver", Resolver)
+    result = await delegated_catalog.check_authoritative_delegated_catalog(
+        registry=registry,
+        tenant="tenant-a",
+        project="project-a",
+        pg_pool=object(),
+        redis=object(),
+    )
+    # The check captures a canonical copy without mutating descriptor authority.
+    original_timeout = expected_connections["delegated_credentials"]["oauth"][
+        "client_id_metadata_documents"
+    ]["fetch_timeout_seconds"]
+    assert type(original_timeout) is type(expected_value)
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active_value", [5, 5.0], ids=["stored-int", "declared-float"])
+async def test_authoritative_check_compares_canonical_integral_float(
+    monkeypatch, tmp_path, active_value
+):
+    result = await _check_timeout_catalog(monkeypatch, tmp_path, 5.0, active_value)
+
+    assert result["status"] == "in_sync"
+    assert result["in_sync"] is True
+    assert result["differences"] == []
+    assert result["difference_counts"] == {}
+    assert result["expected_content_hash"] == result["active_content_hash"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("expected_value", "active_value", "canonical_expected"),
+    [(5.0, 6, 5), (5.0, "5", 5), (5.0, True, 5), (True, 1, True)],
+    ids=["changed-number", "numeric-string", "boolean-timeout", "boolean-vs-integer"],
+)
+async def test_authoritative_check_preserves_real_value_and_type_drift(
+    monkeypatch, tmp_path, expected_value, active_value, canonical_expected
+):
+    result = await _check_timeout_catalog(
+        monkeypatch, tmp_path, expected_value, active_value
+    )
+
+    assert result["status"] == "drift"
+    assert result["in_sync"] is False
+    assert result["expected_content_hash"] != result["active_content_hash"]
+    assert result["difference_counts"] == {"value_mismatch": 1}
+    assert result["differences"] == [
+        {
+            "kind": "value_mismatch",
+            "path": (
+                "connections.delegated_credentials.oauth."
+                "client_id_metadata_documents.fetch_timeout_seconds"
+            ),
+            "expected": canonical_expected,
+            "actual": active_value,
+        }
+    ]
+    difference = result["differences"][0]
+    assert type(difference["expected"]) is type(canonical_expected)
+    assert type(difference["actual"]) is type(active_value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [2.5, 0.1, float("nan"), float("inf")])
+async def test_authoritative_check_refuses_non_wire_safe_expected_float(
+    monkeypatch, tmp_path, value
+):
+    with pytest.raises(CatalogNotWireSafe) as exc:
+        await _check_timeout_catalog(monkeypatch, tmp_path, value, 5)
+
+    assert exc.value.path == (
+        "connections.delegated_credentials.oauth.client_id_metadata_documents.fetch_timeout_seconds"
+    )
 
 
 @pytest.mark.asyncio
