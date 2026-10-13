@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import dataclasses
+import asyncio
 import inspect
 import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.timing import Phase, Outcome, observe
 
 
 DATA_BUS_INGRESS_SCHEMA = "kdcube.data_bus.ingress.v1"
@@ -291,7 +293,15 @@ class DataBusReply:
         step: str = "data_bus",
         broadcast: bool = False,
     ) -> None:
+        reply_outcome = {
+            "kdcube.data_bus.accepted": Outcome.ACCEPTED,
+            "kdcube.data_bus.result": Outcome.RESULT,
+            "kdcube.data_bus.conflict": Outcome.CONFLICT,
+            "kdcube.data_bus.error": Outcome.ERROR,
+        }.get(type if isinstance(type, str) else "", Outcome.OTHER)
+        observe(Phase.REPLY_START, reply_outcome, message_id=self.message.message_id)
         if self.comm is None:
+            observe(Phase.REPLY_END, Outcome.NO_ROUTE, message_id=self.message.message_id)
             return
         payload = {
             "message_id": self.message.message_id,
@@ -299,18 +309,26 @@ class DataBusReply:
             "object_ref": self.message.object_ref,
             "data": dict(data or {}),
         }
-        result = self.comm.service_event(
-            type=str(type or "kdcube.data_bus.event"),
-            step=step,
-            status=status,
-            title=title,
-            data=payload,
-            agent="data_bus",
-            broadcast=broadcast,
-        )
-        if inspect.isawaitable(result):
-            await result
+        try:
+            result = self.comm.service_event(
+                type=str(type or "kdcube.data_bus.event"),
+                step=step,
+                status=status,
+                title=title,
+                data=payload,
+                agent="data_bus",
+                broadcast=broadcast,
+            )
+            if inspect.isawaitable(result):
+                await result
+        except asyncio.CancelledError:
+            observe(Phase.REPLY_END, Outcome.CANCELLED, message_id=self.message.message_id)
+            raise
+        except Exception:
+            observe(Phase.REPLY_END, Outcome.FAILED, message_id=self.message.message_id)
+            raise
         self.sent_count += 1
+        observe(Phase.REPLY_END, reply_outcome, message_id=self.message.message_id)
 
 
 @dataclass(frozen=True)

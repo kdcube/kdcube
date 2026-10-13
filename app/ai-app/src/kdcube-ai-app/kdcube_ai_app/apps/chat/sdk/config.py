@@ -17,7 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.config_scopes import (
     PLATFORM_CONFIG, RUNTIME_CONFIG,
     _load_assembly_plain, _load_bundles_plain, _load_global_secret_plain, _parse_plain_key, _load_plain_yaml, _resolve_dotted_value,
     _descriptor_cache_token,
-    LOGConfig, ServiceConfig, AVConfig, HostedServicesConfig, MonitoringConfig,
+    LOGConfig, ServiceConfig, DataBusTimingConfig, AVConfig, HostedServicesConfig, MonitoringConfig,
     MetricsConfig, MetricsRuntimeConfig, MetricsProxyConfig, MetricsExportConfig,
     MetricsCloudWatchConfig, MetricsPrometheusConfig,
     PyExecConfig, ExecConfig, ReactDebugConfig, AccountingConfig, GitBundlesConfig, ApplicationsConfig,
@@ -1292,6 +1292,7 @@ class Settings(PLATFORM_CONFIG):
                 LOG_FILE_PREFIX=self._resolve_str("LOG_FILE_PREFIX", f"{log_p}.log_file_prefix"),
             ),
             SERVICE=ServiceConfig(
+                DATA_BUS_TIMING=DataBusTimingConfig.from_descriptor(f"{svc_p}.data_bus_timing"),
                 UVICORN_RELOAD=self._resolve_bool("UVICORN_RELOAD", f"{svc_p}.uvicorn_reload", False),
                 HEARTBEAT_INTERVAL=self._resolve_int("HEARTBEAT_INTERVAL", f"{svc_p}.heartbeat_interval", 5),
                 CB_RELAY_IDENTITY=self._resolve_str("CB_RELAY_IDENTITY", f"{svc_p}.cb_relay_identity"),

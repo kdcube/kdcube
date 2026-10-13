@@ -59,6 +59,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.locks import (
     renew_lock_until_cancelled,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import DataBusClaim, RedisDataBusStream
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.timing import CAPTURE, CURRENT, Phase, Outcome, observe
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     DATA_BUS_IDEMPOTENCY_REQUIRED,
     DATA_BUS_ORDERING_SERIAL_PER_PARTITION,
@@ -519,6 +520,9 @@ class DataBusBundleWorker:
         self.locker = RedisDataBusPartitionLocker(redis, ttl_seconds=DATA_BUS_LOCK_TTL_SECONDS)
         self.relay = ChatRelayCommunicator(redis_url=redis_url)
         self._stop_event = asyncio.Event()
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
+
+        CAPTURE.configure(get_settings().PLATFORM.SERVICE.DATA_BUS_TIMING)
 
     async def run(self) -> None:
         await self.stream.ensure_group()
@@ -552,14 +556,40 @@ class DataBusBundleWorker:
         self._stop_event.set()
 
     async def _process_claim(self, claim: DataBusClaim) -> None:
+        if not CAPTURE.config.enabled:
+            return await self._process_claim_without_timing(claim)
+        # Only the existing typed retry counter is inspected, never payload.
+        attempt = (claim.message.trace or {}).get("retry_count", 0)
+        try:
+            span = CAPTURE.begin(claim.message.message_id, attempt)
+        except (Exception, asyncio.CancelledError):
+            span = None
+        token = CURRENT.set(span)
+        try:
+            observe(Phase.CLAIM)
+            await self._process_claim_without_timing(claim)
+        except asyncio.CancelledError:
+            observe(Phase.FINISH, Outcome.CANCELLED)
+            raise
+        except Exception:
+            observe(Phase.FINISH, Outcome.FAILED)
+            raise
+        else:
+            observe(Phase.FINISH)
+        finally:
+            CURRENT.reset(token)
+
+    async def _process_claim_without_timing(self, claim: DataBusClaim) -> None:
         message = claim.message
         try:
+            observe(Phase.READINESS_START)
             application_readiness_registry.require_ready(
                 tenant=message.tenant,
                 project=message.project,
                 application_id=message.bundle_id,
             )
         except ApplicationNotReadyError as exc:
+            observe(Phase.READINESS_END, Outcome.DEFERRED)
             _log.info(
                 "[data_bus] Deferring claim while application is unavailable: "
                 "bundle=%s subject=%s message=%s state=%s",
@@ -569,6 +599,7 @@ class DataBusBundleWorker:
                 exc.snapshot.state.value,
             )
             return
+        observe(Phase.READINESS_END)
         handler_spec = self.handler_specs.get(message.subject)
         if handler_spec is None:
             result = DataBusResult.error_result(
@@ -584,6 +615,7 @@ class DataBusBundleWorker:
             )
             return
         try:
+            observe(Phase.AUTHORITY_START)
             current_actor = await _resolve_live_delegated_actor(
                 getattr(self, "redis", None),
                 tenant=message.tenant,
@@ -591,6 +623,7 @@ class DataBusBundleWorker:
                 actor=message.actor,
             )
         except _DelegatedCardDenial as exc:
+            observe(Phase.AUTHORITY_END, Outcome.REJECTED)
             result = DataBusResult.error_result(
                 message,
                 code=exc.code,
@@ -600,6 +633,7 @@ class DataBusBundleWorker:
             )
             await self._complete_terminal_result(claim, result)
             return
+        observe(Phase.AUTHORITY_END)
         if current_actor != message.actor:
             message = replace(message, actor=current_actor)
             claim = replace(claim, message=message)
@@ -686,8 +720,10 @@ class DataBusBundleWorker:
         renew_task: asyncio.Task | None = None
         try:
             if handler_spec.ordering == DATA_BUS_ORDERING_SERIAL_PER_PARTITION:
+                observe(Phase.LOCK_START)
                 partition_key = self._partition_key(handler_spec, message)
                 if not partition_key:
+                    observe(Phase.LOCK_END, Outcome.REJECTED)
                     result = DataBusResult.error_result(
                         message,
                         code="partition_required",
@@ -707,6 +743,7 @@ class DataBusBundleWorker:
                         lock = await self.locker.acquire(partition_key)
                 if lock is None:
                     retry_count = int((message.trace or {}).get("retry_count") or 0)
+                    observe(Phase.LOCK_END, Outcome.RETRY)
                     if retry_count >= DATA_BUS_LOCK_MAX_RETRIES:
                         result = DataBusResult.error_result(
                             message,
@@ -735,12 +772,16 @@ class DataBusBundleWorker:
                     ),
                     name=f"data-bus-lock-renew:{self.bundle_id}:{message.subject}",
                 )
+                observe(Phase.LOCK_END)
 
             try:
+                observe(Phase.INVOKE_START)
                 result, reply_sent = await self._invoke_handler(claim, handler_spec)
             except Exception as exc:
+                observe(Phase.INVOKE_END, Outcome.FAILED)
                 await self._handle_handler_failure(claim, exc)
                 return
+            observe(Phase.INVOKE_END)
             await self.stream.write_result(result, stream_id=claim.stream_id)
             if not reply_sent:
                 await self._send_default_reply(message, result)
@@ -837,6 +878,7 @@ class DataBusBundleWorker:
         return f"{message.tenant}:{message.project}:{message.bundle_id}:{message.subject}"
 
     async def _invoke_handler(self, claim: DataBusClaim, handler_spec: DataBusHandlerSpec) -> tuple[DataBusResult, bool]:
+        observe(Phase.PREPARATION_START)
         message = claim.message
         comm_context = _make_comm_context(message)
         pg_pool = None
@@ -916,19 +958,31 @@ class DataBusBundleWorker:
             bind_bundle_operation_stream_caller(operation_stream_caller),
             bind_bundle_named_service_caller(named_service_caller),
         ):
-            if inspect.iscoroutinefunction(fn):
-                result = await asyncio.wait_for(fn(ctx, message), timeout=DATA_BUS_HANDLER_TIMEOUT_SECONDS)
+            observe(Phase.PREPARATION_END)
+            observe(Phase.HANDLER_START)
+            try:
+                if inspect.iscoroutinefunction(fn):
+                    result = await asyncio.wait_for(fn(ctx, message), timeout=DATA_BUS_HANDLER_TIMEOUT_SECONDS)
+                else:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(fn, ctx, message),
+                        timeout=DATA_BUS_HANDLER_TIMEOUT_SECONDS,
+                    )
+                if inspect.isawaitable(result):
+                    result = await asyncio.wait_for(result, timeout=DATA_BUS_HANDLER_TIMEOUT_SECONDS)
+            except asyncio.CancelledError:
+                observe(Phase.HANDLER_END, Outcome.CANCELLED)
+                raise
+            except Exception:
+                observe(Phase.HANDLER_END, Outcome.FAILED)
+                raise
             else:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(fn, ctx, message),
-                    timeout=DATA_BUS_HANDLER_TIMEOUT_SECONDS,
-                )
-            if inspect.isawaitable(result):
-                result = await asyncio.wait_for(result, timeout=DATA_BUS_HANDLER_TIMEOUT_SECONDS)
+                observe(Phase.HANDLER_END)
             return coerce_data_bus_result(result, message), reply.sent_count > 0
 
     async def _send_default_reply(self, message: DataBusMessage, result: DataBusResult) -> None:
         if not message.reply:
+            observe(Phase.REPLY_END, Outcome.NO_ROUTE, message_id=message.message_id)
             return
         reply_comm = _make_reply_comm(message=message, relay=self.relay)
         reply = DataBusReply(message=message, comm=reply_comm)
