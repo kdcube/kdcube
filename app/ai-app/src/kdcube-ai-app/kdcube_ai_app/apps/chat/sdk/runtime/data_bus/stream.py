@@ -354,17 +354,22 @@ class RedisDataBusStream:
             if len(body) > self.result_inline_bytes:
                 digest = hashlib.sha256(body).hexdigest()
                 key_suffix = f"{result.message_id}:{digest[:16]}"
+                ttl = result_body_ttl_seconds(wait_ms)
+                payload["data"] = {}
                 try:
-                    await self._keep_result_body(result_body_key(self.results_key, key_suffix), body, digest,
-                                                 result_body_ttl_seconds(wait_ms))
+                    await self._keep_result_body(result_body_key(self.results_key, key_suffix), body, digest, ttl)
                 except Exception:
-                    # Fail toward lossless: without its body the reference would be useless, so keep data inline.
-                    logger.warning("[data_bus.result] body write failed; result kept inline message_id=%s",
-                                   result.message_id, exc_info=True)
+                    # EMain D1 (00:47Z): never an unbounded inline bypass of the 16 KiB bound. The polling reader gets
+                    # a named outcome-unknown; the socket reply still carries the data; nothing is re-sent. Counted
+                    # by name in the log so a recurring Redis write problem is visible.
+                    logger.warning("[data_bus.result] result_body_write_failed subject=%s bytes=%s",
+                                   result.subject, len(body), exc_info=True)
+                    payload["data_unavailable"] = {"schema": RESULT_BODY_SCHEMA, "reason": "result_body_write_failed",
+                                                   "bytes": len(body)}
                 else:
-                    payload["data"] = {}
                     payload["data_ref"] = {"schema": RESULT_BODY_SCHEMA, "key_suffix": key_suffix,
-                                           "sha256": digest, "bytes": len(body)}
+                                           "sha256": digest, "bytes": len(body),
+                                           "body_expires_at": int(time.time()) + ttl}
         return await self._xadd(self.results_key, {"json": _json_dump(payload)}, maxlen=self.result_stream_maxlen)
 
     async def _keep_result_body(self, key: str, body: bytes, digest: str, ttl: int) -> None:

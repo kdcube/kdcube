@@ -198,8 +198,36 @@ class _SetRefused:
 
 
 @pytest.mark.asyncio
-async def test_a_failed_body_write_keeps_the_result_inline():
+async def test_a_failed_body_write_is_outcome_unknown_not_an_inline_bypass(caplog):
+    """EMain D1 (00:47Z): the 16 KiB bound holds; the poller is told the outcome is unknown; the failure is counted."""
     redis = _SetRefused()
-    await RedisDataBusStream(redis, tenant="t", project="p", bundle_id="b@1").write_result(
-        DataBusResult(message_id="m6", subject="s", data=LARGE))
-    assert redis.added[0]["data"] == LARGE and "data_ref" not in redis.added[0]
+    with caplog.at_level("WARNING"):
+        await RedisDataBusStream(redis, tenant="t", project="p", bundle_id="b@1").write_result(
+            DataBusResult(message_id="m6", subject="s", data=LARGE))
+    entry = redis.added[0]
+    assert entry["data"] == {} and entry["data_unavailable"]["reason"] == "result_body_write_failed"
+    assert "data_ref" not in entry and len(json.dumps(entry)) < 1024
+    assert any("result_body_write_failed" in r.getMessage() for r in caplog.records)
+    assert not any("w0" in r.getMessage() for r in caplog.records)
+
+
+@needs_redis
+@pytest.mark.asyncio
+async def test_a_poller_reads_an_unstored_body_as_outcome_unknown(redis):
+    stream = _stream(redis)
+    entry = {"message_id": "m8", "status": "ok", "subject": "s", "data": {},
+             "data_unavailable": {"schema": stream_module.RESULT_BODY_SCHEMA, "reason": "result_body_write_failed"}}
+    await redis.xadd(stream.results_key, {"json": json.dumps(entry)})
+    with pytest.raises(DataBusResultBodyUnavailable):
+        await _publisher(redis)._find_result(stream.results_key, "m8", count=10)
+
+
+@needs_redis
+@pytest.mark.asyncio
+async def test_the_reference_states_when_its_body_expires(redis):
+    import time
+
+    stream = _stream(redis)
+    await stream.write_result(DataBusResult(message_id="m9", subject="s", data=LARGE), wait_ms=7_200_000)
+    expires = (await _entry(redis, stream))["data_ref"]["body_expires_at"]
+    assert 7_200 < expires - int(time.time()) <= 7_200 + stream_module.RESULT_BODY_WAIT_MARGIN_SECONDS

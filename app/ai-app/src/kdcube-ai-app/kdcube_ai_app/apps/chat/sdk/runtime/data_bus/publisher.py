@@ -224,6 +224,8 @@ class DataBusPublisher:
                 continue
             if isinstance(payload, Mapping) and str(payload.get("message_id") or "") == message_id:
                 found = dict(payload)
+                if "data_unavailable" in found:
+                    raise DataBusResultBodyUnavailable("the result body could not be stored")
                 if "data_ref" in found:
                     found["data"] = await self._result_body(results_key, message_id, found.pop("data_ref"))
                 return found
