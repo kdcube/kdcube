@@ -97,3 +97,25 @@ async def test_the_report_reads_real_streams_without_writing_or_returning_values
     finally:
         await redis.flushdb()
         await redis.aclose()
+
+
+def _command(message_id: str, operation: str) -> str:
+    return DataBusMessage(message_id=message_id, tenant="t", project="p", bundle_id="b@1",
+                          subject="problem_board.command.v1",
+                          payload={"operation": operation, "object_ref": SECRET, "payload": {"k": SECRET}}).to_json()
+
+
+def test_messages_and_results_are_labelled_by_their_allowlisted_operation():
+    messages = [_command("m1", "worker.heartbeat"), _command("m2", "control.pull"), _command("m3", SECRET)]
+    operations = size_report.operations_by_message(messages, allowed_operations=["worker.heartbeat", "control.pull"])
+    results = [json.dumps({"message_id": "m1", "status": "ok", "data": {"team": ["x" * 5000]}}),
+               json.dumps({"message_id": "m2", "status": "ok", "data": {}}),
+               json.dumps({"message_id": "gone", "status": "ok", "data": {}})]
+
+    by_message = size_report.summarize_entries("messages", messages, allowed_operations=["worker.heartbeat"])
+    by_result = size_report.summarize_entries("results", results, operations=operations)
+
+    assert set(by_message["by_operation"]) == {"worker.heartbeat", "other"}
+    assert set(by_result["by_operation"]) == {"worker.heartbeat", "control.pull", "unjoined"}
+    assert by_result["by_operation"]["worker.heartbeat"]["max"] > 5000
+    assert SECRET not in json.dumps([by_message, by_result, operations])
