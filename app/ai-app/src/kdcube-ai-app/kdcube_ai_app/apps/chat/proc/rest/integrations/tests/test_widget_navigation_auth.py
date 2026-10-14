@@ -92,7 +92,8 @@ def test_html_navigation_without_fetch_metadata_still_redirects() -> None:
     ("accept", "fetch_destination", "fetch_mode"),
     [
         ("application/json", "document", "navigate"),
-        ("text/html", "iframe", "navigate"),
+        ("application/json", "iframe", "navigate"),
+        ("text/html", "iframe", "cors"),
         ("text/html", "script", "no-cors"),
         ("text/html", "document", "cors"),
     ],
@@ -187,3 +188,65 @@ def test_a_navigation_just_after_sign_out_shows_signed_out_instead_of_signing_in
     target = urlsplit(link)
     assert target.path == "/signin/"
     assert parse_qs(target.query) == {"next": [f"{_WIDGET_PATH}?tab=people"]}
+
+
+def _sign_in_link(body: str) -> tuple[str, dict]:
+    tag = body.split('<a id="kdcube-sign-in" ', 1)[1].split(">", 1)[0]
+    link = tag.split('href="', 1)[1].split('"', 1)[0].replace("&amp;", "&")
+    target = urlsplit(link)
+    return tag, {"path": target.path, "query": parse_qs(target.query)}
+
+
+@pytest.mark.parametrize("fetch_destination", ["iframe", "frame"])
+def test_a_framed_widget_navigation_shows_a_top_level_sign_in_instead_of_json(fetch_destination: str) -> None:
+    """W847: the platform app frames widgets (a pane). A signed-out frame load is a person's page, so it gets
+    the sign-in prompt, never the raw JSON body, and never an identity-provider redirect inside the frame."""
+
+    request = _request(fetch_destination=fetch_destination)
+    response = enforce_protected_widget_user(request, _session(UserType.ANONYMOUS))
+
+    assert not isinstance(response, RedirectResponse)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    body = response.body.decode("utf-8")
+    assert "Sign in to continue." in body and "User is required" not in body
+    tag, link = _sign_in_link(body)
+    assert 'target="_top"' in tag, "sign-in opens at the top level, not inside the pane"
+    assert link["path"] == "/signin/"
+    assert link["query"] == {"next": [f"{_WIDGET_PATH}?{request.url.query}"]}  # the no-script fallback
+    assert "window.top.location" in body  # with script, it returns to the page that framed the widget
+
+
+def test_a_framed_navigation_just_after_sign_out_shows_signed_out_with_a_top_level_link() -> None:
+    request = _request(fetch_destination="iframe", query="tab=people&signed_out=1")
+    response = enforce_protected_widget_user(request, _session(UserType.ANONYMOUS))
+
+    body = response.body.decode("utf-8")
+    assert response.status_code == 200 and "You are signed out." in body
+    tag, link = _sign_in_link(body)
+    assert 'target="_top"' in tag
+    assert link["query"] == {"next": [f"{_WIDGET_PATH}?tab=people"]}
+
+
+def test_a_top_level_signed_out_page_keeps_its_link_in_the_same_window() -> None:
+    body = enforce_protected_widget_user(_request(query="signed_out=1"), _session(UserType.ANONYMOUS)).body.decode()
+    tag, _ = _sign_in_link(body)
+    assert "target=" not in tag and "window.top.location" not in body
+
+
+def test_the_platform_session_check_treats_a_framed_page_as_a_browser_navigation() -> None:
+    from kdcube_ai_app.apps.chat.proc.rest.integrations.browser_navigation_auth import (
+        enforce_platform_session_user,
+        is_framed_html_navigation,
+    )
+
+    framed = _request(fetch_destination="iframe")
+    assert is_framed_html_navigation(framed)
+    assert not is_framed_html_navigation(_request())  # top level
+    assert not is_framed_html_navigation(_request(fetch_destination="iframe", accept="application/json"))
+    response = enforce_platform_session_user(framed, _session(UserType.ANONYMOUS))
+    assert response is not None and response.status_code == 200
+    with pytest.raises(HTTPException) as exc_info:  # a script's fetch keeps the JSON 401
+        enforce_platform_session_user(_request(fetch_destination="empty", fetch_mode="cors",
+                                               accept="application/json"), _session(UserType.ANONYMOUS))
+    assert exc_info.value.status_code == 401 and exc_info.value.detail == "User is required."

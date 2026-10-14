@@ -28,7 +28,56 @@ def is_top_level_html_navigation(request: Request) -> bool:
     return True
 
 
+_FRAME_DESTINATIONS = frozenset({"iframe", "frame"})
+
+
+def is_framed_html_navigation(request: Request) -> bool:
+    """A document navigation inside a frame, such as a widget pane the platform app embeds (W847).
+
+    Browsers send ``Sec-Fetch-Dest: iframe`` (or ``frame``) with ``Sec-Fetch-Mode: navigate`` for it.
+    It is a person looking at a page, not a script, so it must not get a JSON body.
+    """
+    accept = request.headers.get("accept", "").lower()
+    if "text/html" not in accept or "application/json" in accept:
+        return False
+    if request.headers.get("sec-fetch-dest", "").strip().lower() not in _FRAME_DESTINATIONS:
+        return False
+    fetch_mode = request.headers.get("sec-fetch-mode", "").strip().lower()
+    return not fetch_mode or fetch_mode == "navigate"
+
+
+def is_browser_html_navigation(request: Request) -> bool:
+    """A person's page load: top level, or framed inside a page of the same app."""
+    return is_top_level_html_navigation(request) or is_framed_html_navigation(request)
+
+
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+# In a frame the sign-in page opens at the top level, returning to the page that framed this one
+# (same origin), without the signed-out marker. Without script the link still works and returns to
+# this frame's own path.
+_TOP_LEVEL_NEXT_SCRIPT = (
+    "<script>(function(){try{var a=document.getElementById('kdcube-sign-in');"
+    "var t=window.top.location;var q=new URLSearchParams(t.search);q.delete('signed_out');"
+    "var s=q.toString();var n=t.pathname+(s?'?'+s:'')+t.hash;"
+    "var u=new URL(a.getAttribute('href'),t.href);u.searchParams.set('next',n);"
+    "a.setAttribute('href',u.pathname+u.search);}catch(e){}})();</script>"
+)
+
+
+def _signed_out_page(sign_in: str, *, heading: str, framed: bool) -> HTMLResponse:
+    target = ' target="_top"' if framed else ""
+    script = _TOP_LEVEL_NEXT_SCRIPT if framed else ""
+    return HTMLResponse(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Signed out</title>"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head>"
+        "<body style=\"font-family: system-ui, sans-serif; margin: 3rem auto; max-width: 28rem; padding: 0 1rem\">"
+        f"<h1 style=\"font-size: 1.25rem\">{html.escape(heading)}</h1>"
+        f"<p><a id=\"kdcube-sign-in\" href=\"{html.escape(sign_in, quote=True)}\"{target}>Sign in</a></p>"
+        f"{script}</body></html>",
+        status_code=200,
+        headers=_NO_STORE,
+    )
 
 
 def platform_sign_in_redirect(request: Request) -> Response:
@@ -47,16 +96,13 @@ def platform_sign_in_redirect(request: Request) -> Response:
     elif request.url.query:
         return_to = f"{return_to}?{request.url.query}"
     sign_in = f"{sign_in_bounce_path()}?next={quote(return_to, safe='')}"
+    if is_framed_html_navigation(request):
+        # W847: never send a frame to the identity provider (its frame policy can blank it, and a sign-in
+        # trapped in a pane signs in only the pane). Show the prompt; Sign in opens at the top level.
+        return _signed_out_page(sign_in, heading="You are signed out." if signed_out else "Sign in to continue.",
+                                framed=True)
     if signed_out:
-        return HTMLResponse(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Signed out</title>"
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head>"
-            "<body style=\"font-family: system-ui, sans-serif; margin: 3rem auto; max-width: 28rem; padding: 0 1rem\">"
-            "<h1 style=\"font-size: 1.25rem\">You are signed out.</h1>"
-            f"<p><a href=\"{html.escape(sign_in, quote=True)}\">Sign in</a></p></body></html>",
-            status_code=200,
-            headers=_NO_STORE,
-        )
+        return _signed_out_page(sign_in, heading="You are signed out.", framed=False)
     return RedirectResponse(url=sign_in, status_code=302, headers=_NO_STORE)
 
 
@@ -70,13 +116,15 @@ def enforce_platform_session_user(
     user_type_value = str(getattr(user_type, "value", user_type))
     if session is not None and user_type_value.lower() != UserType.ANONYMOUS.value:
         return None
-    if is_top_level_html_navigation(request):
+    if is_browser_html_navigation(request):
         return platform_sign_in_redirect(request)
     raise HTTPException(status_code=401, detail="User is required.")
 
 
 __all__ = [
     "enforce_platform_session_user",
+    "is_browser_html_navigation",
+    "is_framed_html_navigation",
     "is_top_level_html_navigation",
     "platform_sign_in_redirect",
 ]
