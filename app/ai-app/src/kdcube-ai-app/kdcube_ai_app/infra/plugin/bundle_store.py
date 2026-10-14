@@ -28,6 +28,7 @@ from kdcube_ai_app.infra.secrets.manager import (
     _write_yaml_mapping_to_storage,
 )
 from kdcube_ai_app.storage.observed_file_locks import observed_file_lock
+from kdcube_ai_app.infra.plugin.example_bundle_discovery import declared_example_bundle_id
 
 REDIS_KEY_FMT = namespaces.CONFIG.BUNDLES.BUNDLE_MAPPING_KEY_FMT
 REDIS_CHANNEL_FMT = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL
@@ -535,8 +536,7 @@ def _load_example_bundles() -> Dict[str, "BundleEntry"]:
             continue
         bundle_path = _ensure_example_bundle_shared(item)
         try:
-            from kdcube_ai_app.infra.plugin.bundle_loader import get_declared_bundle_id
-            bid = get_declared_bundle_id(bundle_path, "entrypoint") or item.name
+            bid = declared_example_bundle_id(bundle_path) or item.name
         except Exception:
             bid = item.name
         bundles[bid] = BundleEntry(
@@ -629,14 +629,13 @@ def _reserved_bundle_entry(bid: str) -> Optional["BundleEntry"]:
         )
     # Fallback: scan all example dirs and check declared @bundle_id.
     try:
-        from kdcube_ai_app.infra.plugin.bundle_loader import get_declared_bundle_id
         for item in root.iterdir():
             if not item.is_dir() or item.name in {"data", "__pycache__"}:
                 continue
             if not (item / "entrypoint.py").exists():
                 continue
             bundle_path = _ensure_example_bundle_shared(item)
-            if get_declared_bundle_id(bundle_path, "entrypoint") == bid or bid in _example_bundle_id_candidates(item):
+            if declared_example_bundle_id(bundle_path) == bid or bid in _example_bundle_id_candidates(item):
                 return BundleEntry(
                     id=bid,
                     name=bid,

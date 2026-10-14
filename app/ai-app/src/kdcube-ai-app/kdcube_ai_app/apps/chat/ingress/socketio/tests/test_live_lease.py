@@ -32,9 +32,14 @@ async def test_idle_healthy_transport_is_checked_without_business_traffic():
     socket.check_ping_timeout.assert_awaited_once()
 
 
-@pytest.mark.parametrize("kind", ["remote", "missing", "not-connected", "closed", "closing", "timeout"])
+@pytest.mark.parametrize("kind,reason", [
+    ("remote", "namespace_disconnected"), ("missing", "socket_missing"),
+    ("not-connected", "socket_closed"), ("closed", "socket_closed"),
+    ("closing", "socket_closed"), ("timeout", "ping_timeout"),
+    ("exception", "liveness_unavailable"),
+])
 @pytest.mark.asyncio
-async def test_unhealthy_or_other_ingress_socket_is_not_renewed(kind):
+async def test_unhealthy_or_other_ingress_socket_is_not_renewed(kind, reason):
     sio, socket = server()
     if kind == "remote":
         sio.manager.is_connected.return_value = False
@@ -44,9 +49,13 @@ async def test_unhealthy_or_other_ingress_socket_is_not_renewed(kind):
         socket.connected = False
     elif kind in ("closed", "closing"):
         setattr(socket, kind, True)
+    elif kind == "exception":
+        socket.check_ping_timeout.side_effect = RuntimeError("synthetic liveness failure")
     else:
         socket.check_ping_timeout.return_value = False
-    assert not await DataBusSocketLeases(sio)._healthy("sid")
+    leases = DataBusSocketLeases(sio)
+    assert not await leases._healthy("sid")
+    assert await leases._transport_refusal_reason("sid") == reason
 
 
 async def run_cycles(monkeypatch, renewals):
@@ -116,3 +125,70 @@ async def test_actual_socketio_engineio_api_rejects_missing_pong():
     socket.last_ping = time.time() - sio.eio.ping_timeout - 1
     assert not await leases._healthy(sid)
     assert socket.closed
+
+
+@pytest.mark.asyncio
+async def test_refused_renewal_reports_scheduling_lag_without_session_data(monkeypatch, caplog):
+    clock = [0.0]
+    monkeypatch.setattr(live_lease, "monotonic", lambda: clock[0])
+
+    async def delayed_sleep(interval):
+        clock[0] += interval + 80
+
+    monkeypatch.setattr(live_lease.asyncio, "sleep", delayed_sleep)
+    sio, _ = server()
+    leases = DataBusSocketLeases(sio)
+    session = DataBusLiveSession("private-principal", "private-session", "private-socket", 2000000000, "private-generation")
+    registry = SimpleNamespace(renew=AsyncMock(return_value=False), unregister=AsyncMock())
+    leases._tasks[session.socket_id] = asyncio.current_task()
+    await leases._renew(registry=registry, session=session, tenant="private-tenant",
+                        project="private-project", bundle_id="private-bundle")
+    assert "reason=scheduling_lag lag_ms=80000 lease_seconds=75" in caplog.text
+    assert "reason=registration_refused lag_ms=80000 lease_seconds=75" in caplog.text
+    assert "private-" not in caplog.text
+    sio.disconnect.assert_awaited_once_with(session.socket_id)
+    registry.unregister.assert_awaited_once_with(socket_id=session.socket_id, registration_id=session.registration_id)
+
+
+@pytest.mark.asyncio
+async def test_repeated_renewal_errors_have_bounded_diagnostics_and_keep_retrying(monkeypatch, caplog):
+    monkeypatch.setattr(live_lease, "monotonic", lambda: 0.0)
+    failures = [ConnectionError("private-error-detail")] * 5
+    sio, _, registry = await run_cycles(monkeypatch, failures + [False])
+    assert registry.renew.await_count == 6
+    assert caplog.text.count("reason=renewal_unavailable") == 1
+    assert "error_type=ConnectionError" in caplog.text
+    assert "private-error-detail" not in caplog.text
+    assert caplog.text.count("reason=registration_refused") == 1
+    sio.disconnect.assert_awaited_once_with("sid")
+
+
+@pytest.mark.asyncio
+async def test_transport_stop_names_its_reason(monkeypatch, caplog):
+    with caplog.at_level("INFO", logger=live_lease.__name__):
+        sio, _, registry = await run_cycles(monkeypatch, [True])
+    assert "reason=ping_timeout" in caplog.text
+    sio.disconnect.assert_not_awaited()
+    assert registry.renew.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduling_lag_warning_is_throttled_per_task(monkeypatch, caplog):
+    clock = [0.0]
+    monkeypatch.setattr(live_lease, "monotonic", lambda: clock[0])
+
+    async def delayed_sleep(interval):
+        clock[0] += interval + 20
+
+    monkeypatch.setattr(live_lease.asyncio, "sleep", delayed_sleep)
+    sio, socket = server()
+    socket.check_ping_timeout.side_effect = [True, True, True, False]
+    leases = DataBusSocketLeases(sio)
+    session = DataBusLiveSession("principal", "session", "sid", 2000000000, "generation")
+    registry = SimpleNamespace(renew=AsyncMock(return_value=True), unregister=AsyncMock())
+    leases._tasks["sid"] = asyncio.current_task()
+    await leases._renew(registry=registry, session=session, tenant="tenant",
+                        project="project", bundle_id="bundle")
+    assert caplog.text.count("reason=scheduling_lag") == 2
+    assert registry.renew.await_count == 3
+    sio.disconnect.assert_not_awaited()

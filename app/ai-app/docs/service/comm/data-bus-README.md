@@ -326,6 +326,17 @@ shared Redis index across ingress processes. A transport lease grants no
 operation: every outbound delivery still resolves the current Card, its parent
 Controls and resource grants. Unknown authority fails closed for that delivery.
 
+Ingress reports a refused renewal as `reason=registration_refused`; the registry
+returns a boolean, so that label does not distinguish expiry, removal, or a
+generation mismatch. Transport stops name `namespace_disconnected`,
+`socket_missing`, `socket_closed`, `ping_timeout`, or `liveness_unavailable`.
+The diagnostic `lag_ms` measures wake-up delay beyond the scheduled check and
+is capped at one day; `lease_seconds` is the configured maximum window, not a
+measurement of the remaining Redis TTL. Delays of at least one check interval
+and renewal exceptions each log at most once per minute per transport task.
+Logs contain these bounded fields and exception class names, without session
+identifiers, authority, credentials, exception messages, or payloads.
+
 The routing key is scoped by tenant, project, bundle, and authenticated
 principal. A delegated card uses its Card-scoped rate-limit subject when one is
 present; other federated clients use the session user ID. Bundle code can then
@@ -786,6 +797,16 @@ Ingress must:
 - cap JSON payload size;
 - reject unexpected binary data in the JSON package;
 - avoid logging user-authored payload bodies.
+
+Bundle admission reads the current registry and effective properties. For
+examples shipped in the platform image, declared entrypoint IDs are discovered
+once per resolved immutable entrypoint path and retained in a process-local,
+single-flight 256-entry LRU, including an unloadable entrypoint's negative
+result. After warm-up, registry reads reuse that discovery metadata. Cold or
+evicted paths still perform discovery. A new image uses a new process; a
+content-addressed shared copy uses a new path. The cache stores only IDs:
+existence, example inclusion, allowlist admission, disabled state, and live
+Card/parent authority continue to be checked at their operation boundaries.
 
 Proc must:
 
