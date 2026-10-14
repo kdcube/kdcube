@@ -725,10 +725,11 @@ could lose its body while still listed as pending.
   than the window is removed only after every consumer group has read and
   acknowledged it. Unread entries, pending entries, and any entry of a stream
   whose groups are unknown stay. `publish` creates the handler group before
-  the first entry. On Redis 8.2+ the trim is `XTRIM key MINID ~ <age> LIMIT n
-  ACKED`. On older Redis, one Lua script computes the boundary from every
-  group's earliest pending ID and last-delivered ID, then trims below it.
-  Either way it is a single atomic call.
+  the first entry. One Lua script, a single atomic call, computes the boundary
+  from the server clock and from every group's earliest pending ID and
+  last-delivered ID, then runs `XTRIM key MINID ~ <boundary> LIMIT n`. It does
+  not use XTRIM's own `ACKED` option: with `~ ... LIMIT`, that removed nothing
+  on Redis 8.4.0.
 - **Result and DLQ streams: unchanged count caps.** They have no consumer
   group and keep `DATA_BUS_RESULT_STREAM_MAXLEN` and `DATA_BUS_DLQ_STREAM_MAXLEN`
   (10,000 each). A time window for them is a separate policy decision.

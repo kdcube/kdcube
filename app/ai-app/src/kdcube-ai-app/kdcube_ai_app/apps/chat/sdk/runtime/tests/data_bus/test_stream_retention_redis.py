@@ -2,8 +2,8 @@
 
 Only the message stream changed: results and DLQ keep their count caps. Set DATA_BUS_TEST_REDIS_URL to a
 disposable Redis (never a running KDCube Redis: each test flushes its own
-database). Run it on Redis 7 (no XTRIM ACKED: the script computes the acknowledged boundary) and on Redis 8.2+
-(XTRIM ... ACKED). Old entries get explicit stream IDs far in the past, so no test sleeps. The fixture sets
+database). The script computes the acknowledged boundary on every version; run it on Redis 7, 8.4 and the live
+8.x (XTRIM's own ACKED option removed nothing with "~ ... LIMIT" on 8.4.0). Old entries get explicit stream IDs far in the past, so no test sleeps. The fixture sets
 stream-node-max-entries to 1 so the approximate (``~``) trim the stream uses removes exactly the eligible
 entries; the default node size only makes it trim less, never more.
 """
@@ -30,7 +30,6 @@ async def redis():
     client = Redis.from_url(REDIS_URL)
     await client.flushdb()
     await client.config_set("stream-node-max-entries", 1)
-    stream_module._ACKED_SUPPORT.clear()
     stream_module._LAST_TRIM.clear()
     stream_module._GROUP_READY.clear()
     try:
@@ -190,14 +189,3 @@ async def test_one_trim_removes_at_most_its_limit(redis):
 
     assert 0 < removed <= 10
     assert await redis.xlen(stream.messages_key) == 50 - removed
-
-
-@pytest.mark.asyncio
-async def test_the_trim_path_matches_the_server(redis):
-    """Redis 8.2+ uses XTRIM ACKED; older servers fall back to the computed boundary, once per client."""
-    stream = _stream(redis)
-    await stream.ensure_group()
-    await _old(redis, stream.messages_key, 1)
-    await _trim(stream)
-    major, minor = (int(part) for part in (await redis.info("server"))["redis_version"].split(".")[:2])
-    assert stream_module._ACKED_SUPPORT[id(redis)] is ((major, minor) >= (8, 2))

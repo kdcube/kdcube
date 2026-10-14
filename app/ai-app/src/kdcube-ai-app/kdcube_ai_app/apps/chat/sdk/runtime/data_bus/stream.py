@@ -45,8 +45,9 @@ if os.getenv("DATA_BUS_STREAM_MAXLEN"):
 #   KEYS[1]  stream
 #   ARGV[1]  retention in milliseconds
 #   ARGV[2]  per-call entry limit
-#   ARGV[3]  "1": use XTRIM ... ACKED (Redis 8.2+); "0": compute the acknowledged boundary here
-# Every consumer group must have acknowledged an entry; a stream with no group is kept.
+# Every consumer group must have acknowledged an entry; a stream with no group is kept. The boundary is computed
+# here on every Redis version: XTRIM's own ACKED option removed nothing with "~ ... LIMIT" on Redis 8.4.0
+# (Mint, W827 review), and LIMIT requires "~".
 # Returns the number of entries removed, or -1 when the stream is kept because no group is known.
 _TRIM_SCRIPT = """
 local key = KEYS[1]
@@ -58,9 +59,6 @@ local boundary = tostring(age_ms) .. '-0'
 local limit = ARGV[2]
 local groups = redis.call('XINFO', 'GROUPS', key)
 if #groups == 0 then return -1 end
-if ARGV[3] == '1' then
-  return redis.call('XTRIM', key, 'MINID', '~', boundary, 'LIMIT', limit, 'ACKED')
-end
 local function before(a, b)
   local ams, aseq = string.match(a, '^(%d+)-(%d+)$')
   local bms, bseq = string.match(b, '^(%d+)-(%d+)$')
@@ -84,8 +82,6 @@ end
 return redis.call('XTRIM', key, 'MINID', '~', boundary, 'LIMIT', limit)
 """
 
-# Per Redis client: whether XTRIM accepts ACKED (learned from the first refusal; never re-probed per call).
-_ACKED_SUPPORT: dict[int, bool] = {}
 _LAST_TRIM: dict[tuple[int, str], float] = {}
 # Groups this process has created or found, so publish checks a stream's group once, not on every message.
 _GROUP_READY: set[tuple[int, str, str]] = set()
@@ -366,21 +362,11 @@ class RedisDataBusStream:
         evaluate = getattr(self.redis, "eval", None)
         if not callable(evaluate):
             return None
-        client = id(self.redis)
-        acked = _ACKED_SUPPORT.get(client, True)
         try:
-            removed = await evaluate(_TRIM_SCRIPT, 1, stream_key, self.message_retention_ms, self.trim_limit,
-                                     "1" if acked else "0")
-        except Exception as exc:
-            if acked and "syntax" in str(exc).lower():
-                # Redis before 8.2 has no ACKED: compute the acknowledged boundary in the script from now on.
-                _ACKED_SUPPORT[client] = False
-                _LAST_TRIM.pop(marker, None)
-                return await self.trim(force=True)
+            removed = await evaluate(_TRIM_SCRIPT, 1, stream_key, self.message_retention_ms, self.trim_limit)
+        except Exception:
             logger.warning("[data_bus.retention] trim refused stream=%s", stream_key, exc_info=True)
             return None
-        if acked:
-            _ACKED_SUPPORT[client] = True
         return int(removed or 0)
 
     async def ensure_group(self) -> None:
