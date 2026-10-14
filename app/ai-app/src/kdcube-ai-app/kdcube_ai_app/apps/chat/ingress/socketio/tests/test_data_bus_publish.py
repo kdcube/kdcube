@@ -21,6 +21,20 @@ from kdcube_ai_app.apps.chat.sdk.application_operations import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.policy import DataBusPublishLimit, DataBusSettings
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import DataBusHandlerSpec
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.actor_compaction import BINDING_INPUTS, REBUILT_FROM_CARD
+
+
+async def _worker_view(monkeypatch, card, stored_actor):
+    """W827 S2c: what a handler sees: the worker's live Card re-check applied to the stored (compact) actor."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import worker as worker_module
+
+    authority = stored_actor["identity_authority"]
+    assert not REBUILT_FROM_CARD & set(authority), "the stored actor still carries Card-rebuilt copies"
+    assert set(authority["delegated_card_binding"]) <= set(BINDING_INPUTS)
+    monkeypatch.setattr(worker_module, "resolve_live_grant_card", _async_return(card))
+    monkeypatch.setattr(worker_module, "delegated_card_store", lambda **scope: object())
+    return await worker_module._resolve_live_delegated_actor(object(), tenant="tenant-a", project="project-a",
+                                                             actor=stored_actor)
 
 
 class FakeRedis:
@@ -1155,7 +1169,7 @@ async def test_data_bus_publish_refreshes_live_card_authority(monkeypatch):
     assert ack["status"] == "accepted"
     stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
     record = json.loads(redis.streams[stream_key][0][1]["json"])
-    authority = record["actor"]["identity_authority"]
+    authority = (await _worker_view(monkeypatch, card, record["actor"]))["identity_authority"]
     assert authority["delegated_resource"] == resource
     assert authority["grants"] == ["work:relay", "work:journal:view"]
     assert authority["operations"] == [
@@ -1244,7 +1258,7 @@ async def test_data_bus_publish_carries_selected_operation_and_card_role(monkeyp
         "reports:write",
     ]
     assert "kdcube:role:super-admin" not in record["actor"]["roles"]
-    assert record["actor"]["identity_authority"][
+    assert (await _worker_view(monkeypatch, card, record["actor"]))["identity_authority"][
         APPLICATION_OPERATION_POLICY_PROPERTY
     ] == application_operation_policy()
 
@@ -1310,14 +1324,15 @@ async def test_data_bus_publish_carries_unselected_operation_to_worker_guard(mon
     assert ack["status"] == "accepted"
     stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
     record = json.loads(redis.streams[stream_key][0][1]["json"])
-    assert record["actor"]["identity_authority"]["resource_operations"]["*"] == [
+    seen = await _worker_view(monkeypatch, card, record["actor"])
+    assert seen["identity_authority"]["resource_operations"]["*"] == [
         data_bus_application_operation_ref(
             application_id="task-tracker@1-0",
             subject="report.read.requested",
             operation_id="report.read",
         )
     ]
-    assert record["actor"]["identity_authority"][
+    assert seen["identity_authority"][
         APPLICATION_OPERATION_POLICY_PROPERTY
     ] == application_operation_policy()
 
