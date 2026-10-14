@@ -7,9 +7,10 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.actor_compaction import compact_card_actor
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     DataBusMessage,
     DataBusResult,
@@ -187,6 +188,9 @@ class RedisDataBusStream:
         if marker not in _GROUP_READY:
             await self.ensure_group()
             _GROUP_READY.add(marker)
+        # W827 S2c: a Card-bound actor's Card-rebuilt copies are not stored (the worker re-reads the Card).
+        if message.actor:
+            message = replace(message, actor=compact_card_actor(message.actor))
         stream_id = await self._xadd(self.messages_key, {"json": message.to_json()})
         return DataBusPublishResult(
             message_id=message.message_id,
