@@ -78,7 +78,8 @@ services:
     env_file:
       - path: ${KDCUBE_CONFIG_DIR:-./config}/.env
         required: false
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}",
+              "--maxmemory", "${REDIS_MAXMEMORY:-0}", "--maxmemory-policy", "${REDIS_MAXMEMORY_POLICY:-noeviction}"]
     restart: unless-stopped
     volumes:
       - ${KDCUBE_DATA_DIR:-./data}/redis:/data
