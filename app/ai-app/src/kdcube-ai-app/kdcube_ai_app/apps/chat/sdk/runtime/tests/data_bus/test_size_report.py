@@ -37,7 +37,15 @@ def test_messages_summary_reports_sizes_by_component_and_allowed_subject_only():
     assert report["components"]["payload"]["count"] == 3
     assert report["components"]["actor.identity_authority"]["max"] > 0
     assert report["components"]["payload"]["max"] > 1000
+    assert report["components_missing"]["reply"] == 3 and report["components_missing"]["payload"] == 0
+    assert report["subjects_not_allowlisted"] == 1
     assert SECRET not in json.dumps(report)
+
+
+def test_age_range_comes_from_stream_ids_and_the_server_clock():
+    assert size_report.age_range([b"1000-0", "61000-3", "garbage"], now_ms=121000) == {
+        "oldest_seconds": 120, "newest_seconds": 60}
+    assert size_report.age_range([], now_ms=1) == {"oldest_seconds": None, "newest_seconds": None}
 
 
 def test_entry_bytes_are_the_stored_utf8_bytes():
@@ -81,7 +89,9 @@ async def test_the_report_reads_real_streams_without_writing_or_returning_values
         assert report["streams"]["messages"]["xlen"] == 30 and report["streams"]["messages"]["sampled"] == 10
         assert report["streams"]["messages"]["memory_usage_bytes"] > 0
         assert report["streams"]["results"]["components"]["data"]["count"] == 1
+        assert report["streams"]["messages"]["sample_age"]["newest_seconds"] is not None
         assert report["streams"]["dlq"] == {"xlen": 0, "memory_usage_bytes": 0, "sampled": 0,
+                                            "sample_age": {"oldest_seconds": None, "newest_seconds": None},
                                             **size_report.summarize_entries("dlq", [])}
         assert SECRET not in json.dumps(report)
     finally:

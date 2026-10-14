@@ -5,7 +5,11 @@
 
 Read-only. It samples the newest entries of one bundle's message, result and DLQ streams and reports only
 aggregates: entry counts, UTF-8 byte percentiles of the stored envelope and of its top-level components, per
-subject when the subject is on the caller's allowlist ("other" otherwise), plus XLEN and MEMORY USAGE.
+subject when the subject is on the caller's allowlist ("other" otherwise), plus XLEN, MEMORY USAGE, the age range
+of the sampled entries and how many lacked each component.
+
+Newest-N percentiles describe the sample, not every protected byte, and are not by themselves a safe admission
+bound (codex-infra, W827): a cap derived from them is a policy proposal for the coordinator.
 
 It never returns a value, a field name below the top-level components, a principal, Card, grant, key or user
 text. The byte counts are of the JSON exactly as the stream stores it (``sort_keys``, ``ensure_ascii=False``).
@@ -97,9 +101,26 @@ def summarize_entries(kind: str, raw_entries: Iterable[Any], *, allowed_subjects
     return {
         "entry_bytes": percentiles(entry_sizes),
         "components": {name: percentiles(sizes) for name, sizes in parts.items()},
+        "components_missing": {name: len(entry_sizes) - unparsable - len(sizes) for name, sizes in parts.items()},
         "by_subject": {label: percentiles(sizes) for label, sizes in sorted(by_subject.items())},
         "unparsable": unparsable,
+        "subjects_not_allowlisted": len(by_subject.get(OTHER, ())),
     }
+
+
+def _id_ms(stream_id: Any) -> int | None:
+    text = stream_id.decode() if isinstance(stream_id, bytes) else str(stream_id or "")
+    head = text.split("-", 1)[0]
+    return int(head) if head.isdigit() else None
+
+
+def age_range(entry_ids: Iterable[Any], now_ms: int) -> dict[str, int | None]:
+    """Seconds since the oldest and newest sampled entry, from their stream IDs and the server clock."""
+    stamps = [ms for ms in (_id_ms(i) for i in entry_ids) if ms is not None]
+    if not stamps:
+        return {"oldest_seconds": None, "newest_seconds": None}
+    return {"oldest_seconds": max(0, (now_ms - min(stamps)) // 1000),
+            "newest_seconds": max(0, (now_ms - max(stamps)) // 1000)}
 
 
 async def stream_size_report(redis: Any, *, tenant: str, project: str, bundle_id: str, sample: int = 1000,
@@ -107,6 +128,8 @@ async def stream_size_report(redis: Any, *, tenant: str, project: str, bundle_id
     """Sample the newest ``sample`` entries of each stream (read-only: XLEN, MEMORY USAGE, XREVRANGE)."""
     sample = max(1, int(sample))
     allowed = tuple(allowed_subjects)
+    seconds, micros = await redis.time()
+    now_ms = int(seconds) * 1000 + int(micros) // 1000
     streams: dict[str, Any] = {}
     for kind in COMPONENTS:
         key = data_bus_stream_key(tenant=tenant, project=project, bundle_id=bundle_id, kind=kind)
@@ -115,8 +138,9 @@ async def stream_size_report(redis: Any, *, tenant: str, project: str, bundle_id
         entries = await redis.xrevrange(key, count=sample) if length else []
         raw = [dict(fields or {}).get(b"json", dict(fields or {}).get("json")) for _, fields in entries]
         streams[kind] = {"xlen": length, "memory_usage_bytes": int(memory or 0), "sampled": len(raw),
+                         "sample_age": age_range((entry_id for entry_id, _ in entries), now_ms),
                          **summarize_entries(kind, raw, allowed_subjects=allowed)}
-    return {"schema": SCHEMA, "sample": sample, "streams": streams}
+    return {"schema": SCHEMA, "sample": sample, "observed_at_ms": now_ms, "streams": streams}
 
 
 def main(argv: list[str] | None = None) -> int:
