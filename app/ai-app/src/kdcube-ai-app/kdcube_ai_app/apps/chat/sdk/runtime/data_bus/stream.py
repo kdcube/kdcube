@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -25,6 +26,44 @@ DATA_BUS_AUTOCLAIM_IDLE_MS = max(1000, int(os.getenv("DATA_BUS_AUTOCLAIM_IDLE_MS
 # Results and DLQ have no consumer group: their existing count caps stay (a changed window is a policy decision).
 DATA_BUS_RESULT_STREAM_MAXLEN = max(128, int(os.getenv("DATA_BUS_RESULT_STREAM_MAXLEN", "10000") or "10000"))
 DATA_BUS_DLQ_STREAM_MAXLEN = max(128, int(os.getenv("DATA_BUS_DLQ_STREAM_MAXLEN", "10000") or "10000"))
+
+# W827 S2d: result data above this many UTF-8 bytes is stored once under its own key and the results-stream entry
+# keeps a digest- and size-bound reference (live: p50 574 B, p90 158 KB). The body lives at least
+# DATA_BUS_RESULT_BODY_TTL_SECONDS, and at least the polling caller's declared wait plus a margin, capped at a day.
+DATA_BUS_RESULT_INLINE_BYTES = max(1024, int(os.getenv("DATA_BUS_RESULT_INLINE_BYTES", "16384") or "16384"))
+DATA_BUS_RESULT_BODY_TTL_SECONDS = max(60, int(os.getenv("DATA_BUS_RESULT_BODY_TTL_SECONDS", "3600") or "3600"))
+RESULT_BODY_WAIT_MARGIN_SECONDS = 300
+RESULT_BODY_TTL_CAP_SECONDS = 86400
+RESULT_BODY_SCHEMA = "kdcube.data_bus.result_body.v1"
+
+
+class DataBusResultBodyUnavailable(RuntimeError):
+    """A result's stored body is missing or does not match its reference: the outcome is unknown, never empty.
+
+    Retryable for reads; a mutation is not re-sent automatically because of it (its durable receipt, where the
+    application keeps one, is the authority).
+    """
+
+    code = "data_bus_result_body_unavailable"
+    outcome_unknown = True
+
+
+def result_body_ttl_seconds(wait_ms: Any = None) -> int:
+    """The body's lifetime: the default, or the caller's declared wait plus a margin, capped at one day."""
+    ttl = DATA_BUS_RESULT_BODY_TTL_SECONDS
+    try:
+        wait_seconds = int(wait_ms) // 1000 if wait_ms is not None else 0
+    except (TypeError, ValueError):
+        wait_seconds = 0
+    if wait_seconds > 0:
+        ttl = max(ttl, wait_seconds + RESULT_BODY_WAIT_MARGIN_SECONDS)
+    return min(ttl, RESULT_BODY_TTL_CAP_SECONDS)
+
+
+def result_body_key(results_key: str, key_suffix: str) -> str:
+    """The body key sits next to its own results stream: same tenant, project and bundle scope."""
+    prefix = results_key[: -len(":results")] if results_key.endswith(":results") else results_key
+    return f"{prefix}:result-body:{key_suffix}"
 
 # W827: the message stream is bounded by age, never by count on insert. A count cap (XADD MAXLEN) removed the
 # oldest entries whether or not every consumer group had read and acknowledged them, so a pending message lost its
@@ -133,6 +172,7 @@ class RedisDataBusStream:
         project: str,
         bundle_id: str,
         group_name: str | None = None,
+        result_inline_bytes: int = DATA_BUS_RESULT_INLINE_BYTES,
         message_retention_seconds: int = DATA_BUS_MESSAGE_RETENTION_SECONDS,
         result_stream_maxlen: int = DATA_BUS_RESULT_STREAM_MAXLEN,
         dlq_stream_maxlen: int = DATA_BUS_DLQ_STREAM_MAXLEN,
@@ -150,6 +190,7 @@ class RedisDataBusStream:
         )
         self.message_retention_ms = max(1, int(message_retention_seconds)) * 1000
         self.result_stream_maxlen = max(0, int(result_stream_maxlen or 0))
+        self.result_inline_bytes = max(1, int(result_inline_bytes))
         self.dlq_stream_maxlen = max(0, int(dlq_stream_maxlen or 0))
         self.trim_limit = max(1, int(trim_limit))
         self.trim_interval_seconds = max(0.0, float(trim_interval_seconds))
@@ -294,10 +335,28 @@ class RedisDataBusStream:
         await self.ack(claim)
         return True
 
-    async def write_result(self, result: DataBusResult, *, stream_id: str | None = None) -> str:
+    async def write_result(self, result: DataBusResult, *, stream_id: str | None = None, wait_ms: Any = None) -> str:
         payload = result.to_dict()
         if stream_id:
             payload["source_stream_id"] = stream_id
+        data = payload.get("data")
+        if data:
+            body = _json_dump(data).encode("utf-8")
+            if len(body) > self.result_inline_bytes:
+                digest = hashlib.sha256(body).hexdigest()
+                key_suffix = f"{result.message_id}:{digest[:16]}"
+                try:
+                    # Immutable: the key names the content digest, so a retry writes nothing new.
+                    await self.redis.set(result_body_key(self.results_key, key_suffix), body, nx=True,
+                                         ex=result_body_ttl_seconds(wait_ms))
+                except Exception:
+                    # Fail toward lossless: without its body the reference would be useless, so keep data inline.
+                    logger.warning("[data_bus.result] body write failed; result kept inline message_id=%s",
+                                   result.message_id, exc_info=True)
+                else:
+                    payload["data"] = {}
+                    payload["data_ref"] = {"schema": RESULT_BODY_SCHEMA, "key_suffix": key_suffix,
+                                           "sha256": digest, "bytes": len(body)}
         return await self._xadd(self.results_key, {"json": _json_dump(payload)}, maxlen=self.result_stream_maxlen)
 
     async def write_dlq(

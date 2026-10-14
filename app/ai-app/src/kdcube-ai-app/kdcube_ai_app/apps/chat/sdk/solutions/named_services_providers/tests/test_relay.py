@@ -133,6 +133,29 @@ async def test_relay_call_times_out_loudly(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_relay_call_reports_a_lost_result_body_as_outcome_unknown(monkeypatch):
+    """W827 S2d: a large result whose body expired or changed is outcome-unknown (504), never an empty success."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import DataBusResultBodyUnavailable
+
+    async def _publish_and_wait(self, **kwargs):
+        raise DataBusResultBodyUnavailable("result body expired or missing")
+
+    monkeypatch.setattr(relay.DataBusPublisher, "publish_and_wait", _publish_and_wait)
+
+    with bind_current_request_context(_request_context()):
+        response = await relay.relay_named_service_call(
+            bundle_id="kdcube-services@1-0",
+            request=_send_request(),
+            admission=_application_admission(),
+        )
+
+    assert response.ok is False
+    assert response.error is not None
+    assert response.error.code == "data_bus_result_body_unavailable"
+    assert response.status == 504
+
+
+@pytest.mark.asyncio
 async def test_relay_call_requires_bound_identity():
     response = await relay.relay_named_service_call(
         bundle_id="kdcube-services@1-0",
