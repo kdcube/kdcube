@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import Response
 
 from kdcube_ai_app.auth.AuthManager import HTTP_401_UNAUTHORIZED, RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.proc.rest.integrations.browser_navigation_auth import (
     enforce_platform_session_user,
-    is_top_level_html_navigation,
+    is_browser_html_navigation,
     platform_sign_in_redirect,
 )
 
@@ -18,7 +18,7 @@ from kdcube_ai_app.apps.chat.proc.rest.integrations.browser_navigation_auth impo
 def enforce_protected_widget_user(
     request: Request,
     session: UserSession,
-) -> RedirectResponse | None:
+) -> Response | None:
     """Require a platform user, with login continuation for browser documents."""
 
     try:
@@ -35,7 +35,7 @@ def enforce_protected_widget_user(
 
     if (
         validation_error.code == HTTP_401_UNAUTHORIZED
-        and is_top_level_html_navigation(request)
+        and is_browser_html_navigation(request)
     ):
         return platform_sign_in_redirect(request)
 
