@@ -21,6 +21,9 @@ from kdcube_ai_app.apps.chat.sdk.application_operations import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.policy import DataBusPublishLimit, DataBusSettings
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import DataBusHandlerSpec
+from kdcube_ai_app.apps.chat.sdk.runtime.tests.data_bus.live_lease_fake import (
+    LEASE_SCRIPTS, eval_transport_lease,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.actor_compaction import BINDING_INPUTS, REBUILT_FROM_CARD
 
 
@@ -66,6 +69,8 @@ class FakeRedis:
         return FakePipeline(self)
 
     async def eval(self, _script, key_count, *args):
+        if _script in LEASE_SCRIPTS:
+            return await eval_transport_lease(self, _script, key_count, *args)
         # W435: the Data Bus admission script, emulated: count each key with
         # its increment; write only when every limit admits the package.
         keys = list(args[:key_count])
@@ -844,6 +849,8 @@ async def _federated_handler(monkeypatch, *, identity_authority=None):
     handler._sid_to_session_id = {}
     handler._sid_to_tenant_project = {}
     handler._session_refcounts = {}
+    handler._live_leases = SimpleNamespace(lease_seconds=75, start=_async_noop(), stop=_async_noop(),
+                                          registration_id=lambda sid: None)
     return handler, grant
 
 
@@ -902,6 +909,8 @@ async def _delegated_handler():
     handler._sid_to_session_id = {}
     handler._sid_to_tenant_project = {}
     handler._session_refcounts = {}
+    handler._live_leases = SimpleNamespace(lease_seconds=75, start=_async_noop(), stop=_async_noop(),
+                                          registration_id=lambda sid: None)
     return handler, calls
 
 

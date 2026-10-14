@@ -99,6 +99,14 @@ if redis.call('TYPE', KEYS[2]).ok ~= 'zset' then return 0 end
 return redis.call('ZREM', KEYS[2], ARGV[1])
 """
 
+PRUNE_MISMATCHED_MEMBER = """
+-- data_bus.prune_mismatched_transport_member.v1
+if redis.call('TYPE', KEYS[1]).ok ~= 'string' then return 0 end
+if redis.call('TYPE', KEYS[2]).ok ~= 'zset' then return 0 end
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+return redis.call('ZREM', KEYS[2], ARGV[2])
+"""
+
 
 async def register_lease(
     redis: Any, *, socket_key: str, index_key: str, member: str,
@@ -145,4 +153,12 @@ async def prune_missing_member(
 ) -> bool:
     return bool(await redis.eval(
         PRUNE_MISSING_MEMBER, 2, socket_key, index_key, member,
+    ))
+
+
+async def prune_mismatched_member(
+    redis: Any, *, socket_key: str, index_key: str, member: str, raw_record: str | bytes,
+) -> bool:
+    return bool(await redis.eval(
+        PRUNE_MISMATCHED_MEMBER, 2, socket_key, index_key, raw_record, member,
     ))

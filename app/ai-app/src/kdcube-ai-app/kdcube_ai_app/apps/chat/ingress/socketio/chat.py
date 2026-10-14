@@ -29,6 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.federated_tokens.da
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_sessions import (
     DataBusLiveSessionRegistry,
 )
+from kdcube_ai_app.apps.chat.ingress.socketio.live_lease import DataBusSocketLeases
 
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ServiceCtx, ConversationCtx,
@@ -134,6 +135,13 @@ class SocketIOChatHandler:
         self._session_refcounts: Dict[str, int] = {}
         self._sid_to_session_id: Dict[str, str] = {}
         self._sid_to_tenant_project: Dict[str, dict] = {}
+        self._live_leases = DataBusSocketLeases(self.sio) if self.sio else None
+
+    def _data_bus_leases(self) -> DataBusSocketLeases:
+        leases = getattr(self, "_live_leases", None)
+        if leases is None:
+            leases = self._live_leases = DataBusSocketLeases(self.sio)
+        return leases
 
     # ---------- Socket.IO core ----------
 
@@ -235,6 +243,8 @@ class SocketIOChatHandler:
         SSE may still be using it. Global stop is handled by SSEHub.stop() / app shutdown.
         """
         self._listener_started = False
+        if getattr(self, "_live_leases", None) is not None:
+            await self._live_leases.stop_all()
         logger.info("Socket.IO chat handler stopped")
 
     # ---------- CONNECT with GATING (restored) ----------
@@ -416,6 +426,7 @@ class SocketIOChatHandler:
 
         # 7) save socket session metadata (store ctx too!)
         acquired_session_id = None
+        live_session = None
         try:
             tenant = auth.get("tenant")
             project = auth.get("project")
@@ -466,9 +477,12 @@ class SocketIOChatHandler:
                 expires_at = int(data_bus_scope.get("expires_at") or 0)
                 if not principal or expires_at <= 0:
                     raise ValueError("federated Data Bus session is missing principal or expiry")
-                await DataBusLiveSessionRegistry(
-                    getattr(self.app.state, "redis_async", None)
-                ).register(
+                leases = self._data_bus_leases()
+                registry = DataBusLiveSessionRegistry(
+                    getattr(self.app.state, "redis_async", None),
+                    lease_seconds=leases.lease_seconds,
+                )
+                live_session = await registry.register(
                     tenant=str(tenant or ""),
                     project=str(project or ""),
                     bundle_id=str(auth.get("bundle_id") or ""),
@@ -477,6 +491,10 @@ class SocketIOChatHandler:
                     socket_id=sid,
                     expires_at=expires_at,
                     authorization_scope=data_bus_scope,
+                )
+                await leases.start(
+                    registry=registry, session=live_session, tenant=str(tenant or ""),
+                    project=str(project or ""), bundle_id=str(auth.get("bundle_id") or ""),
                 )
 
             await self.sio.emit("session_info", {
@@ -495,12 +513,14 @@ class SocketIOChatHandler:
 
         except Exception as e:
             logger.error("WS connect finalization failed: %s", e)
-            if isinstance(data_bus_scope, Mapping):
+            if getattr(self, "_live_leases", None) is not None:
+                await self._live_leases.stop(sid)
+            if isinstance(data_bus_scope, Mapping) and live_session is not None:
                 redis = getattr(getattr(self.app, "state", None), "redis_async", None)
                 if redis is not None:
                     try:
                         await DataBusLiveSessionRegistry(redis).unregister(
-                            socket_id=sid
+                            socket_id=sid, registration_id=live_session.registration_id,
                         )
                     except Exception:
                         logger.warning(
@@ -527,10 +547,16 @@ class SocketIOChatHandler:
 
     async def _handle_disconnect(self, sid):
         logger.info("Chat client disconnected: %s", sid)
+        registration_id = None
+        if getattr(self, "_live_leases", None) is not None:
+            registration_id = self._live_leases.registration_id(sid)
+            await self._live_leases.stop(sid)
         redis = getattr(getattr(self.app, "state", None), "redis_async", None)
         if redis is not None:
             try:
-                await DataBusLiveSessionRegistry(redis).unregister(socket_id=sid)
+                await DataBusLiveSessionRegistry(redis).unregister(
+                    socket_id=sid, registration_id=registration_id,
+                )
             except Exception:
                 logger.warning(
                     "Failed to unregister live Data Bus socket sid=%s", sid, exc_info=True

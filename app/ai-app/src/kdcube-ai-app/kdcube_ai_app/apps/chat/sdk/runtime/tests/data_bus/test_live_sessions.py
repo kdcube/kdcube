@@ -11,6 +11,13 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_sessions import (
     DataBusLiveSessionRegistry,
     LIVE_SESSION_INDEX_TTL_SECONDS,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.tests.data_bus.live_lease_fake import eval_transport_lease
+
+
+@pytest.fixture(autouse=True)
+def fixed_registration_clock(monkeypatch):
+    # A routing-lease test needs registration and observation in one clock.
+    monkeypatch.setattr(live_sessions.time, "time", lambda: 1000)
 
 
 class _Redis:
@@ -18,6 +25,9 @@ class _Redis:
         self.values: dict[str, str] = {}
         self.sorted: dict[str, dict[str, float]] = {}
         self.expiries: dict[str, int] = {}
+
+    async def eval(self, script, key_count, *args):
+        return await eval_transport_lease(self, script, key_count, *args)
 
     async def zadd(self, key, values):
         self.sorted.setdefault(key, {}).update(values)
@@ -200,7 +210,7 @@ async def test_revoked_card_is_removed_before_outbound_delivery(monkeypatch) -> 
         project="project-a",
         bundle_id="problem-board@1-0",
         principal="card:alpha",
-        now=1_900_000_000,
+        now=1000,
     ) == ()
     assert registry._socket_key("socket-alpha") not in redis.values
 
@@ -238,7 +248,7 @@ async def test_active_card_remains_in_outbound_delivery_index(monkeypatch) -> No
         project="project-a",
         bundle_id="problem-board@1-0",
         principal="card:alpha",
-        now=1_900_000_000,
+        now=1000,
     ) == ("session-alpha",)
 
 
@@ -284,8 +294,81 @@ async def test_live_session_card_lookup_reads_through_the_durable_store(monkeypa
         project="project-a",
         bundle_id="problem-board@1-0",
         principal="card:alpha",
-        now=1_900_000_000,
+        now=1000,
     )
 
     assert seen["card_store"] is store
     assert seen["expected_grantor_subject"] == "grantor-alpha"
+
+
+@pytest.mark.asyncio
+async def test_crashed_socket_expires_without_card_reads(monkeypatch):
+    from unittest.mock import AsyncMock
+    resolve = AsyncMock()
+    monkeypatch.setattr(live_sessions, "resolve_live_grant_card", resolve)
+    redis = _Redis()
+    registry = DataBusLiveSessionRegistry(redis)
+    await registry.register(tenant="tenant", project="project", bundle_id="bundle",
+                            principal="principal", session_id="session", socket_id="sid",
+                            expires_at=2_000_000_000)
+    assert redis.expiries[registry._socket_key("sid")] == 75
+    assert await registry.sessions(tenant="tenant", project="project", bundle_id="bundle",
+                                   principal="principal", now=1075) == ()
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_missing_socket_prunes_its_exact_member():
+    redis = _Redis()
+    registry = DataBusLiveSessionRegistry(redis)
+    await registry.register(tenant="tenant", project="project", bundle_id="bundle",
+                            principal="principal", session_id="session", socket_id="sid",
+                            expires_at=2_000_000_000)
+    redis.values.pop(registry._socket_key("sid"))
+    assert await registry.sessions(tenant="tenant", project="project", bundle_id="bundle",
+                                   principal="principal", now=1000) == ()
+    assert not any(redis.sorted.values())
+
+
+@pytest.mark.asyncio
+async def test_old_connection_cannot_renew_or_remove_successor():
+    redis = _Redis()
+    registry = DataBusLiveSessionRegistry(redis)
+    scope = dict(tenant="tenant", project="project", bundle_id="bundle")
+    old = await registry.register(**scope, principal="principal", session_id="session",
+                                  socket_id="sid", expires_at=2_000_000_000)
+    new = await registry.register(**scope, principal="principal", session_id="session",
+                                  socket_id="sid", expires_at=2_000_000_000)
+    assert not await registry.renew(**scope, session=old)
+    await registry.unregister(socket_id="sid", registration_id=old.registration_id)
+    assert json.loads(redis.values[registry._socket_key("sid")])["registration_id"] == new.registration_id
+    assert await registry.renew(**scope, session=new)
+
+
+@pytest.mark.asyncio
+async def test_stale_principal_index_never_routes_a_rebound_socket():
+    redis = _Redis()
+    registry = DataBusLiveSessionRegistry(redis)
+    scope = dict(tenant="tenant", project="project", bundle_id="bundle")
+    await registry.register(**scope, principal="old", session_id="old-session",
+                            socket_id="sid", expires_at=2_000_000_000)
+    await registry.register(**scope, principal="new", session_id="new-session",
+                            socket_id="sid", expires_at=2_000_000_000)
+    assert await registry.sessions(**scope, principal="old", now=1000) == ()
+    assert await registry.sessions(**scope, principal="new", now=1000) == ("new-session",)
+
+
+@pytest.mark.asyncio
+async def test_legacy_long_lived_record_does_not_prove_current_transport():
+    redis = _Redis()
+    registry = DataBusLiveSessionRegistry(redis)
+    scope = dict(tenant="tenant", project="project", bundle_id="bundle")
+    await registry.register(**scope, principal="principal", session_id="session",
+                            socket_id="sid", expires_at=2_000_000_000)
+    key = registry._socket_key("sid")
+    record = json.loads(redis.values[key])
+    record.pop("registration_id")
+    record.pop("lease_expires_at")
+    redis.values[key] = json.dumps(record)
+    assert await registry.sessions(**scope, principal="principal", now=1000) == ()
+    assert key not in redis.values
