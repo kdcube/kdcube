@@ -782,7 +782,8 @@ class DataBusBundleWorker:
                 await self._handle_handler_failure(claim, exc)
                 return
             observe(Phase.INVOKE_END)
-            await self.stream.write_result(result, stream_id=claim.stream_id)
+            await self.stream.write_result(result, stream_id=claim.stream_id,
+                                           wait_ms=(message.trace or {}).get("result_wait_ms"))
             if not reply_sent:
                 await self._send_default_reply(message, result)
             await self.stream.ack(claim)
@@ -845,7 +846,8 @@ class DataBusBundleWorker:
         dlq_details: Mapping[str, Any] | None = None,
     ) -> None:
         message = claim.message
-        await self.stream.write_result(result, stream_id=claim.stream_id)
+        await self.stream.write_result(result, stream_id=claim.stream_id,
+                                       wait_ms=(message.trace or {}).get("result_wait_ms"))
         if dlq_reason:
             details = {"stream_id": claim.stream_id, **dict(dlq_details or {})}
             await self.stream.write_dlq(

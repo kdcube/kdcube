@@ -30,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_user_identity,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.publisher import DataBusPublisher
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import DataBusResultBodyUnavailable
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import timestamp_message_id
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission import (
     NamedServiceAdmission,
@@ -153,6 +154,14 @@ async def relay_named_service_call(
             idempotency_key=message_id,
             message_id=message_id,
             timeout_ms=max(1000, int(timeout_ms or NAMED_SERVICE_RELAY_TIMEOUT_MS)),
+        )
+    except DataBusResultBodyUnavailable:
+        # W827 S2d: the provider answered but its large result body is gone or altered: outcome unknown, retryable.
+        return _error_response(
+            DataBusResultBodyUnavailable.code,
+            "The relayed call's result body is no longer available; its outcome is unknown. Retry the read.",
+            status=504,
+            details={"bundle_id": bundle_value, "message_id": message_id, "outcome_unknown": True},
         )
     except TimeoutError:
         return _error_response(

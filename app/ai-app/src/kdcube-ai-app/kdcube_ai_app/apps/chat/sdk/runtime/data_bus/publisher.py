@@ -5,12 +5,22 @@ from __future__ import annotations
 
 import uuid
 import asyncio
+import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
-from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import DataBusPublishResult, RedisDataBusStream
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import (
+    RESULT_BODY_SCHEMA,
+    DataBusPublishResult,
+    DataBusResultBodyUnavailable,
+    DataBusResultWaitTooLong,
+    RESULT_WAIT_MAX_MS,
+    RedisDataBusStream,
+    result_body_key,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     DataBusMessage,
     ensure_json_object,
@@ -161,6 +171,9 @@ class DataBusPublisher:
         poll_interval_ms: int = 100,
         scan_count: int = 200,
     ) -> dict[str, Any]:
+        if int(timeout_ms) > RESULT_WAIT_MAX_MS:
+            raise DataBusResultWaitTooLong(
+                f"timeout_ms {int(timeout_ms)} exceeds the {RESULT_WAIT_MAX_MS} ms a result body is kept")
         ack = await self.publish(
             subject=subject,
             payload=payload,
@@ -171,7 +184,9 @@ class DataBusPublisher:
             idempotency_key=idempotency_key,
             actor=actor,
             reply=reply,
-            trace=trace,
+            # W827 S2d: the worker keeps a large result's body at least as long as this caller waits for it.
+            trace={**dict(trace or {}),
+                   "result_wait_ms": max(0, int(timeout_ms))},
             message_id=message_id,
         )
         stream = RedisDataBusStream(
@@ -208,5 +223,28 @@ class DataBusPublisher:
             except Exception:
                 continue
             if isinstance(payload, Mapping) and str(payload.get("message_id") or "") == message_id:
-                return dict(payload)
+                found = dict(payload)
+                if "data_unavailable" in found:
+                    raise DataBusResultBodyUnavailable("the result body could not be stored")
+                if "data_ref" in found:
+                    found["data"] = await self._result_body(results_key, message_id, found.pop("data_ref"))
+                return found
         return None
+
+    async def _result_body(self, results_key: str, message_id: str, ref: Any) -> Any:
+        """The whole original ``data`` of a large result, verified against its reference; never empty data."""
+        if not isinstance(ref, Mapping) or ref.get("schema") != RESULT_BODY_SCHEMA:
+            raise DataBusResultBodyUnavailable("unknown result body reference")
+        suffix = str(ref.get("key_suffix") or "")
+        digest = str(ref.get("sha256") or "")
+        # Only this caller's own result: the suffix must name this message and the digest it carries.
+        if not re.fullmatch(r"[0-9a-f]{64}", digest) or suffix != f"{message_id}:{digest[:16]}":
+            raise DataBusResultBodyUnavailable("result body reference does not belong to this message")
+        body = await self._redis_client().get(result_body_key(results_key, suffix))
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        if not isinstance(body, bytes):
+            raise DataBusResultBodyUnavailable("result body expired or missing")
+        if len(body) != int(ref.get("bytes") or -1) or hashlib.sha256(body).hexdigest() != digest:
+            raise DataBusResultBodyUnavailable("result body does not match its reference")
+        return json.loads(body.decode("utf-8"))
