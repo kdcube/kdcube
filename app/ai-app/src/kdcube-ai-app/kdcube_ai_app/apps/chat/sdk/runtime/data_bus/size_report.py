@@ -32,6 +32,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import data_bus_stream_k
 SCHEMA = "kdcube.data_bus.size_report.v1"
 OTHER = "other"
 UNPARSABLE = "unparsable"
+UNJOINED = "unjoined"
 
 # Top-level parts whose size is reported, per stream kind; a dotted name is one level down.
 COMPONENTS: dict[str, tuple[str, ...]] = {
@@ -74,12 +75,41 @@ def _label(document: Mapping[str, Any], kind: str, allowed: frozenset[str]) -> s
     return subject if isinstance(subject, str) and subject in allowed else OTHER
 
 
-def summarize_entries(kind: str, raw_entries: Iterable[Any], *, allowed_subjects: Iterable[str] = ()) -> dict:
-    """Aggregate stored ``json`` field values of one stream kind; returns sizes only."""
+def _operation(document: Mapping[str, Any]) -> str:
+    """A message's application operation, where its payload names one (Problem Board: payload.operation)."""
+    payload = document.get("payload")
+    value = payload.get("operation") if isinstance(payload, Mapping) else None
+    return value if isinstance(value, str) else ""
+
+
+def operations_by_message(raw_messages: Iterable[Any], *, allowed_operations: Iterable[str]) -> dict[str, str]:
+    """message_id -> allowlisted operation (or "other") for the sampled messages, used to label their results."""
+    allowed = frozenset(str(o) for o in allowed_operations)
+    found: dict[str, str] = {}
+    for raw in raw_messages:
+        try:
+            document = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else str(raw or ""))
+        except ValueError:
+            continue
+        if isinstance(document, Mapping) and isinstance(document.get("message_id"), str):
+            operation = _operation(document)
+            found[document["message_id"]] = operation if operation in allowed else OTHER
+    return found
+
+
+def summarize_entries(kind: str, raw_entries: Iterable[Any], *, allowed_subjects: Iterable[str] = (),
+                      allowed_operations: Iterable[str] = (), operations: Mapping[str, str] | None = None) -> dict:
+    """Aggregate stored ``json`` field values of one stream kind; returns sizes only.
+
+    By operation: a message is labelled by its own allowlisted ``payload.operation``; a result by the operation of
+    its message when that message is in ``operations`` (the sampled messages), otherwise "unjoined".
+    """
     allowed = frozenset(str(s) for s in allowed_subjects)
+    allowed_ops = frozenset(str(o) for o in allowed_operations)
     entry_sizes: list[int] = []
     parts: dict[str, list[int]] = {name: [] for name in COMPONENTS[kind]}
     by_subject: dict[str, list[int]] = {}
+    by_operation: dict[str, list[int]] = {}
     unparsable = 0
     for raw in raw_entries:
         text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw or "")
@@ -94,6 +124,12 @@ def summarize_entries(kind: str, raw_entries: Iterable[Any], *, allowed_subjects
             by_subject.setdefault(UNPARSABLE, []).append(size)
             continue
         by_subject.setdefault(_label(document, kind, allowed), []).append(size)
+        if kind == "messages":
+            operation = _operation(document)
+            by_operation.setdefault(operation if operation in allowed_ops else OTHER, []).append(size)
+        elif kind == "results":
+            label = (operations or {}).get(str(document.get("message_id") or ""), UNJOINED)
+            by_operation.setdefault(label, []).append(size)
         for name in parts:
             value = _part(document, name)
             if value is not None:
@@ -103,6 +139,7 @@ def summarize_entries(kind: str, raw_entries: Iterable[Any], *, allowed_subjects
         "components": {name: percentiles(sizes) for name, sizes in parts.items()},
         "components_missing": {name: len(entry_sizes) - unparsable - len(sizes) for name, sizes in parts.items()},
         "by_subject": {label: percentiles(sizes) for label, sizes in sorted(by_subject.items())},
+        "by_operation": {label: percentiles(sizes) for label, sizes in sorted(by_operation.items())},
         "unparsable": unparsable,
         "subjects_not_allowlisted": len(by_subject.get(OTHER, ())),
     }
@@ -124,22 +161,27 @@ def age_range(entry_ids: Iterable[Any], now_ms: int) -> dict[str, int | None]:
 
 
 async def stream_size_report(redis: Any, *, tenant: str, project: str, bundle_id: str, sample: int = 1000,
-                             allowed_subjects: Iterable[str] = ()) -> dict:
+                             allowed_subjects: Iterable[str] = (), allowed_operations: Iterable[str] = ()) -> dict:
     """Sample the newest ``sample`` entries of each stream (read-only: XLEN, MEMORY USAGE, XREVRANGE)."""
     sample = max(1, int(sample))
     allowed = tuple(allowed_subjects)
     seconds, micros = await redis.time()
     now_ms = int(seconds) * 1000 + int(micros) // 1000
     streams: dict[str, Any] = {}
+    allowed_ops = tuple(allowed_operations)
+    operations: dict[str, str] = {}
     for kind in COMPONENTS:
         key = data_bus_stream_key(tenant=tenant, project=project, bundle_id=bundle_id, kind=kind)
         length = int(await redis.xlen(key) or 0)
         memory = await redis.memory_usage(key) if length else 0
         entries = await redis.xrevrange(key, count=sample) if length else []
         raw = [dict(fields or {}).get(b"json", dict(fields or {}).get("json")) for _, fields in entries]
+        if kind == "messages":
+            operations = operations_by_message(raw, allowed_operations=allowed_ops)
         streams[kind] = {"xlen": length, "memory_usage_bytes": int(memory or 0), "sampled": len(raw),
                          "sample_age": age_range((entry_id for entry_id, _ in entries), now_ms),
-                         **summarize_entries(kind, raw, allowed_subjects=allowed)}
+                         **summarize_entries(kind, raw, allowed_subjects=allowed, allowed_operations=allowed_ops,
+                                             operations=operations)}
     return {"schema": SCHEMA, "sample": sample, "observed_at_ms": now_ms, "streams": streams}
 
 
@@ -150,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bundle-id", required=True)
     parser.add_argument("--sample", type=int, default=1000, help="newest entries per stream (default 1000)")
     parser.add_argument("--subject", action="append", default=[], help="a subject to report by name (repeatable)")
+    parser.add_argument("--operation", action="append", default=[],
+                        help="an application operation (payload.operation) to report by name (repeatable)")
     parser.add_argument("--redis-url-env", default="REDIS_URL", help="environment variable holding the Redis URL")
     args = parser.parse_args(argv)
     url = os.getenv(args.redis_url_env, "")
@@ -164,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return await stream_size_report(client, tenant=args.tenant, project=args.project,
                                             bundle_id=args.bundle_id, sample=args.sample,
-                                            allowed_subjects=args.subject)
+                                            allowed_subjects=args.subject, allowed_operations=args.operation)
         finally:
             await client.aclose()
 
