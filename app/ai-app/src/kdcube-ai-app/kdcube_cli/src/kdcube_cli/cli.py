@@ -52,6 +52,7 @@ from kdcube_cli.control import (
     resolve_local_workdir,
 )
 from kdcube_cli.compose_profiles import PROXYLOGIN_PROFILE
+from kdcube_cli.compose_source import ComposeSourceError, require_compose_source
 from kdcube_cli.descriptor_files import copy_descriptor_file
 from kdcube_cli.deployment_provenance import (
     DeploymentProvenanceError,
@@ -7123,6 +7124,16 @@ def main() -> None:
                     source_repo=_repo,
                     workdir=_resolved,
                 )
+            _refresh_compose = _build_paths_for_repo(_repo, _resolved)
+            try:
+                require_compose_source(
+                    _repo,
+                    ["docker", "compose", "--env-file", str(_refresh_compose.config_dir / ".env")],
+                    cwd=_refresh_compose.docker_dir,
+                    environment=os.environ,
+                )
+            except ComposeSourceError as exc:
+                raise SystemExit(str(exc)) from exc
             _refresh_runtime_proxy_config(console, repo_root=_repo, workdir=_resolved)
             _generated_refresh_secrets = installer_mod.ensure_generated_runtime_secrets(
                 _refresh_reuse_config

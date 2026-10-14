@@ -515,6 +515,22 @@ selector, refresh checks out that selected ref and then uses the staged
 If a deployment is currently recorded as running (`~/.kdcube/cli-lock.json`),
 `kdcube refresh --build` with no flags targets it automatically.
 
+Before stopping the stack, refresh resolves its effective Compose files and
+requires every file to be inside the selected platform checkout. Command
+`-f`/`--file` selection takes precedence over `COMPOSE_FILE`; process values
+take precedence over the selected `--env-file`. Multiple files use
+`COMPOSE_PATH_SEPARATOR` (the host path separator by default). Relative file
+paths are relative to the Compose command's working directory, and symlinks
+are checked at their resolved destinations. Default discovery checks the
+base file and its automatically selected override.
+
+An outside-checkout selection exits with `error[compose_source_mismatch]`,
+naming the offending resolved file, before shutdown. Correct the selector to
+use the selected checkout and retry. Missing files, remote/stdin selections
+and selector syntax that cannot be resolved safely also fail closed. This
+preflight checks file selection; build contexts, Compose includes and actual
+installation of maintainer-selected packages require separate verification.
+
 Refresh stops the stack, builds, then starts it again. After a successful
 build it records a deployment source receipt for the built images, reading the
 Compose config with the `proxylogin` profile when that image was built. If only
