@@ -35,6 +35,15 @@ DATA_BUS_RESULT_BODY_TTL_SECONDS = max(60, int(os.getenv("DATA_BUS_RESULT_BODY_T
 RESULT_BODY_WAIT_MARGIN_SECONDS = 300
 RESULT_BODY_TTL_CAP_SECONDS = 86400
 RESULT_BODY_SCHEMA = "kdcube.data_bus.result_body.v1"
+# The longest wait a polling caller may declare: its body then lives past the deadline by the margin, within the cap
+# (codex-infra, W827: an inadmissible deadline is refused before acceptance, never silently outlived).
+RESULT_WAIT_MAX_MS = (RESULT_BODY_TTL_CAP_SECONDS - RESULT_BODY_WAIT_MARGIN_SECONDS) * 1000
+
+
+class DataBusResultWaitTooLong(ValueError):
+    """A caller asked to wait longer than a result body is ever kept; refused before the message is published."""
+
+    code = "data_bus_result_wait_too_long"
 
 
 class DataBusResultBodyUnavailable(RuntimeError):
@@ -346,9 +355,8 @@ class RedisDataBusStream:
                 digest = hashlib.sha256(body).hexdigest()
                 key_suffix = f"{result.message_id}:{digest[:16]}"
                 try:
-                    # Immutable: the key names the content digest, so a retry writes nothing new.
-                    await self.redis.set(result_body_key(self.results_key, key_suffix), body, nx=True,
-                                         ex=result_body_ttl_seconds(wait_ms))
+                    await self._keep_result_body(result_body_key(self.results_key, key_suffix), body, digest,
+                                                 result_body_ttl_seconds(wait_ms))
                 except Exception:
                     # Fail toward lossless: without its body the reference would be useless, so keep data inline.
                     logger.warning("[data_bus.result] body write failed; result kept inline message_id=%s",
@@ -358,6 +366,19 @@ class RedisDataBusStream:
                     payload["data_ref"] = {"schema": RESULT_BODY_SCHEMA, "key_suffix": key_suffix,
                                            "sha256": digest, "bytes": len(body)}
         return await self._xadd(self.results_key, {"json": _json_dump(payload)}, maxlen=self.result_stream_maxlen)
+
+    async def _keep_result_body(self, key: str, body: bytes, digest: str, ttl: int) -> None:
+        """Store the body once; a replay verifies the stored bytes and never shortens their remaining lifetime."""
+        if await self.redis.set(key, body, nx=True, ex=ttl):
+            return
+        stored = await self.redis.get(key)
+        if isinstance(stored, str):
+            stored = stored.encode("utf-8")
+        if not isinstance(stored, bytes) or hashlib.sha256(stored).hexdigest() != digest:
+            raise RuntimeError("an existing result body does not match its digest")
+        remaining = await self.redis.ttl(key)
+        if remaining is None or int(remaining) < ttl:
+            await self.redis.expire(key, ttl)
 
     async def write_dlq(
         self,

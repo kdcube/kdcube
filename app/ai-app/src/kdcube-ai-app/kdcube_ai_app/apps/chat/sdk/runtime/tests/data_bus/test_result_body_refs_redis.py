@@ -13,7 +13,9 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import stream as stream_module
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.publisher import DataBusPublisher
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import (
+    RESULT_WAIT_MAX_MS,
     DataBusResultBodyUnavailable,
+    DataBusResultWaitTooLong,
     RedisDataBusStream,
     result_body_key,
     result_body_ttl_seconds,
@@ -93,11 +95,37 @@ async def test_a_large_result_is_stored_by_reference_and_read_back_whole(redis):
 
 @needs_redis
 @pytest.mark.asyncio
-async def test_a_retried_write_of_the_same_result_reuses_the_immutable_body(redis):
+async def test_a_retried_write_reuses_the_body_and_never_shortens_its_lifetime(redis):
     stream = _stream(redis)
-    for _ in range(2):
-        await stream.write_result(DataBusResult(message_id="m3", subject="s", data=LARGE))
-    assert len(await redis.keys("*result-body:m3:*")) == 1
+    await stream.write_result(DataBusResult(message_id="m3", subject="s", data=LARGE))
+    [key] = await redis.keys("*result-body:m3:*")
+    await redis.expire(key, 10)
+
+    await stream.write_result(DataBusResult(message_id="m3", subject="s", data=LARGE), wait_ms=7_200_000)
+
+    assert await redis.keys("*result-body:m3:*") == [key]
+    assert await redis.ttl(key) > 7_200
+
+
+@needs_redis
+@pytest.mark.asyncio
+async def test_a_replay_over_different_stored_bytes_never_points_at_them(redis):
+    stream = _stream(redis)
+    await stream.write_result(DataBusResult(message_id="m7", subject="s", data=LARGE))
+    [key] = await redis.keys("*result-body:m7:*")
+    await redis.set(key, b"tampered")
+
+    await stream.write_result(DataBusResult(message_id="m7", subject="s", data=LARGE))
+
+    assert "data_ref" not in await _entry(redis, stream)
+
+
+@needs_redis
+@pytest.mark.asyncio
+async def test_a_wait_longer_than_any_body_lives_is_refused_before_publishing(redis):
+    with pytest.raises(DataBusResultWaitTooLong):
+        await _publisher(redis).publish_and_wait(subject="s", payload={}, timeout_ms=RESULT_WAIT_MAX_MS + 1)
+    assert await redis.keys("*:messages") == []
 
 
 @needs_redis

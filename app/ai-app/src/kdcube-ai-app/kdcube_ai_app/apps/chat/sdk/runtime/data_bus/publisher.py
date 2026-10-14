@@ -14,9 +14,10 @@ from typing import Any, Callable, Mapping
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import (
     RESULT_BODY_SCHEMA,
-    RESULT_BODY_TTL_CAP_SECONDS,
     DataBusPublishResult,
     DataBusResultBodyUnavailable,
+    DataBusResultWaitTooLong,
+    RESULT_WAIT_MAX_MS,
     RedisDataBusStream,
     result_body_key,
 )
@@ -170,6 +171,9 @@ class DataBusPublisher:
         poll_interval_ms: int = 100,
         scan_count: int = 200,
     ) -> dict[str, Any]:
+        if int(timeout_ms) > RESULT_WAIT_MAX_MS:
+            raise DataBusResultWaitTooLong(
+                f"timeout_ms {int(timeout_ms)} exceeds the {RESULT_WAIT_MAX_MS} ms a result body is kept")
         ack = await self.publish(
             subject=subject,
             payload=payload,
@@ -182,7 +186,7 @@ class DataBusPublisher:
             reply=reply,
             # W827 S2d: the worker keeps a large result's body at least as long as this caller waits for it.
             trace={**dict(trace or {}),
-                   "result_wait_ms": min(max(0, int(timeout_ms)), RESULT_BODY_TTL_CAP_SECONDS * 1000)},
+                   "result_wait_ms": max(0, int(timeout_ms))},
             message_id=message_id,
         )
         stream = RedisDataBusStream(
