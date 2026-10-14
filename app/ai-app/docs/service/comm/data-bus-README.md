@@ -309,6 +309,23 @@ after the socket joined its session room and the ingress process acquired the
 matching Redis relay subscription. Disconnect, token expiry, or loss of current
 Card authority removes it from the usable live view.
 
+The routing registration has a short transport lease, capped at the admitted
+credential's expiry. Ingress renews it while its own Engine.IO socket is healthy,
+including an idle connection whose ping/pong exchange continues. The lease spans
+three times the larger configured ping interval or timeout (75 seconds with
+the default 25/20-second heartbeat). A crashed ingress stops renewing; both the
+socket TTL and the principal-index score expire. Missing socket records are
+pruned from their exact index, and readers reject older registrations that lack
+a bounded lease. After an upgrade or a lost registration, successful reconnect
+re-admits the client and installs fresh routing metadata.
+
+Each registration has a generation. Renewal and cleanup are conditional on that
+generation or the exact record read, so an old connection cannot extend or
+remove its successor. Each ingress renews only its own sockets; readers use the
+shared Redis index across ingress processes. A transport lease grants no
+operation: every outbound delivery still resolves the current Card, its parent
+Controls and resource grants. Unknown authority fails closed for that delivery.
+
 The routing key is scoped by tenant, project, bundle, and authenticated
 principal. A delegated card uses its Card-scoped rate-limit subject when one is
 present; other federated clients use the session user ID. Bundle code can then

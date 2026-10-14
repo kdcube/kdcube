@@ -20,6 +20,15 @@ from connection_hub.delegated_credentials.live_grant import (
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
     delegated_card_store,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_session_lease import (
+    DEFAULT_TRANSPORT_LEASE_SECONDS,
+    prune_mismatched_member,
+    prune_missing_member,
+    register_lease,
+    release_lease,
+    renew_lease,
+    routing_member,
+)
 
 LIVE_SESSION_SCHEMA = "kdcube.data_bus.live_session.v1"
 LIVE_SESSION_INDEX_TTL_SECONDS = 3600
@@ -39,15 +48,19 @@ class DataBusLiveSession:
     session_id: str
     socket_id: str
     expires_at: int
+    registration_id: str = ""
 
 
 class DataBusLiveSessionRegistry:
     """Redis-backed routing index for currently connected federated sockets."""
 
-    def __init__(self, redis: Any) -> None:
+    def __init__(self, redis: Any, *, lease_seconds: int = DEFAULT_TRANSPORT_LEASE_SECONDS) -> None:
         if redis is None:
             raise ValueError("A Redis client is required for live Data Bus sessions.")
         self.redis = redis
+        if lease_seconds <= 0:
+            raise ValueError("A live transport lease must have a positive duration.")
+        self.lease_seconds = int(lease_seconds)
 
     @staticmethod
     def _index_key(*, tenant: str, project: str, bundle_id: str, principal: str) -> str:
@@ -73,8 +86,8 @@ class DataBusLiveSessionRegistry:
         authorization_scope: Mapping[str, Any] | None = None,
     ) -> DataBusLiveSession:
         now = int(time.time())
-        expiry = max(now + 1, int(expires_at))
-        ttl = max(1, expiry - now)
+        expiry = int(expires_at)
+        registration_id = str(uuid.uuid4())
         record = {
             "schema": LIVE_SESSION_SCHEMA,
             "tenant": str(tenant),
@@ -84,6 +97,7 @@ class DataBusLiveSessionRegistry:
             "session_id": str(session_id),
             "socket_id": str(socket_id),
             "expires_at": expiry,
+            "registration_id": registration_id,
         }
         authority = dict(authorization_scope or {})
         if str(authority.get("credential_kind") or "") == "delegated_card":
@@ -97,36 +111,39 @@ class DataBusLiveSessionRegistry:
                     authority.get("delegate_identity") or ""
                 ),
             }
-        member = json.dumps(
-            {"session_id": str(session_id), "socket_id": str(socket_id)},
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        member = routing_member(session_id=session_id, socket_id=socket_id)
         index_key = self._index_key(
             tenant=tenant,
             project=project,
             bundle_id=bundle_id,
             principal=principal,
         )
-        await self.redis.zadd(index_key, {member: expiry})
-        # Every member carries its own expiry score. Keep the shared index long
-        # enough for the maximum federated-token lifetime so registering a
-        # near-expiry socket cannot delete another live socket's index early.
-        await self.redis.expire(index_key, max(ttl, LIVE_SESSION_INDEX_TTL_SECONDS))
-        await self.redis.setex(
-            self._socket_key(socket_id),
-            ttl,
-            json.dumps(record, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+        await register_lease(
+            self.redis, socket_key=self._socket_key(socket_id), index_key=index_key,
+            member=member, record=record, now=now, lease_seconds=self.lease_seconds,
+            index_ttl=LIVE_SESSION_INDEX_TTL_SECONDS,
         )
         return DataBusLiveSession(
             principal=str(principal),
             session_id=str(session_id),
             socket_id=str(socket_id),
             expires_at=expiry,
+            registration_id=registration_id,
         )
 
-    async def unregister(self, *, socket_id: str) -> None:
+    async def renew(
+        self, *, tenant: str, project: str, bundle_id: str, session: DataBusLiveSession,
+    ) -> bool:
+        return await renew_lease(
+            self.redis, socket_key=self._socket_key(session.socket_id),
+            index_key=self._index_key(tenant=tenant, project=project,
+                                      bundle_id=bundle_id, principal=session.principal),
+            member=routing_member(session_id=session.session_id, socket_id=session.socket_id),
+            registration_id=session.registration_id, now=int(time.time()),
+            lease_seconds=self.lease_seconds, index_ttl=LIVE_SESSION_INDEX_TTL_SECONDS,
+        )
+
+    async def unregister(self, *, socket_id: str, registration_id: str | None = None) -> None:
         socket_key = self._socket_key(socket_id)
         raw = await self.redis.get(socket_key)
         if isinstance(raw, (bytes, bytearray)):
@@ -136,10 +153,10 @@ class DataBusLiveSessionRegistry:
         try:
             record = json.loads(raw)
         except (TypeError, json.JSONDecodeError):
-            await self.redis.delete(socket_key)
             return
         if not isinstance(record, Mapping):
-            await self.redis.delete(socket_key)
+            return
+        if registration_id is not None and record.get("registration_id") != registration_id:
             return
         member = json.dumps(
             {
@@ -156,8 +173,8 @@ class DataBusLiveSessionRegistry:
             bundle_id=str(record.get("bundle_id") or ""),
             principal=str(record.get("principal") or ""),
         )
-        await self.redis.zrem(index_key, member)
-        await self.redis.delete(socket_key)
+        await release_lease(self.redis, socket_key=socket_key, index_key=index_key,
+                            member=member, raw_record=raw)
 
     async def sessions(
         self,
@@ -175,7 +192,7 @@ class DataBusLiveSessionRegistry:
             bundle_id=bundle_id,
             principal=principal,
         )
-        await self.redis.zremrangebyscore(index_key, "-inf", current - 1)
+        await self.redis.zremrangebyscore(index_key, "-inf", current)
         raw_members = await self.redis.zrangebyscore(index_key, current, "+inf")
         session_ids: set[str] = set()
         for raw in raw_members or ():
@@ -188,10 +205,47 @@ class DataBusLiveSessionRegistry:
             if not isinstance(member, Mapping) or not member.get("session_id"):
                 continue
             socket_id = str(member.get("socket_id") or "").strip()
+            if not socket_id:
+                continue
             if socket_id:
-                live = await self._live_authority(socket_id=socket_id)
+                socket_key = self._socket_key(socket_id)
+                raw_record = await self.redis.get(socket_key)
+                if not raw_record:
+                    await prune_missing_member(self.redis, socket_key=socket_key,
+                                               index_key=index_key, member=raw)
+                    continue
+                try:
+                    record = json.loads(raw_record)
+                except (TypeError, ValueError):
+                    record = None
+                expected = {"tenant": str(tenant), "project": str(project),
+                            "bundle_id": str(bundle_id), "principal": str(principal),
+                            "session_id": str(member["session_id"]), "socket_id": socket_id}
+                if not isinstance(record, Mapping) or any(record.get(k) != v for k, v in expected.items()):
+                    # A stale index must never route through a socket now bound
+                    # to another principal or scope. Keep that other socket.
+                    await prune_mismatched_member(self.redis, socket_key=socket_key,
+                                                 index_key=index_key, member=raw,
+                                                 raw_record=raw_record)
+                    continue
+                lease_expiry = record.get("lease_expires_at")
+                credential_expiry = record.get("expires_at")
+                if (record.get("schema") != LIVE_SESSION_SCHEMA
+                        or not record.get("registration_id")
+                        or type(lease_expiry) is not int
+                        or type(credential_expiry) is not int
+                        or lease_expiry <= current
+                        or lease_expiry > credential_expiry):
+                    # A pre-lease record cannot prove recent transport liveness.
+                    # Exact-value removal preserves a concurrently renewed SID;
+                    # successful reconnect installs a bounded registration.
+                    await release_lease(self.redis, socket_key=socket_key, index_key=index_key,
+                                        member=raw, raw_record=raw_record)
+                    continue
+                live = await self._live_authority(socket_id=socket_id, raw_record=raw_record)
                 if live is False:
-                    await self.unregister(socket_id=socket_id)
+                    await release_lease(self.redis, socket_key=socket_key, index_key=index_key,
+                                        member=raw, raw_record=raw_record)
                     continue
                 if live is None:
                     # Authority lookup is unavailable. Keep the record for a
@@ -200,8 +254,8 @@ class DataBusLiveSessionRegistry:
             session_ids.add(str(member["session_id"]))
         return tuple(sorted(session_ids))
 
-    async def _live_authority(self, *, socket_id: str) -> bool | None:
-        raw = await self.redis.get(self._socket_key(socket_id))
+    async def _live_authority(self, *, socket_id: str, raw_record: str | bytes | None = None) -> bool | None:
+        raw = raw_record if raw_record is not None else await self.redis.get(self._socket_key(socket_id))
         if isinstance(raw, (bytes, bytearray)):
             raw = raw.decode("utf-8")
         if not raw:
