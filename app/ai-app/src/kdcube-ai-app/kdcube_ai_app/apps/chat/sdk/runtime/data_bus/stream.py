@@ -132,6 +132,39 @@ return redis.call('XTRIM', key, 'MINID', '~', boundary, 'LIMIT', limit)
 """
 
 _LAST_TRIM: dict[tuple[int, str], float] = {}
+
+# W827 (EMain, 07:20Z live finding: 532 consumers, all with 0 pending, in one group): every worker start registers a
+# new consumer name (instance:pid:bundle) and nothing removed the old ones. A consumer with nothing pending whose
+# idle time (since its last read ATTEMPT, so a live blocking reader stays near its block time) passes the threshold
+# is deleted; one with pending entries never is. The check and the delete are one atomic script.
+DATA_BUS_CONSUMER_IDLE_PRUNE_SECONDS = max(
+    300, int(os.getenv("DATA_BUS_CONSUMER_IDLE_PRUNE_SECONDS", "3600") or "3600"))
+DATA_BUS_CONSUMER_PRUNE_INTERVAL_SECONDS = max(
+    0.0, float(os.getenv("DATA_BUS_CONSUMER_PRUNE_INTERVAL_SECONDS", "600") or "600"))
+DATA_BUS_CONSUMER_PRUNE_LIMIT = max(1, int(os.getenv("DATA_BUS_CONSUMER_PRUNE_LIMIT", "100") or "100"))
+_LAST_PRUNE: dict[tuple[int, str, str], float] = {}
+
+#   KEYS[1] stream; ARGV[1] group; ARGV[2] minimum idle ms; ARGV[3] per-call limit; ARGV[4] consumer to keep.
+# Returns the number of consumers deleted.
+_PRUNE_SCRIPT = """
+local key, group = KEYS[1], ARGV[1]
+local min_idle, limit, keep = tonumber(ARGV[2]), tonumber(ARGV[3]), ARGV[4]
+if redis.call('EXISTS', key) == 0 then return 0 end
+local ok, consumers = pcall(redis.call, 'XINFO', 'CONSUMERS', key, group)
+if not ok then return 0 end
+local removed = 0
+for _, consumer in ipairs(consumers) do
+  if removed >= limit then break end
+  local info = {}
+  for i = 1, #consumer, 2 do info[consumer[i]] = consumer[i + 1] end
+  local name, pending, idle = info['name'], tonumber(info['pending']), tonumber(info['idle'])
+  if name and name ~= keep and pending == 0 and idle and idle >= min_idle then
+    redis.call('XGROUP', 'DELCONSUMER', key, group, name)
+    removed = removed + 1
+  end
+end
+return removed
+"""
 # Groups this process has created or found, so publish checks a stream's group once, not on every message.
 _GROUP_READY: set[tuple[int, str, str]] = set()
 
@@ -187,6 +220,9 @@ class RedisDataBusStream:
         dlq_stream_maxlen: int = DATA_BUS_DLQ_STREAM_MAXLEN,
         trim_limit: int = DATA_BUS_TRIM_LIMIT,
         trim_interval_seconds: float = DATA_BUS_TRIM_INTERVAL_SECONDS,
+        consumer_idle_prune_seconds: int = DATA_BUS_CONSUMER_IDLE_PRUNE_SECONDS,
+        consumer_prune_interval_seconds: float = DATA_BUS_CONSUMER_PRUNE_INTERVAL_SECONDS,
+        consumer_prune_limit: int = DATA_BUS_CONSUMER_PRUNE_LIMIT,
     ) -> None:
         self.redis = redis
         self.tenant = tenant
@@ -203,6 +239,9 @@ class RedisDataBusStream:
         self.dlq_stream_maxlen = max(0, int(dlq_stream_maxlen or 0))
         self.trim_limit = max(1, int(trim_limit))
         self.trim_interval_seconds = max(0.0, float(trim_interval_seconds))
+        self.consumer_idle_prune_ms = max(1, int(consumer_idle_prune_seconds)) * 1000
+        self.consumer_prune_interval_seconds = max(0.0, float(consumer_prune_interval_seconds))
+        self.consumer_prune_limit = max(1, int(consumer_prune_limit))
 
     @property
     def messages_key(self) -> str:
@@ -257,6 +296,7 @@ class RedisDataBusStream:
         autoclaim_idle_ms: int = DATA_BUS_AUTOCLAIM_IDLE_MS,
     ) -> DataBusClaim | None:
         await self.ensure_group()
+        await self.prune_idle_consumers(keep=consumer_name)
         raw_items = await self._xreadgroup(
             consumer_name=consumer_name,
             count=count,
@@ -457,6 +497,30 @@ class RedisDataBusStream:
             logger.warning("[data_bus.retention] trim refused stream=%s", stream_key, exc_info=True)
             return None
         return int(removed or 0)
+
+    async def prune_idle_consumers(self, *, keep: str = "", force: bool = False) -> int | None:
+        """Delete this group's consumers that have nothing pending and have been idle past the threshold.
+
+        Never one with pending entries and never ``keep`` (the caller's own consumer). Throttled per process and
+        bounded per call; returns the number deleted, or None when skipped or refused. Never fails the caller.
+        """
+        clock = time.monotonic()
+        marker = (id(self.redis), self.messages_key, self.group_name)
+        if not force and clock - _LAST_PRUNE.get(marker, float("-inf")) < self.consumer_prune_interval_seconds:
+            return None
+        _LAST_PRUNE[marker] = clock
+        evaluate = getattr(self.redis, "eval", None)
+        if not callable(evaluate):
+            return None
+        try:
+            removed = int(await evaluate(_PRUNE_SCRIPT, 1, self.messages_key, self.group_name,
+                                         self.consumer_idle_prune_ms, self.consumer_prune_limit, keep or "") or 0)
+        except Exception:
+            logger.warning("[data_bus.retention] consumer prune refused stream=%s", self.messages_key, exc_info=True)
+            return None
+        if removed:
+            logger.info("[data_bus.retention] pruned idle consumers stream=%s removed=%s", self.messages_key, removed)
+        return removed
 
     async def ensure_group(self) -> None:
         try:
