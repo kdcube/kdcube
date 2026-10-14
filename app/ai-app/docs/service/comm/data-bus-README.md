@@ -787,6 +787,16 @@ Ingress must:
 - reject unexpected binary data in the JSON package;
 - avoid logging user-authored payload bodies.
 
+Bundle admission reads the current registry and effective properties. For
+examples shipped in the platform image, declared entrypoint IDs are discovered
+once per resolved immutable entrypoint path and retained in a process-local,
+single-flight 256-entry LRU, including an unloadable entrypoint's negative
+result. After warm-up, registry reads reuse that discovery metadata. Cold or
+evicted paths still perform discovery. A new image uses a new process; a
+content-addressed shared copy uses a new path. The cache stores only IDs:
+existence, example inclusion, allowlist admission, disabled state, and live
+Card/parent authority continue to be checked at their operation boundaries.
+
 Proc must:
 
 - load bundle manifests and handler metadata;

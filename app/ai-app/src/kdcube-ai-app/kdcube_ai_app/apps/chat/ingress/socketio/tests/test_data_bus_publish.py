@@ -350,6 +350,78 @@ def _async_return(value):
     return _inner
 
 
+@pytest.mark.asyncio
+async def test_repeated_publish_and_readonly_registry_do_not_recompile_image_examples(monkeypatch, tmp_path):
+    """A failed processor-only import is discovered once, not on every publish."""
+    import importlib.machinery
+    import sys
+    from kdcube_ai_app.infra.plugin import bundle_store
+
+    if hasattr(bundle_store, "declared_example_bundle_id"):
+        from kdcube_ai_app.infra.plugin.example_bundle_discovery import clear_example_discovery_cache
+        clear_example_discovery_cache()
+    root = tmp_path / "examples"
+    example = root / "toy-example@1-0"
+    example.mkdir(parents=True)
+    entrypoint = example / "entrypoint.py"
+    entrypoint.write_text("BUNDLE_ID = 'toy-example@1-0'\nraise RuntimeError('synthetic processor-only import')\n")
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)
+    monkeypatch.setattr(bundle_store, "_examples_enabled", lambda: True)
+    monkeypatch.setattr(bundle_store, "_examples_root", lambda: root)
+    monkeypatch.setattr(bundle_store, "_ensure_example_bundle_shared", lambda path: path)
+    monkeypatch.setattr(bundle_store, "_bundle_allowed", lambda bid: True)
+    monkeypatch.setattr(bundle_store, "_redis_writeback_due", lambda key, state: False)
+    state = {"registered": True, "disabled": False}
+
+    def registry():
+        entries = {"task-tracker@1-0": bundle_store.BundleEntry(
+            id="task-tracker@1-0", path=str(tmp_path / "task"), module="entrypoint",
+        )} if state["registered"] else {}
+        return bundle_store.BundlesRegistry(bundles=entries), {}
+
+    store = SimpleNamespace(load_registry_readonly=registry, descriptor_state_key=lambda: (0, 0))
+    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: store)
+    monkeypatch.setattr(bundle_store, "_is_live_file_authority", lambda value: value is store)
+    monkeypatch.setattr(pub, "get_settings", lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"))
+
+    async def current_props(*args, **kwargs):
+        return {"enabled": {"bundle": not state["disabled"]}}
+
+    monkeypatch.setattr(pub, "get_bundle_props", current_props)
+    compiles = []
+    compile_source = importlib.machinery.SourceFileLoader.source_to_code
+
+    def counted_compile(loader, data, path, *args, **kwargs):
+        if str(path) == str(entrypoint):
+            compiles.append(path)
+        return compile_source(loader, data, path, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.machinery.SourceFileLoader, "source_to_code", counted_compile)
+    redis = FakeRedis()
+    # Startup/warm-up preserves ID discovery; request-time work is metadata only.
+    await bundle_store.load_registry(redis, "tenant-a", "project-a")
+    assert len(compiles) == 1
+    compiles.clear()
+    ingress = DataBusSocketIOIngress(app=_app(redis))
+    package = {"bundle_id": "task-tracker@1-0", "messages": [{"subject": "task_tracker.canvas.patch", "payload": {}}]}
+    for index in range(16):
+        ack = await ingress.handle_publish(sid="socket-1", socket_session=_socket_session(), data=package)
+        assert ack["status"] == "accepted", ack
+        await bundle_store.load_registry_from_authority_readonly("tenant-a", "project-a")
+    assert compiles == [], "request-time registry lookup recompiled an immutable example"
+    state["disabled"] = True
+    assert (await ingress.handle_publish(sid="socket-1", socket_session=_socket_session(), data=package))["status"] == "rejected"
+    state["disabled"] = False
+    state["registered"] = False
+    assert (await ingress.handle_publish(sid="socket-1", socket_session=_socket_session(), data=package))["status"] == "rejected"
+    monkeypatch.setattr(bundle_store, "_bundle_allowed", lambda bid: False)
+    state["registered"] = True
+    assert (await ingress.handle_publish(sid="socket-1", socket_session=_socket_session(), data=package))["status"] == "rejected"
+    assert compiles == []
+    if hasattr(bundle_store, "declared_example_bundle_id"):
+        clear_example_discovery_cache()
+
+
 def _async_noop():
     async def _inner(*args, **kwargs):
         del args, kwargs
