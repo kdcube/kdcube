@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from time import monotonic
 from typing import Any
 
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_session_lease import (
@@ -50,32 +51,51 @@ class DataBusSocketLeases:
             project=project, bundle_id=bundle_id,
         ))
 
-    async def _healthy(self, sid: str) -> bool:
+    async def _transport_refusal_reason(self, sid: str) -> str | None:
         manager = self.sio.manager
         if not manager.is_connected(sid, "/"):
-            return False
+            return "namespace_disconnected"
         eio_sid = manager.eio_sid_from_sid(sid, "/")
         socket = self.sio.eio.sockets.get(eio_sid)
-        if socket is None or not socket.connected or socket.closed or socket.closing:
-            return False
+        if socket is None:
+            return "socket_missing"
+        if not socket.connected or socket.closed or socket.closing:
+            return "socket_closed"
         # Engine.IO's own timeout test covers missing pong even when business
         # traffic is idle, and closes half-open transports through its handler.
         try:
-            return bool(await socket.check_ping_timeout())
+            return None if await socket.check_ping_timeout() else "ping_timeout"
         except Exception as exc:
-            logger.warning("Data Bus transport liveness unavailable: %s", type(exc).__name__)
-            return False
+            logger.warning("Data Bus transport liveness unavailable: %s", type(exc).__name__[:64])
+            return "liveness_unavailable"
+
+    async def _healthy(self, sid: str) -> bool:
+        return await self._transport_refusal_reason(sid) is None
 
     async def _renew(self, *, registry, session, tenant, project, bundle_id) -> None:
         sid = session.socket_id
         current = asyncio.current_task()
         interval = max(1.0, min(self.sio.eio.ping_interval, self.sio.eio.ping_timeout))
+        next_lag_warning = next_error_warning = float("-inf")
         try:
             while True:
                 # The connect callback must return before the first liveness
                 # check; Socket.IO may still be finalizing the namespace.
+                scheduled = monotonic() + interval
                 await asyncio.sleep(interval)
-                if self._tasks.get(sid) is not current or not await self._healthy(sid):
+                now = monotonic()
+                # Saturate diagnostic values at one day; no identity or payload.
+                lag_ms = min(86_400_000.0, max(0.0, now - scheduled) * 1000)
+                if self._tasks.get(sid) is not current:
+                    break
+                if lag_ms >= interval * 1000 and now >= next_lag_warning:
+                    logger.warning("Data Bus transport lease check delayed: reason=scheduling_lag lag_ms=%.0f lease_seconds=%s",
+                                   lag_ms, self.lease_seconds)
+                    next_lag_warning = now + 60
+                reason = await self._transport_refusal_reason(sid)
+                if reason is not None:
+                    logger.info("Data Bus transport lease stopped: reason=%s lag_ms=%.0f lease_seconds=%s",
+                                reason, lag_ms, self.lease_seconds)
                     break
                 try:
                     renewed = await registry.renew(
@@ -84,12 +104,17 @@ class DataBusSocketLeases:
                 except Exception as exc:
                     # An outage cannot extend the old lease. Try again while
                     # the transport is healthy; the Redis TTL remains bounded.
-                    logger.warning("Data Bus transport lease renewal unavailable: %s", type(exc).__name__)
+                    if now >= next_error_warning:
+                        logger.warning("Data Bus transport lease renewal unavailable: reason=renewal_unavailable lag_ms=%.0f lease_seconds=%s error_type=%s",
+                                       lag_ms, self.lease_seconds, type(exc).__name__[:64])
+                        next_error_warning = now + 60
                     continue
                 if not renewed:
                     # Never recreate a removed registration from an old task.
                     # A new connect re-admits credentials and creates a new SID.
                     if self._tasks.get(sid) is current:
+                        logger.warning("Data Bus transport lease renewal refused: reason=registration_refused lag_ms=%.0f lease_seconds=%s",
+                                       lag_ms, self.lease_seconds)
                         await self.sio.disconnect(sid)
                     break
         finally:
@@ -99,7 +124,7 @@ class DataBusSocketLeases:
             try:
                 await registry.unregister(socket_id=sid, registration_id=session.registration_id)
             except Exception as exc:
-                logger.warning("Data Bus transport lease cleanup unavailable: %s", type(exc).__name__)
+                logger.warning("Data Bus transport lease cleanup unavailable: %s", type(exc).__name__[:64])
 
     async def stop(self, sid: str) -> None:
         task = self._tasks.pop(sid, None)
