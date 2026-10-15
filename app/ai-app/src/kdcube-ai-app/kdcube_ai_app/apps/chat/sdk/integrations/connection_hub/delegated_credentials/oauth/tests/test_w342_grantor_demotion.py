@@ -83,7 +83,7 @@ def signed_delegation(monkeypatch):
         surface_guard, "_authenticate_delegated_client_access_token", authenticate,
     )
     monkeypatch.setattr(bundle, "get_bundle_session_authority", lambda **_: authority)
-    monkeypatch.setattr(surface_guard, "oauth_tenant_project", lambda: ("home", "demo"))
+    monkeypatch.setattr(surface_guard, "oauth_tenant_project", lambda *_a, **_k: ("home", "demo"))
 
     def next_call():
         # Keep the disposable bearer local; never print it or include it in evidence.
