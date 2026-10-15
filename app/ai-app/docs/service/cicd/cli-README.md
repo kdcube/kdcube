@@ -516,8 +516,13 @@ If a deployment is currently recorded as running (`~/.kdcube/cli-lock.json`),
 `kdcube refresh --build` with no flags targets it automatically.
 
 Before stopping the stack, refresh resolves its effective Compose files and
-requires every file to be inside the selected platform checkout. Command
-`-f`/`--file` selection takes precedence over `COMPOSE_FILE`; process values
+requires the first/base file to be inside the selected platform checkout.
+Additional files may be inside that checkout or the exact runtime's `config/`
+directory, including its subdirectories. The runtime config root is derived
+from the resolved workdir, and must remain physically inside that workdir.
+Every selected file must be a regular existing file at its resolved destination.
+An override symlink into the checkout is treated as a checkout file.
+Command `-f`/`--file` selection takes precedence over `COMPOSE_FILE`; process values
 take precedence over the selected `--env-file`. Multiple files use
 `COMPOSE_PATH_SEPARATOR` (the host path separator by default). Relative file
 paths are relative to the Compose command's working directory, and symlinks
@@ -527,11 +532,23 @@ Env-file statements end at LF, including CRLF file endings; bare CR and
 Unicode separators inside a value cannot introduce a later selector.
 
 An outside-checkout selection exits with `error[compose_source_mismatch]`,
-naming the offending resolved file, before shutdown. Correct the selector to
-use the selected checkout and retry. Missing files, remote/stdin selections
-and selector syntax that cannot be resolved safely also fail closed. This
-preflight checks file selection; build contexts, Compose includes and actual
-installation of maintainer-selected packages require separate verification.
+naming the offending resolved file, before shutdown, unless it is an additional
+runtime-config overlay meeting the rules below. Correct the selector to
+use the selected checkout and runtime config, then retry. Missing files,
+remote/stdin selections and selector syntax that cannot be resolved safely also fail closed. This
+preflight checks file selection and source-neutral runtime-config overlays.
+
+A runtime-config overlay can configure host-local service properties such as
+`services.<service>.ports`. It is parsed with `yaml.safe_load` and must be a
+mapping whose `services`, when present, maps service names to mappings. It
+must contain no top-level `include` and no service `build` (any form), `image`
+or `extends` keys. Invalid YAML and custom tags such as `!reset` or `!override`
+are refused before shutdown, with diagnostics that contain no YAML values.
+A config-only or config-first selection is refused: the base always comes
+from the selected checkout. Other runtimes' config files and symlink escapes
+are refused. Checkout files retain their existing content semantics; their
+build contexts/includes and actual installation of maintainer-selected
+packages still require separate verification.
 
 Refresh stops the stack, builds, then starts it again. After a successful
 build it records a deployment source receipt for the built images, reading the
