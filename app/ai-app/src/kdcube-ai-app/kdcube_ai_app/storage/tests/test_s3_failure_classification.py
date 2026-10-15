@@ -156,10 +156,16 @@ class _StreamingBody:
         raise self.failure
 
 
-@pytest.mark.parametrize("failure", [
-    botocore_exceptions.ResponseStreamingError(error="synthetic connection reset"),
-    pytest.importorskip("aiobotocore.response").AioReadTimeoutError(endpoint_url="https://s3.example", error="t"),
-], ids=lambda f: type(f).__name__)
+def _mid_stream_failures():
+    failures = [botocore_exceptions.ResponseStreamingError(error="synthetic connection reset")]
+    try:  # optional: without aiobotocore only this one case is dropped, never the module
+        from aiobotocore.response import AioReadTimeoutError
+    except ImportError:
+        return failures
+    return failures + [AioReadTimeoutError(endpoint_url="https://s3.example", error="t")]
+
+
+@pytest.mark.parametrize("failure", _mid_stream_failures(), ids=lambda f: type(f).__name__)
 def test_a_failure_in_the_middle_of_a_stream_is_unavailable_and_retryable(monkeypatch, failure):
     backend = _backend(monkeypatch, failure)
 
