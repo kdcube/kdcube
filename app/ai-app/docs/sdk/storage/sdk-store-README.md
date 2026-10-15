@@ -60,6 +60,32 @@ is made. The source correction alone neither relocates existing values nor
 changes the configured provider. Installing or staging corrected source and
 verifying the actual loaded runtime are separate from source-test evidence.
 
+## Read failures: absent versus unavailable
+
+A read, a size or a modified-time lookup (sync and async) and the streaming read
+tell the caller **why** they failed, so an outage never looks like deleted data:
+
+| Raised | Meaning | Retry? |
+| --- | --- | --- |
+| `FileNotFoundError` | The object is absent. On S3 only `NoSuchKey` or a bare `404` on the key. | No |
+| `StorageUnavailableError` (an `OSError`) | The store could not answer, so nothing is known about the object. | `error.retryable` |
+| anything else | An unexpected failure, raised as itself. | Caller decides |
+
+`StorageUnavailableError` (`kdcube_ai_app.storage.storage`) carries `path`,
+`code` (the provider code, for example `AccessDenied` or `SlowDown`) and
+`retryable`. The provider's exception is its `__cause__`, never text to parse.
+
+- Retryable: throttling (`SlowDown`, `ThrottlingException`, HTTP 429), request
+  timeouts, provider 5xx, unreachable endpoints and connect or read timeouts.
+- Not retryable: a refused or expired credential, missing credentials, denied
+  permission, and `NoSuchBucket`. A missing bucket means the configured
+  location is gone for every object at once: a configuration failure, never
+  object absence.
+
+Catch `FileNotFoundError` only for "not there"; let `StorageUnavailableError`
+reach whoever can report the store as unreachable. The local backend already
+lets the real `OSError` through.
+
 ## 1) Conversation artifacts (per turn)
 
 ```

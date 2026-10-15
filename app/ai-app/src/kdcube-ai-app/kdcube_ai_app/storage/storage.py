@@ -25,6 +25,67 @@ mimetypes.add_type("application/json", ".json")
 mimetypes.add_type("image/webp", ".webp")
 mimetypes.add_type("application/wasm", ".wasm")
 
+
+class StorageUnavailableError(OSError):
+    """The store could not answer, so nothing is known about the object.
+
+    Distinct from FileNotFoundError, which means the object is absent: a missing
+    bucket, a refused credential, a throttle, a timeout or a dropped connection
+    must never read as data loss. The provider's exception is the ``__cause__``;
+    ``retryable`` says whether the same call can succeed later unchanged.
+    """
+
+    def __init__(self, path: str, *, retryable: bool, code: str = ""):
+        self.path = path
+        self.retryable = retryable
+        self.code = code
+        kind = "retryable" if retryable else "not retryable"
+        super().__init__(f"Storage unavailable for {path} ({code or 'no code'}, {kind})")
+
+
+# S3 error codes. Absence of the key is the only thing a caller may read as "not there".
+_S3_MISSING_KEY_CODES = frozenset({"NoSuchKey", "404", "NotFound"})
+_S3_RETRYABLE_CODES = frozenset({
+    "SlowDown", "Throttling", "ThrottlingException", "RequestLimitExceeded", "TooManyRequests",
+    "RequestTimeout", "RequestTimeoutException", "InternalError", "ServiceUnavailable",
+})
+
+
+def _s3_failure(path: str, exc: BaseException) -> BaseException:
+    """W109: classify a provider failure by its type and code, never by its text.
+
+    A missing key becomes FileNotFoundError; a store that could not answer becomes
+    StorageUnavailableError; anything else is returned unchanged so it raises as itself.
+    """
+    try:
+        from botocore import exceptions as botocore_exceptions
+    except ImportError:  # boto is optional; without it nothing here came from S3
+        return exc
+    if isinstance(exc, botocore_exceptions.ClientError):
+        error = exc.response.get("Error") or {}
+        code = str(error.get("Code") or "")
+        status = int((exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0)
+        if code in _S3_MISSING_KEY_CODES:
+            return FileNotFoundError(f"{path} not found in S3")
+        # NoSuchBucket is a 404 too, but it means the configured location is gone:
+        # every object at once, a configuration failure rather than absence.
+        retryable = code in _S3_RETRYABLE_CODES or status == 429 or status >= 500
+        return StorageUnavailableError(path, retryable=retryable, code=code or str(status))
+    if isinstance(exc, (botocore_exceptions.ConnectionError, botocore_exceptions.HTTPClientError)):
+        # endpoint unreachable, connect or read timeout, connection closed
+        return StorageUnavailableError(path, retryable=True, code=type(exc).__name__)
+    if isinstance(exc, botocore_exceptions.NoCredentialsError):
+        return StorageUnavailableError(path, retryable=False, code=type(exc).__name__)
+    return exc
+
+
+def _raise_s3_failure(path: str, exc: BaseException):
+    failure = _s3_failure(path, exc)
+    if failure is exc:
+        raise exc
+    raise failure from exc
+
+
 class IStorageBackend(ABC):
     """Interface for storage backends."""
 
@@ -352,7 +413,7 @@ class S3StorageBackend(IStorageBackend):
             response = self.s3_client.get_object(Bucket=self.bucket_name, Key=self._get_s3_key(path))
             return response['Body'].read()
         except Exception as e:
-            raise FileNotFoundError(f"Cannot read {path} from S3: {e}")
+            _raise_s3_failure(path, e)
 
     def write_bytes(self, path: str, data: bytes, meta: Optional[dict] = None) -> None:
 
@@ -529,14 +590,14 @@ class S3StorageBackend(IStorageBackend):
             response = self.s3_client.head_object(Bucket=self.bucket_name, Key=self._get_s3_key(path))
             return response['ContentLength']
         except Exception as e:
-            raise FileNotFoundError(f"Cannot get size of {path} from S3: {e}")
+            _raise_s3_failure(path, e)
 
     def get_modified_time(self, path: str) -> datetime:
         try:
             response = self.s3_client.head_object(Bucket=self.bucket_name, Key=self._get_s3_key(path))
             return response['LastModified'].replace(tzinfo=None)  # Remove timezone for consistency
         except Exception as e:
-            raise FileNotFoundError(f"Cannot get modified time of {path} from S3: {e}")
+            _raise_s3_failure(path, e)
 
     # ---------- Native async overrides (no threads) ----------
     async def exists_a(self, path: str) -> bool:
@@ -568,7 +629,7 @@ class S3StorageBackend(IStorageBackend):
                 body = resp["Body"]
                 return await body.read()
             except Exception as e:
-                raise FileNotFoundError(f"Cannot read {path} from S3: {e}")
+                _raise_s3_failure(path, e)
 
     async def iter_bytes_a(self, path: str, *, chunk_size: int = 1024 * 1024) -> AsyncIterator[bytes]:
         key = self._get_s3_key(path)
@@ -583,7 +644,7 @@ class S3StorageBackend(IStorageBackend):
                         break
                     yield chunk
             except Exception as e:
-                raise FileNotFoundError(f"Cannot stream {path} from S3: {e}")
+                _raise_s3_failure(path, e)
 
     async def write_bytes_a(self, path: str, data: bytes, meta: Optional[dict] = None) -> None:
         key = self._get_s3_key(path)
@@ -715,7 +776,7 @@ class S3StorageBackend(IStorageBackend):
                 head = await s3.head_object(Bucket=self.bucket_name, Key=key)
                 return int(head["ContentLength"])
             except Exception as e:
-                raise FileNotFoundError(f"Cannot get size of {path} from S3: {e}")
+                _raise_s3_failure(path, e)
 
     async def get_modified_time_a(self, path: str) -> datetime:
         key = self._get_s3_key(path)
@@ -726,7 +787,7 @@ class S3StorageBackend(IStorageBackend):
                 lm = head["LastModified"]
                 return lm.replace(tzinfo=None) if getattr(lm, "tzinfo", None) else lm
             except Exception as e:
-                raise FileNotFoundError(f"Cannot get modified time of {path} from S3: {e}")
+                _raise_s3_failure(path, e)
 
     def list_with_prefix(self, path: str, prefix: str) -> List[str]:
         """
