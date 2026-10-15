@@ -539,16 +539,19 @@ remote/stdin selections and selector syntax that cannot be resolved safely also 
 preflight checks file selection and source-neutral runtime-config overlays.
 
 A runtime-config overlay can configure host-local service properties such as
-`services.<service>.ports`. It is parsed with `yaml.safe_load` and must be a
-mapping whose `services`, when present, maps service names to mappings. It
+`services.<service>.ports`. It is parsed with a duplicate-key-rejecting
+`yaml.SafeLoader` and must be a mapping whose `services`, when present, maps
+service names to mappings. It
 must contain no top-level `include` and no service `build` (any form), `image`
-or `extends` keys. Invalid YAML and custom tags such as `!reset` or `!override`
+or `extends` keys. Duplicate explicit mapping keys (including nested keys),
+invalid YAML and custom tags such as `!reset` or `!override`
 are refused before shutdown, with diagnostics that contain no YAML values.
 A config-only or config-first selection is refused: the base always comes
 from the selected checkout. Other runtimes' config files and symlink escapes
 are refused. Checkout files retain their existing content semantics; their
 build contexts/includes and actual installation of maintainer-selected
 packages still require separate verification.
+Foreign bind mounts and a top-level `name` are outside this four-key contract.
 
 Refresh stops the stack, builds, then starts it again. After a successful
 build it records a deployment source receipt for the built images, reading the
