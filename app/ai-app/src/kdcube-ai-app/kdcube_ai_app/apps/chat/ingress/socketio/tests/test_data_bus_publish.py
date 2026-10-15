@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import json
+import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -1564,3 +1565,55 @@ async def test_rejected_data_bus_publishes_do_not_spend_the_window(monkeypatch):
     counters = [int(value) for key, value in redis.values.items() if key.endswith(":packages")]
     assert counters == [1]
 
+
+
+def _ingress_records(caplog):
+    return [r for r in caplog.records if "[data_bus.publish]" in r.getMessage() or "[socketio.relay]" in r.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_an_accepted_message_writes_one_debug_line_and_no_info(monkeypatch, caplog):
+    """W875: idle clients publish several commands a second; three INFO lines each flooded the ingress log."""
+
+    caplog.set_level(logging.DEBUG)
+    redis = FakeRedis()
+    _patch_registered_bundle(monkeypatch)
+    ack = await DataBusSocketIOIngress(app=_app(redis)).handle_publish(
+        sid="socket-1",
+        socket_session=_socket_session(),
+        data={
+            "schema": "kdcube.data_bus.ingress.v1",
+            "bundle_id": "task-tracker@1-0",
+            "messages": [{"message_id": "m1", "subject": "task_tracker.canvas.patch", "object_ref": "canvas:main",
+                          "idempotency_key": "op-1", "payload": {"base_revision": 1, "operations": []}}],
+        },
+    )
+
+    assert ack["status"] == "accepted"
+    records = _ingress_records(caplog)
+    assert [r.levelno for r in records] == [logging.DEBUG]
+    line = records[0].getMessage()
+    assert "message_id=m1" in line and "stream_id=1-1" in line and "subject=task_tracker.canvas.patch" in line
+    assert "operations" not in line
+
+
+@pytest.mark.asyncio
+async def test_the_relay_logs_data_bus_replies_at_debug_and_hub_events_at_info(caplog):
+    caplog.set_level(logging.DEBUG)
+    emitted = []
+
+    class Sio:
+        async def emit(self, event, data, room=None):
+            emitted.append((event, data["type"], room))
+
+    handler = SimpleNamespace(sio=Sio())
+    for event_type in ("kdcube.data_bus.result", "connection_hub.grant.changed", "chat.delta"):
+        await socket_chat.SocketIOChatHandler._on_pubsub_message(handler, {
+            "event": "chat_service",
+            "data": {"type": event_type, "data": {"message_id": "m1"}},
+            "target_sid": "socket-1",
+        })
+
+    assert [e[1] for e in emitted] == ["kdcube.data_bus.result", "connection_hub.grant.changed", "chat.delta"]
+    levels = {r.getMessage().split("type=")[1].split()[0]: r.levelno for r in _ingress_records(caplog)}
+    assert levels == {"kdcube.data_bus.result": logging.DEBUG, "connection_hub.grant.changed": logging.INFO}

@@ -398,15 +398,6 @@ class DataBusSocketIOIngress:
         props = await get_bundle_props(self._redis(), tenant=tenant, project=project, bundle_id=bundle_id)
         if not _bundle_enabled(props):
             return self._ack(status="rejected", rejected=[{"index": None, "error": "bundle is disabled"}])
-        logger.info(
-            "[data_bus.publish] received package tenant=%s project=%s bundle=%s sid=%s messages=%s bytes=%s",
-            tenant,
-            project,
-            bundle_id,
-            sid,
-            len(messages),
-            encoded_size,
-        )
         stream = RedisDataBusStream(
             self._redis(),
             tenant=tenant,
@@ -427,20 +418,12 @@ class DataBusSocketIOIngress:
                     sid=sid,
                     reply_transport=reply_transport,
                 )
-                logger.info(
-                    "[data_bus.publish] received message tenant=%s project=%s bundle=%s subject=%s object_ref=%s message_id=%s sid=%s index=%s",
-                    tenant,
-                    project,
-                    bundle_id,
-                    message.subject,
-                    message.object_ref,
-                    message.message_id,
-                    sid,
-                    index,
-                )
                 result = await stream.publish(message)
-                logger.info(
-                    "[data_bus.publish] accepted message tenant=%s project=%s bundle=%s subject=%s object_ref=%s message_id=%s stream_id=%s",
+                # W875: one DEBUG line per accepted message; idle clients publish
+                # several a second. Rejections are reported in the ack.
+                logger.debug(
+                    "[data_bus.publish] accepted tenant=%s project=%s bundle=%s subject=%s object_ref=%s "
+                    "message_id=%s stream_id=%s sid=%s index=%s of=%s bytes=%s",
                     tenant,
                     project,
                     bundle_id,
@@ -448,6 +431,10 @@ class DataBusSocketIOIngress:
                     message.object_ref,
                     result.message_id,
                     result.stream_id,
+                    sid,
+                    index,
+                    len(messages),
+                    encoded_size,
                 )
                 accepted.append({
                     "message_id": result.message_id,
