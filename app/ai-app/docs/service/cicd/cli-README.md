@@ -544,8 +544,11 @@ A runtime-config overlay can configure host-local service properties such as
 service names to mappings. It
 must contain no top-level `include` and no service `build` (any form), `image`
 or `extends` keys. Duplicate explicit mapping keys (including nested keys),
-invalid YAML and custom tags such as `!reset` or `!override`
-are refused before shutdown, with diagnostics that contain no YAML values.
+invalid YAML and unknown tags are refused before shutdown, with diagnostics
+that contain no YAML values. Compose's exact `!reset` and `!override` tags are
+inspected as their ordinary YAML values; nested mappings still reject duplicate
+keys. Tagged source-selection keys are still forbidden, including
+`build: !reset null` and `image: !override ...`.
 A config-only or config-first selection is refused: the base always comes
 from the selected checkout. Other runtimes' config files and symlink escapes
 are refused. Checkout files retain their existing content semantics; their

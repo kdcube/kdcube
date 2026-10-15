@@ -394,6 +394,15 @@ def test_refresh_accepts_runtime_host_ports_before_normal_lifecycle(monkeypatch,
     "include: [sensitive-value]\n",
     "services:\n  processor:\n    extends: {file: sensitive-value, service: old}\n",
     "services:\n  processor:\n    build: null\n",
+    "services:\n  processor:\n    build: !override {context: sensitive-value}\n",
+    "services:\n  processor:\n    build: !reset null\n",
+    "services:\n  processor:\n    image: !override sensitive-value\n",
+    "services:\n  processor:\n    extends: !reset null\n",
+    "include: !reset null\n",
+    "services: !override {processor: {image: sensitive-value}}\n",
+    "services:\n  processor: !override {build: sensitive-value}\n",
+    "services:\n  processor:\n    !override build: sensitive-value\n",
+    "!reset include: [sensitive-value]\n",
     "x-template: &template\n  image: sensitive-value\nservices:\n  processor:\n    <<: *template\n",
 ])
 def test_runtime_overlay_source_keys_refuse_before_refresh_side_effects(monkeypatch, tmp_path, document):
@@ -411,8 +420,8 @@ def test_runtime_overlay_source_keys_refuse_before_refresh_side_effects(monkeypa
 
 @pytest.mark.parametrize("document", [
     "services: [sensitive-value",
-    "services:\n  processor:\n    ports: !reset []\n",
-    "services:\n  processor:\n    ports: !override []\n",
+    "services:\n  processor:\n    ports: !custom []\n",
+    "services:\n  processor:\n    ports: !override [!custom sensitive-value]\n",
     "[sensitive-value]\n",
     "services: [sensitive-value]\n",
     "services: {processor: sensitive-value}\n",
@@ -426,6 +435,54 @@ def test_invalid_or_custom_tag_runtime_overlay_fails_closed(tmp_path, document):
     with pytest.raises(ComposeSourceError, match="compose_source_mismatch") as raised:
         _runtime_selection(runtime, repo, base, [base, override])
     assert "sensitive-value" not in str(raised.value)
+
+
+@pytest.mark.parametrize("tag", ["!override", "!reset"])
+def test_compose_merge_tags_keep_runtime_refresh_lifecycle(monkeypatch, tmp_path, tag):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    # The reported live file's key/tag structure, with synthetic values only.
+    override.write_text(
+        f'services:\n  chat-ingress:\n    ports: {tag} ["127.0.0.1:18080:8080"]\n', encoding="utf-8",
+    )
+    config = runtime / "config"
+    (config / ".env").write_text(f"COMPOSE_FILE={base}:{override}\n", encoding="utf-8")
+    calls = _refresh(monkeypatch, repo, base.parent, config)
+    cli.main()
+    assert calls == ["proxy", "secrets", "stop", "build", "start"]
+
+
+def test_compose_reset_empty_ports_is_source_neutral(tmp_path):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    override.write_text("services:\n  chat-ingress:\n    ports: !reset []\n", encoding="utf-8")
+    assert _runtime_selection(runtime, repo, base, [base, override]) == (base.resolve(), override.resolve())
+
+
+@pytest.mark.parametrize("tag", ["!override", "!reset"])
+def test_compose_tags_construct_plain_typed_values(tag):
+    import yaml
+    from kdcube_cli.compose_source import _RuntimeOverlayLoader
+
+    document = yaml.load(
+        f"mapping: {tag} {{enabled: true}}\nsequence: {tag} [1, false]\n"
+        f"nothing: {tag} null\nnumber: {tag} 42\nquoted: {tag} 'null'\n",
+        Loader=_RuntimeOverlayLoader,
+    )
+    assert document == {"mapping": {"enabled": True}, "sequence": [1, False],
+                        "nothing": None, "number": 42, "quoted": "null"}
+
+
+@pytest.mark.parametrize("document", [
+    "services: !override {processor: {ports: [], ports: []}}\n",
+    "services: {processor: !reset {environment: {MODE: one, MODE: two}}}\n",
+    "services: {processor: {ports: !override [], ports: !reset []}}\n",
+])
+def test_compose_tags_keep_duplicate_mapping_keys_refused(tmp_path, document):
+    from kdcube_cli.compose_source import ComposeSourceError
+
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    override.write_text(document, encoding="utf-8")
+    with pytest.raises(ComposeSourceError, match="cannot parse runtime-config overlay safely"):
+        _runtime_selection(runtime, repo, base, [base, override])
 
 
 def test_runtime_config_symlink_into_checkout_keeps_checkout_content_semantics(tmp_path):
