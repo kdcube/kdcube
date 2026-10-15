@@ -3,6 +3,7 @@
 
 # chat/proc/rest/integrations/integrations.py
 import asyncio
+import time
 import contextlib
 import copy
 import html
@@ -6135,6 +6136,7 @@ async def _load_bundle_workflow(
         payload: BundleSuggestionsRequest,
         request: Request,
         session: UserSession,
+        phases: Optional[Dict[str, float]] = None,
 ) -> tuple[Any, Any, str, str, ExternalEventPayload]:
     cfg_req = payload.config_request or ConfigRequest()
     tenant_id, project_id = _resolve_path_scope(tenant=tenant, project=project)
@@ -6149,6 +6151,7 @@ async def _load_bundle_workflow(
     )
     cfg_req.agentic_bundle_id = requested_bundle_id
     cfg_req = await resolve_config_request_secrets(cfg_req, bundle_id=requested_bundle_id)
+    _mark_peer_phase(phases, "secrets")
     request_id = str(uuid.uuid4())
 
     spec_resolved = await _resolve_bundle_spec_from_runtime(
@@ -6159,6 +6162,7 @@ async def _load_bundle_workflow(
     )
     if not spec_resolved:
         raise HTTPException(status_code=404, detail=f"Bundle {cfg_req.agentic_bundle_id} not found")
+    _mark_peer_phase(phases, "spec")
 
     wf_config = create_workflow_config(cfg_req)
     wf_config.ai_bundle_spec = spec_resolved
@@ -6214,7 +6218,36 @@ async def _load_bundle_workflow(
         raise HTTPException(status_code=500, detail=f"Failed to load bundle {spec_resolved.id}: {e}") from e
 
     _bind_proc_runtime_services_to_workflow(workflow=workflow, request=request)
+    _mark_peer_phase(phases, "instance")
     return workflow, spec_resolved, tenant_id, project_id, comm_context
+
+
+def _mark_peer_phase(phases: Optional[Dict[str, float]], name: str) -> None:
+    """Record when a peer call's phase ended; a no-op outside a timed peer call."""
+    if phases is not None:
+        phases[name] = time.monotonic()
+
+
+def _log_peer_call_phases(phases: Dict[str, float], *, bundle_id: str, operation: str, outcome: str) -> None:
+    """One line per nested peer operation call, split at its phases, in ms.
+
+    Each value is the time since the previous phase ended; a phase the call did not reach is -1.
+    Only the target app id, its operation alias and a fixed outcome are named.
+    """
+    previous = phases["start"]
+    values = []
+    for name in ("secrets", "spec", "instance", "prep", "handler"):
+        mark = phases.get(name)
+        if mark is None:
+            values.append(-1.0)
+            continue
+        values.append((mark - previous) * 1000.0)
+        previous = mark
+    logger.info(
+        "[call_bundle_op.peer] bundle=%s operation=%s secrets_ms=%.1f spec_ms=%.1f instance_ms=%.1f "
+        "prep_ms=%.1f handler_ms=%.1f total_ms=%.1f outcome=%s",
+        bundle_id, operation, *values, (time.monotonic() - phases["start"]) * 1000.0, outcome,
+    )
 
 
 PUBLIC_CONTENT_ROUTE_SEGMENT = "__content__"
@@ -6346,6 +6379,43 @@ async def _call_bundle_op_inner(
         _internal_peer_call: bool = False,
 ):
     uploaded_files = list(uploaded_files or [])
+    # W389: a nested peer call is timed by phase (the calling app waits on all of it).
+    phases: Optional[Dict[str, float]] = {"start": time.monotonic()} if _internal_peer_call else None
+    outcome = "error"
+    try:
+        result = await _call_bundle_op_phases(
+            tenant=tenant, project=project, bundle_id=bundle_id, payload=payload,
+            uploaded_files=uploaded_files, request=request, operation=operation, route=route,
+            session=session, path_tail=path_tail, method_override=method_override,
+            _internal_peer_call=_internal_peer_call, phases=phases,
+        )
+        outcome = "ok"
+        return result
+    except HTTPException as exc:
+        outcome = f"http_{int(exc.status_code)}"
+        raise
+    finally:
+        if phases is not None:
+            _log_peer_call_phases(phases, bundle_id=str(bundle_id or ""), operation=str(operation or ""),
+                                  outcome=outcome)
+
+
+async def _call_bundle_op_phases(
+        *,
+        tenant: str,
+        project: str,
+        bundle_id: Optional[str],
+        payload: BundleSuggestionsRequest,
+        uploaded_files: List[BundleUploadedFile],
+        request: Request,
+        operation: str,
+        route: str,
+        session: UserSession,
+        path_tail: Optional[str],
+        method_override: Optional[str],
+        _internal_peer_call: bool,
+        phases: Optional[Dict[str, float]],
+):
     workflow, spec_resolved, tenant_id, project_id, comm_context = _unpack_loaded_bundle_workflow(
         await _load_bundle_workflow(
             tenant=tenant,
@@ -6354,6 +6424,7 @@ async def _call_bundle_op_inner(
             payload=payload,
             request=request,
             session=session,
+            phases=phases,
         )
     )
 
@@ -6548,7 +6619,9 @@ async def _call_bundle_op_inner(
             bind_bundle_operation_caller(_call_peer_bundle_operation),
             bind_bundle_operation_stream_caller(_call_peer_bundle_operation_stream),
         ):
+            _mark_peer_phase(phases, "prep")
             result = await _invoke_bundle_callable(fn, **extra)
+            _mark_peer_phase(phases, "handler")
     except HTTPException:
         raise
     except Exception as e:
