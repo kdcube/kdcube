@@ -198,3 +198,25 @@ def drain_to_logger(*, max_records: int = 100) -> int:
     for row in rows:
         logger.info("%s", row)
     return len(rows)
+
+
+def drain_worker_timings(*, stopping: bool = False) -> int:
+    """Flush an opted-in capture at a worker boundary after expiry or stop.
+
+    Called only by the worker loop, after claim contexts have unwound. Empty
+    and disabled captures do no diagnostic IO. The cumulative capture budget
+    bounds this one-shot synchronous write; no collector task is created.
+    Logging is best effort and never changes a worker's outcome.
+    """
+    if not CAPTURE.config.enabled or not CAPTURE.buffer_bytes:
+        return 0
+    if not stopping and CAPTURE.active():
+        return 0
+    try:
+        # The smallest fixed-schema row plus the prefix reserve exceeds 256
+        # bytes, so the 256 KiB admission budget holds fewer than 1000 rows.
+        return drain_to_logger(max_records=1000)
+    except (Exception, asyncio.CancelledError):
+        # Keep the existing context guards and never emit an exception or use
+        # a fallback writer. Failed logger delivery is not retried.
+        return 0

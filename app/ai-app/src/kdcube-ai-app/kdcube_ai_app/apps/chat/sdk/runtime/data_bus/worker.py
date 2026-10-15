@@ -59,7 +59,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.locks import (
     renew_lock_until_cancelled,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import DataBusClaim, RedisDataBusStream
-from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.timing import CAPTURE, CURRENT, Phase, Outcome, observe
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.timing import CAPTURE, CURRENT, Phase, Outcome, observe, drain_worker_timings
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     DATA_BUS_IDEMPOTENCY_REQUIRED,
     DATA_BUS_ORDERING_SERIAL_PER_PARTITION,
@@ -534,23 +534,27 @@ class DataBusBundleWorker:
             sorted(self.handler_specs.keys()),
             self.consumer_name,
         )
-        while not self._stop_event.is_set():
-            try:
-                claim = await self.stream.claim_next(
-                    consumer_name=self.consumer_name,
-                    count=1,
-                    block_ms=DATA_BUS_CLAIM_BLOCK_MS,
-                )
-                if claim is None:
-                    await asyncio.sleep(0)
-                    continue
-                await self._process_claim(claim)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                _log.warning("[data_bus] Worker loop failed: bundle=%s", self.bundle_id, exc_info=True)
-                await asyncio.sleep(0.5)
-        _log.info("[data_bus] Worker stopped: bundle=%s", self.bundle_id)
+        try:
+            while not self._stop_event.is_set():
+                drain_worker_timings()
+                try:
+                    claim = await self.stream.claim_next(
+                        consumer_name=self.consumer_name,
+                        count=1,
+                        block_ms=DATA_BUS_CLAIM_BLOCK_MS,
+                    )
+                    if claim is None:
+                        await asyncio.sleep(0)
+                        continue
+                    await self._process_claim(claim)
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    _log.warning("[data_bus] Worker loop failed: bundle=%s", self.bundle_id, exc_info=True)
+                    await asyncio.sleep(0.5)
+        finally:
+            drain_worker_timings(stopping=True)
+            _log.info("[data_bus] Worker stopped: bundle=%s", self.bundle_id)
 
     def stop(self) -> None:
         self._stop_event.set()
