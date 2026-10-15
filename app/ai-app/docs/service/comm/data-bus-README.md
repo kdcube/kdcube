@@ -833,7 +833,10 @@ Data Bus ingress logs one line per accepted message, at DEBUG, as metadata:
 The Socket.IO relay logs each `kdcube.data_bus.*` reply it emits at DEBUG as
 well (`[socketio.relay] emitting live service event ...`); `connection_hub.*`
 events stay at INFO. A rejected package or message is answered in the publish
-ack, and WARNING and ERROR lines are unchanged. Why DEBUG (W875): idle agent
+ack. A valid message the stream fails to take logs one WARNING,
+`[data_bus.publish] stream write failed ... message_id=... index=... error=<exception class>`,
+without the payload or the exception text; other WARNING and ERROR lines are
+unchanged. Why DEBUG (W875): idle agent
 clients publish a few commands a second per deployment, and four INFO lines per
 command came to about 12,000 log lines every ten minutes with nothing
 happening. To trace individual messages, set the `kdcube.data_bus.socketio`

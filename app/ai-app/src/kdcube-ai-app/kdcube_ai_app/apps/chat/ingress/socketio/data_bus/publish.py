@@ -407,6 +407,7 @@ class DataBusSocketIOIngress:
         accepted: list[dict[str, Any]] = []
         rejected: list[dict[str, Any]] = []
         for index, item in enumerate(messages):
+            message = None
             try:
                 message = self._normalize_message(
                     item,
@@ -441,6 +442,20 @@ class DataBusSocketIOIngress:
                     "stream_id": result.stream_id,
                 })
             except Exception as exc:
+                if message is not None:
+                    # A valid message the stream did not take (Redis down, stream
+                    # error). The exception text may carry values, so only its class.
+                    logger.warning(
+                        "[data_bus.publish] stream write failed tenant=%s project=%s bundle=%s "
+                        "message_id=%s sid=%s index=%s error=%s",
+                        tenant,
+                        project,
+                        bundle_id,
+                        message.message_id,
+                        sid,
+                        index,
+                        type(exc).__name__,
+                    )
                 rejected.append({
                     "index": index,
                     "message_id": (

@@ -1617,3 +1617,36 @@ async def test_the_relay_logs_data_bus_replies_at_debug_and_hub_events_at_info(c
     assert [e[1] for e in emitted] == ["kdcube.data_bus.result", "connection_hub.grant.changed", "chat.delta"]
     levels = {r.getMessage().split("type=")[1].split()[0]: r.levelno for r in _ingress_records(caplog)}
     assert levels == {"kdcube.data_bus.result": logging.DEBUG, "connection_hub.grant.changed": logging.INFO}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_stream_write_logs_one_warning_without_payload_or_error_text(monkeypatch, caplog):
+    """With the INFO receipt line gone, a storage failure still leaves one server-side line (W875 review)."""
+
+    caplog.set_level(logging.DEBUG)
+    _patch_registered_bundle(monkeypatch)
+
+    async def failing_publish(self, message):
+        raise ConnectionError("redis refused secret-value-in-error")
+
+    monkeypatch.setattr(pub.RedisDataBusStream, "publish", failing_publish)
+    ack = await DataBusSocketIOIngress(app=_app(FakeRedis())).handle_publish(
+        sid="socket-1",
+        socket_session=_socket_session(),
+        data={
+            "schema": "kdcube.data_bus.ingress.v1",
+            "bundle_id": "task-tracker@1-0",
+            "messages": [
+                {"message_id": "m1", "subject": "task_tracker.canvas.patch", "object_ref": "canvas:main",
+                 "idempotency_key": "op-1", "payload": {"base_revision": 1, "operations": ["payload-marker"]}},
+                "not-an-object",
+            ],
+        },
+    )
+
+    assert ack["status"] == "rejected" and len(ack["rejected"]) == 2
+    records = _ingress_records(caplog)
+    assert [r.levelno for r in records] == [logging.WARNING]
+    line = records[0].getMessage()
+    assert "message_id=m1" in line and "index=0" in line and "error=ConnectionError" in line
+    assert "payload-marker" not in line and "secret-value-in-error" not in line
