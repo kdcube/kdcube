@@ -65,11 +65,16 @@ def _http_exception_message(exc: HTTPException) -> str:
     return str(detail or "Chat request failed")
 
 
-def _should_log_live_service_event(event: Any, data: Any) -> bool:
+def _live_service_event_log_level(event: Any, data: Any) -> Optional[int]:
+    """Data Bus replies, one per command, log at DEBUG (W875); Connection Hub events at INFO."""
     if event != "chat_service" or not isinstance(data, dict):
-        return False
+        return None
     event_type = str(data.get("type") or "")
-    return event_type.startswith("kdcube.data_bus.") or event_type.startswith("connection_hub.")
+    if event_type.startswith("kdcube.data_bus."):
+        return logging.DEBUG
+    if event_type.startswith("connection_hub."):
+        return logging.INFO
+    return None
 
 async def _reject_anonymous(
         *,
@@ -203,9 +208,11 @@ class SocketIOChatHandler:
             session_id = message.get("session_id")
             if not event:
                 return
+            log_level = _live_service_event_log_level(event, data)
             if target_sid:
-                if _should_log_live_service_event(event, data):
-                    logger.info(
+                if log_level is not None:
+                    logger.log(
+                        log_level,
                         "[socketio.relay] emitting live service event type=%s target_sid=%s session_id=%s message_id=%s",
                         data.get("type"),
                         target_sid,
@@ -214,8 +221,9 @@ class SocketIOChatHandler:
                     )
                 await self.sio.emit(event, data, room=target_sid)
             elif session_id:
-                if _should_log_live_service_event(event, data):
-                    logger.info(
+                if log_level is not None:
+                    logger.log(
+                        log_level,
                         "[socketio.relay] broadcasting live service event type=%s session_id=%s message_id=%s",
                         data.get("type"),
                         session_id,

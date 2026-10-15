@@ -824,14 +824,23 @@ must verify that the actor can read or mutate the selected board.
 
 ## Observability
 
-Data Bus ingress logs package and message receipt, plus accepted stream ids, as
-metadata:
+Data Bus ingress logs one line per accepted message, at DEBUG, as metadata:
 
 ```text
-[data_bus.publish] received package tenant=... project=... bundle=... messages=...
-[data_bus.publish] received message tenant=... project=... bundle=... subject=... object_ref=... message_id=...
-[data_bus.publish] accepted message tenant=... project=... bundle=... subject=... object_ref=... message_id=... stream_id=...
+[data_bus.publish] accepted tenant=... project=... bundle=... subject=... object_ref=... message_id=... stream_id=... sid=... index=... of=... bytes=...
 ```
+
+The Socket.IO relay logs each `kdcube.data_bus.*` reply it emits at DEBUG as
+well (`[socketio.relay] emitting live service event ...`); `connection_hub.*`
+events stay at INFO. A rejected package or message is answered in the publish
+ack. A valid message the stream fails to take logs one WARNING,
+`[data_bus.publish] stream write failed ... message_id=... index=... error=<exception class>`,
+without the payload or the exception text; other WARNING and ERROR lines are
+unchanged. Why DEBUG (W875): idle agent
+clients publish a few commands a second per deployment, and four INFO lines per
+command came to about 12,000 log lines every ten minutes with nothing
+happening. To trace individual messages, set the `kdcube.data_bus.socketio`
+and `kdcube_ai_app.apps.chat.ingress.socketio.chat` loggers to DEBUG.
 
 Bundle handlers and storage layers should separately log durable facts such as
 revision or object creation:
