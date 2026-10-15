@@ -44,14 +44,6 @@ UNAVAILABLE = [
 ]
 
 
-class _Body:
-    def __init__(self, failure):
-        self.failure = failure
-
-    def read(self, *args):
-        raise self.failure
-
-
 class _SyncClient:
     def __init__(self, failure):
         self.failure = failure
@@ -149,6 +141,47 @@ def test_an_unclassified_failure_raises_as_itself(monkeypatch):
         with pytest.raises(ValueError) as raised:
             call()
         assert raised.value is failure, name
+
+
+class _StreamingBody:
+    """A body that yields one chunk, then fails the way the transport fails mid-stream."""
+
+    def __init__(self, failure):
+        self.failure, self.sent = failure, False
+
+    async def read(self, size=-1):
+        if not self.sent:
+            self.sent = True
+            return b"first-chunk"
+        raise self.failure
+
+
+@pytest.mark.parametrize("failure", [
+    botocore_exceptions.ResponseStreamingError(error="synthetic connection reset"),
+    pytest.importorskip("aiobotocore.response").AioReadTimeoutError(endpoint_url="https://s3.example", error="t"),
+], ids=lambda f: type(f).__name__)
+def test_a_failure_in_the_middle_of_a_stream_is_unavailable_and_retryable(monkeypatch, failure):
+    backend = _backend(monkeypatch, failure)
+
+    class _MidStreamClient(_AsyncClient):
+        async def get_object(self, **kwargs):
+            return {"Body": _StreamingBody(failure)}
+
+    async def _async_client(self):
+        return _MidStreamClient(failure)
+
+    monkeypatch.setattr(S3StorageBackend, "_get_async_client", _async_client)
+    chunks = []
+
+    async def _consume():
+        async for chunk in backend.iter_bytes_a("a/b.json"):
+            chunks.append(chunk)
+
+    with pytest.raises(StorageUnavailableError) as raised:
+        asyncio.run(_consume())
+    assert chunks == [b"first-chunk"]  # the failure came after data had already been delivered
+    assert raised.value.retryable is True
+    assert raised.value.__cause__ is failure
 
 
 def test_the_unavailable_error_is_an_os_error_callers_already_handle():
