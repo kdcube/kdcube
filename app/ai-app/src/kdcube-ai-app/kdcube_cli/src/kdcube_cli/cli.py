@@ -7131,6 +7131,7 @@ def main() -> None:
                     ["docker", "compose", "--env-file", str(_refresh_compose.config_dir / ".env")],
                     cwd=_refresh_compose.docker_dir,
                     environment=os.environ,
+                    runtime_workdir=_resolved,
                 )
             except ComposeSourceError as exc:
                 raise SystemExit(str(exc)) from exc

@@ -7,9 +7,11 @@ import re
 from pathlib import Path
 from typing import Mapping, Sequence
 
+import yaml
+
 
 class ComposeSourceError(ValueError):
-    """A refresh cannot establish a Compose selection inside its checkout."""
+    """A refresh cannot establish its platform base and runtime overlays."""
 
     def __init__(self, file: object, reason: str) -> None:
         super().__init__(f"error[compose_source_mismatch]: {file}: {reason}")
@@ -226,16 +228,51 @@ def resolve_compose_files(
     return tuple(resolved)
 
 
+def _require_runtime_overlay(file: Path) -> None:
+    """Runtime-owned overlays configure services without selecting their source."""
+    try:
+        with file.open(encoding="utf-8-sig") as stream:
+            document = yaml.safe_load(stream)
+    except (OSError, UnicodeError, yaml.YAMLError, RecursionError):
+        # Parser exceptions can include file contents. Only the safe diagnostic
+        # below is exposed, never the YAML exception or its values.
+        raise ComposeSourceError(file, "cannot parse runtime-config overlay safely; stack was not stopped") from None
+    if not isinstance(document, dict):
+        raise ComposeSourceError(file, "runtime-config overlay must be a mapping; stack was not stopped")
+    if "include" in document:
+        raise ComposeSourceError(file, "runtime-config overlay contains include; stack was not stopped")
+    services = document.get("services", {})
+    if not isinstance(services, dict):
+        raise ComposeSourceError(file, "runtime-config overlay services must be a mapping; stack was not stopped")
+    for service in services.values():
+        if not isinstance(service, dict):
+            raise ComposeSourceError(file, "runtime-config overlay service must be a mapping; stack was not stopped")
+        for key in ("build", "image", "extends"):
+            if key in service:
+                raise ComposeSourceError(file, f"runtime-config overlay contains service {key}; stack was not stopped")
+
+
 def require_compose_source(
     repo_root: Path, command: Sequence[str], *, cwd: Path,
-    environment: Mapping[str, str],
+    environment: Mapping[str, str], runtime_workdir: Path | None = None,
 ) -> tuple[Path, ...]:
-    """Refuse every selected file outside the physical checkout, before DOWN."""
+    """Require a checkout base plus checkout or source-neutral runtime overlays."""
     root = repo_root.resolve()
     files = resolve_compose_files(command, cwd=cwd, environment=environment)
+    if not files[0].is_relative_to(root):
+        raise ComposeSourceError(files[0], f"outside selected checkout {root}; base Compose file must be in checkout; stack was not stopped")
+    config: Path | None = None
+    if runtime_workdir is not None:
+        workdir = runtime_workdir.resolve()
+        candidate = (workdir / "config").resolve()
+        if candidate.is_relative_to(workdir):
+            config = candidate
     for file in files:
-        if not file.is_relative_to(root):
+        in_checkout = file.is_relative_to(root)
+        if not in_checkout and (config is None or not file.is_relative_to(config)):
             raise ComposeSourceError(file, f"outside selected checkout {root}; stack was not stopped")
         if not file.is_file():
             raise ComposeSourceError(file, "selected Compose file does not exist or is not a regular file")
+        if not in_checkout:
+            _require_runtime_overlay(file)
     return files

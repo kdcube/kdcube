@@ -349,3 +349,151 @@ def test_lf_terminated_assignment_can_select_a_later_local_file(tmp_path, line_e
         ["COMPOSE_FILE=/outside/compose.yaml", "UNRELATED=synthetic", f"COMPOSE_FILE={local}", ""]
     ).encode("utf-8"))
     assert _selection(repo, repo, options=["--env-file", str(env_file)]) == (local.resolve(),)
+
+
+_HOST_PORTS = "services:\n  processor:\n    ports: ['127.0.0.1:9080:8080']\n"
+
+
+def _runtime_layout(tmp_path):
+    runtime = tmp_path / "runtime"
+    repo = runtime / "repo"
+    base = _file(repo / "deployment" / "compose.yaml")
+    override = _file(runtime / "config" / "docker-compose.host-ports.yaml")
+    override.write_text(_HOST_PORTS, encoding="utf-8")
+    return runtime, repo, base, override
+
+
+def _runtime_selection(runtime, repo, base, files):
+    from kdcube_cli.compose_source import require_compose_source
+
+    return require_compose_source(
+        repo, ["docker", "compose"], cwd=base.parent,
+        environment={"COMPOSE_FILE": ":".join(map(str, files)), "COMPOSE_PATH_SEPARATOR": ":"},
+        runtime_workdir=runtime,
+    )
+
+
+@pytest.mark.parametrize("selection_source", ["env-file", "process"])
+def test_refresh_accepts_runtime_host_ports_before_normal_lifecycle(monkeypatch, tmp_path, selection_source):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    config = runtime / "config"
+    (config / ".env").write_text(f"COMPOSE_FILE={base}:{override}\n", encoding="utf-8")
+    if selection_source == "process":
+        # An invalid env-file selection must not win over the process selector.
+        (config / ".env").write_text("COMPOSE_FILE=/unselected/foreign.yaml\n", encoding="utf-8")
+        monkeypatch.setenv("COMPOSE_FILE", f"{base}:{override}")
+    calls = _refresh(monkeypatch, repo, base.parent, config)
+    cli.main()
+    assert calls == ["proxy", "secrets", "stop", "build", "start"]
+
+
+@pytest.mark.parametrize("document", [
+    "services:\n  processor:\n    build: sensitive-value\n",
+    "services:\n  processor:\n    build: {context: sensitive-value}\n",
+    "services:\n  processor:\n    image: sensitive-value\n",
+    "include: [sensitive-value]\n",
+    "services:\n  processor:\n    extends: {file: sensitive-value, service: old}\n",
+    "services:\n  processor:\n    build: null\n",
+    "x-template: &template\n  image: sensitive-value\nservices:\n  processor:\n    <<: *template\n",
+])
+def test_runtime_overlay_source_keys_refuse_before_refresh_side_effects(monkeypatch, tmp_path, document):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    override.write_text(document, encoding="utf-8")
+    config = runtime / "config"
+    (config / ".env").write_text(f"COMPOSE_FILE={base}:{override}\n", encoding="utf-8")
+    calls = _refresh(monkeypatch, repo, base.parent, config)
+    with pytest.raises(SystemExit, match="compose_source_mismatch") as raised:
+        cli.main()
+    assert str(override.resolve()) in str(raised.value)
+    assert "sensitive-value" not in str(raised.value)
+    assert calls == []
+
+
+@pytest.mark.parametrize("document", [
+    "services: [sensitive-value",
+    "services:\n  processor:\n    ports: !reset []\n",
+    "services:\n  processor:\n    ports: !override []\n",
+    "[sensitive-value]\n",
+    "services: [sensitive-value]\n",
+    "services: {processor: sensitive-value}\n",
+    "",
+])
+def test_invalid_or_custom_tag_runtime_overlay_fails_closed(tmp_path, document):
+    from kdcube_cli.compose_source import ComposeSourceError
+
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    override.write_text(document, encoding="utf-8")
+    with pytest.raises(ComposeSourceError, match="compose_source_mismatch") as raised:
+        _runtime_selection(runtime, repo, base, [base, override])
+    assert "sensitive-value" not in str(raised.value)
+
+
+def test_runtime_config_symlink_into_checkout_keeps_checkout_content_semantics(tmp_path):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    checkout_file = _file(repo / "deployment" / "checkout-override.yaml")
+    checkout_file.write_text("services:\n  processor:\n    image: selected-checkout-image\n", encoding="utf-8")
+    link = override.parent / "checkout-link.yaml"
+    link.symlink_to(checkout_file)
+    assert _runtime_selection(runtime, repo, base, [base, link]) == (base.resolve(), checkout_file.resolve())
+
+
+def test_runtime_config_subdirectories_are_supported(tmp_path):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    nested = _file(override.parent / "host" / "ports.yaml")
+    nested.write_text(_HOST_PORTS, encoding="utf-8")
+    assert _runtime_selection(runtime, repo, base, [base, nested]) == (base.resolve(), nested.resolve())
+
+
+@pytest.mark.parametrize("selection", ["only", "first"])
+def test_runtime_config_never_supplies_the_base(tmp_path, selection):
+    from kdcube_cli.compose_source import ComposeSourceError
+
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    files = [override] if selection == "only" else [override, base]
+    with pytest.raises(ComposeSourceError, match="base Compose file"):
+        _runtime_selection(runtime, repo, base, files)
+
+
+def test_process_foreign_base_overrides_valid_runtime_env_before_stop(monkeypatch, tmp_path):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    config = runtime / "config"
+    (config / ".env").write_text(f"COMPOSE_FILE={base}:{override}\n", encoding="utf-8")
+    foreign = _file(tmp_path / "other-checkout" / "compose.yaml")
+    monkeypatch.setenv("COMPOSE_FILE", f"{foreign}:{override}")
+    calls = _refresh(monkeypatch, repo, base.parent, config)
+    with pytest.raises(SystemExit, match="compose_source_mismatch"):
+        cli.main()
+    assert calls == []
+
+
+@pytest.mark.parametrize("location", ["other-runtime", "config-prefix", "file-symlink", "directory-symlink"])
+def test_runtime_overlay_cannot_escape_its_physical_config(tmp_path, location):
+    from kdcube_cli.compose_source import ComposeSourceError
+
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    foreign = _file(tmp_path / "foreign" / "override.yaml")
+    if location == "other-runtime":
+        chosen = _file(tmp_path / "other-runtime" / "config" / "override.yaml")
+    elif location == "config-prefix":
+        chosen = _file(runtime / "config-other" / "override.yaml")
+    elif location == "file-symlink":
+        chosen = override.parent / "escape.yaml"
+        chosen.symlink_to(foreign)
+    else:
+        link = runtime / "other-config"
+        link.symlink_to(foreign.parent, target_is_directory=True)
+        chosen = link / foreign.name
+    with pytest.raises(ComposeSourceError, match="outside selected checkout"):
+        _runtime_selection(runtime, repo, base, [base, chosen])
+
+
+def test_runtime_config_root_symlink_outside_workdir_is_refused(tmp_path):
+    from kdcube_cli.compose_source import ComposeSourceError
+
+    runtime = tmp_path / "runtime"
+    repo = runtime / "repo"
+    base = _file(repo / "compose.yaml")
+    external = _file(tmp_path / "external-config" / "override.yaml")
+    (runtime / "config").symlink_to(external.parent, target_is_directory=True)
+    with pytest.raises(ComposeSourceError, match="outside selected checkout"):
+        _runtime_selection(runtime, repo, base, [base, runtime / "config" / external.name])
