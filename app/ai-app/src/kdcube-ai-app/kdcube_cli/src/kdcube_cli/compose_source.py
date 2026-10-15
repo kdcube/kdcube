@@ -114,7 +114,11 @@ def _env_selectors(files: Sequence[Path], process: Mapping[str, str]) -> dict[st
     entries: list[tuple[str, str, Path]] = []
     for file in files:
         try:
-            lines = file.read_text(encoding="utf-8-sig").splitlines()
+            # Compose's unquoted extractor ends a value at LF only. Preserve
+            # bare CR and Unicode separators inside values: splitlines() or
+            # universal-newline conversion could invent a later selector.
+            with file.open(encoding="utf-8-sig", newline="") as stream:
+                lines = stream.read().split("\n")
         except OSError as exc:
             raise ComposeSourceError(file, "cannot read selected env file") from exc
         remaining = iter(lines)

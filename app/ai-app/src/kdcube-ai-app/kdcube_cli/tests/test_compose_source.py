@@ -304,3 +304,48 @@ def test_unsupported_same_line_assignment_fails_closed_without_value_diagnostic(
     with pytest.raises(ComposeSourceError) as raised:
         _selection(repo, repo, options=["--env-file", str(env_file)])
     assert raw not in str(raised.value)
+
+
+_NON_LF_BOUNDARIES = ("\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
+
+
+@pytest.mark.parametrize("separator", _NON_LF_BOUNDARIES)
+def test_non_lf_value_cannot_forge_a_later_selector(tmp_path, separator):
+    from kdcube_cli.compose_source import ComposeSourceError
+
+    repo = tmp_path / "selected"
+    local = _file(repo / "compose.yaml")
+    foreign = _file(tmp_path / "foreign" / "compose.yaml")
+    env_file = tmp_path / "selected.env"
+    env_file.write_bytes(
+        f"COMPOSE_FILE={foreign}\nUNRELATED=synthetic{separator}COMPOSE_FILE={local}\n".encode("utf-8")
+    )
+    with pytest.raises(ComposeSourceError, match="outside selected checkout"):
+        _selection(repo, repo, options=["--env-file", str(env_file)])
+
+
+@pytest.mark.parametrize("separator", _NON_LF_BOUNDARIES)
+def test_non_lf_forged_selector_refuses_before_refresh_lifecycle(monkeypatch, tmp_path, separator):
+    repo = tmp_path / "selected"
+    local = _file(repo / "compose.yaml")
+    foreign = _file(tmp_path / "foreign" / "compose.yaml")
+    config = tmp_path / "runtime" / "config"
+    config.mkdir(parents=True)
+    (config / ".env").write_bytes(
+        f"COMPOSE_FILE={foreign}\nUNRELATED=synthetic{separator}COMPOSE_FILE={local}\n".encode("utf-8")
+    )
+    calls = _refresh(monkeypatch, repo, repo, config)
+    with pytest.raises(SystemExit, match="compose_source_mismatch"):
+        cli.main()
+    assert calls == []
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"])
+def test_lf_terminated_assignment_can_select_a_later_local_file(tmp_path, line_ending):
+    repo = tmp_path / "selected"
+    local = _file(repo / "compose.yaml")
+    env_file = tmp_path / "selected.env"
+    env_file.write_bytes(line_ending.join(
+        ["COMPOSE_FILE=/outside/compose.yaml", "UNRELATED=synthetic", f"COMPOSE_FILE={local}", ""]
+    ).encode("utf-8"))
+    assert _selection(repo, repo, options=["--env-file", str(env_file)]) == (local.resolve(),)

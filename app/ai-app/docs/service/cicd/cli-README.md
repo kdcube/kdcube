@@ -523,6 +523,8 @@ take precedence over the selected `--env-file`. Multiple files use
 paths are relative to the Compose command's working directory, and symlinks
 are checked at their resolved destinations. Default discovery checks the
 base file and its automatically selected override.
+Env-file statements end at LF, including CRLF file endings; bare CR and
+Unicode separators inside a value cannot introduce a later selector.
 
 An outside-checkout selection exits with `error[compose_source_mismatch]`,
 naming the offending resolved file, before shutdown. Correct the selector to
