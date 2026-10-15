@@ -864,17 +864,28 @@ At most 100 claims are sampled per process, each record is at most 512 bytes
 (including a 128-byte logging prefix reserve), and cumulative admitted bytes
 never exceed 256 KiB. Contended/full admission drops immediately and counts
 records/bytes; it never waits for collection. Expiry is checked against both
-UTC and a local monotonic deadline. Records already captured remain in memory
-until explicit collection or process exit; they are never automatically written.
+UTC and a local monotonic deadline. The Data Bus worker loop writes buffered
+rows to the existing `kdcube.data_bus.timing` logger at its first between-claim
+boundary after expiry, and flushes remaining rows when the worker stops.
+An in-flight handler can delay that boundary; this is not an exact-expiry
+timer. Abrupt process termination can lose buffered rows.
 
 Request handling does **no diagnostic file, logger, network or store IO** and
-creates no writer, thread, task, timer or executor. Outside all request/bundle
-contexts, a separately authorized caller in the same process can call
+creates no writer, thread, task, timer or executor. Enabling the diagnostic
+window also enables its bounded worker-boundary log collection outside all
+request/bundle contexts. Disabled and empty captures do no diagnostic IO.
+The shared buffer is consumed once; a stopped worker can flush rows captured
+by other workers in the same process. Further rows still share the original
+cumulative budget. Logger delivery is best effort, with no retry or fallback
+writer. Logging is synchronous and may block the worker event loop outside
+claim handling; no additional collector task or storage is created.
+
+A separately authorized caller in the same process, outside all request/bundle
+contexts, can also call
 `runtime.data_bus.timing.CAPTURE.drain(max_records=100)` to collect immutable
 JSON lines, or `drain_to_logger(max_records=100)` to send them to existing
-logging. The latter is synchronous and **may block outside handling**. No
-remote endpoint, automatic collector or new durable state is provided. Capture
-is not permission to inspect bodies or activate collection.
+logging. These explicit collection APIs retain their context guards. There is
+no remote diagnostic endpoint. Capture is not permission to inspect bodies.
 
 The allowlist is fixed schema/phase/outcome enums, the existing validated UUID,
 numeric retry attempt, UTC boundary, local monotonic elapsed seconds and drop

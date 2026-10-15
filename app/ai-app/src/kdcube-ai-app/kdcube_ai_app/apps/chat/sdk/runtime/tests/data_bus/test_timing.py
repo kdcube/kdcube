@@ -311,3 +311,151 @@ async def test_actual_serial_lock_retry_is_not_reordered(capture, monkeypatch):
     selected = [row for row in rows if row["phase"].startswith("server.lock")]
     assert [row["phase"] for row in selected] == ["server.lock.start", "server.lock.end"]
     assert selected[-1]["outcome"] == "retry"
+
+
+def timing_logger(monkeypatch):
+    rows = []
+
+    class Logger:
+        def info(self, template, row):
+            from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_id, get_current_request_context
+
+            assert timing.CURRENT.get() is None
+            assert get_current_request_context() is None
+            assert not get_current_bundle_id()
+            rows.append(json.loads(row))
+
+    def get_logger(name):
+        assert name == "kdcube.data_bus.timing"
+        return Logger()
+
+    monkeypatch.setattr(timing, "logging", SimpleNamespace(getLogger=get_logger))
+    return rows
+
+
+def loop_worker(claim_next, process=None):
+    worker = object.__new__(workers.DataBusBundleWorker)
+    worker._stop_event = asyncio.Event()
+    worker.tenant, worker.project, worker.bundle_id = "tenant-marker", "project-marker", "bundle-marker"
+    worker.handler_specs = {}
+    worker.consumer_name = "consumer-marker"
+
+    async def ensure_group():
+        pass
+
+    worker.stream = SimpleNamespace(ensure_group=ensure_group, claim_next=claim_next)
+    if process:
+        worker._process_claim_without_timing = process
+    return worker
+
+
+def test_worker_drain_disabled_has_no_clock_or_logger_io(monkeypatch):
+    value = timing.MemoryCapture()
+    monkeypatch.setattr(timing, "CAPTURE", value)
+    monkeypatch.setattr(timing.time, "time", lambda: pytest.fail("disabled clock"))
+    monkeypatch.setattr(timing, "drain_to_logger", lambda **kwargs: pytest.fail("disabled drain"))
+    assert timing.drain_worker_timings() == 0
+    assert timing.drain_worker_timings(stopping=True) == 0
+
+
+def test_worker_expiry_drain_is_bounded_once_and_does_not_refill(capture, monkeypatch):
+    rows = timing_logger(monkeypatch)
+    span = capture.begin(str(uuid.uuid4()))
+    for _ in range(1000):
+        capture.record(span, timing.Phase.CLAIM)
+    count = len(capture._records)
+    admitted = capture.admitted_bytes
+    assert 100 < count < 1000
+    assert timing.drain_worker_timings() == 0
+    monkeypatch.setattr(capture, "active", lambda: False)
+    assert timing.drain_worker_timings() == count
+    assert timing.drain_worker_timings() == 0
+    assert timing.drain_worker_timings(stopping=True) == 0
+    assert len(rows) == count and capture.buffer_bytes == 0
+    assert capture.admitted_bytes == admitted and capture.sampled_claims == 1
+    assert "marker" not in json.dumps(rows)
+
+
+@pytest.mark.asyncio
+async def test_worker_logs_at_expiry_without_manual_drain(capture, monkeypatch):
+    rows = timing_logger(monkeypatch)
+    span = capture.begin(str(uuid.uuid4()))
+    capture.record(span, timing.Phase.CLAIM)
+    monkeypatch.setattr(capture, "active", lambda: False)
+
+    async def next_claim(**kwargs):
+        worker.stop()
+        assert len(rows) == 1  # expiry is handled before the next claim
+        return None
+
+    worker = loop_worker(next_claim)
+    await worker.run()
+    assert len(rows) == 1 and not capture.drain()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_worker_stop_and_cancellation_flush_after_claim_unwinds(capture, monkeypatch, cancel):
+    rows = timing_logger(monkeypatch)
+    claim = DataBusClaim("stream-marker", "1-0", message(), {}, "consumer-marker")
+
+    async def next_claim(**kwargs):
+        return claim
+
+    async def process(value):
+        assert timing.CURRENT.get() is not None and not rows
+        timing.observe(timing.Phase.HANDLER_START)
+        worker.stop()
+        if cancel:
+            raise asyncio.CancelledError()
+
+    worker = loop_worker(next_claim, process)
+    await worker.run()
+    assert [row["phase"] for row in rows] == ["server.claim.start", "server.handler.start", "server.claim.finish"]
+    assert rows[-1]["outcome"] == ("cancelled" if cancel else "ok")
+    assert not capture.drain()
+    assert "marker" not in json.dumps(rows)
+
+
+@pytest.mark.parametrize("context", ["claim", "request", "bundle"])
+def test_worker_drain_preserves_all_context_guards(capture, monkeypatch, context):
+    from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx
+
+    rows = timing_logger(monkeypatch)
+    span = capture.begin(str(uuid.uuid4()))
+    capture.record(span, timing.Phase.CLAIM)
+    token = timing.CURRENT.set(span if context == "claim" else None)
+    monkeypatch.setattr(comm_ctx, "get_current_request_context", lambda: object() if context == "request" else None)
+    monkeypatch.setattr(comm_ctx, "get_current_bundle_id", lambda: "bundle-marker" if context == "bundle" else None)
+    try:
+        assert timing.drain_worker_timings(stopping=True) == 0
+    finally:
+        timing.CURRENT.reset(token)
+    assert not rows and len(capture.drain()) == 1
+
+
+def test_worker_drain_logger_failure_never_changes_worker_result(capture, monkeypatch):
+    span = capture.begin(str(uuid.uuid4()))
+    capture.record(span, timing.Phase.CLAIM)
+
+    class Logger:
+        def info(self, *args):
+            raise RuntimeError("raw-error-marker")
+
+    monkeypatch.setattr(timing, "logging", SimpleNamespace(getLogger=lambda name: Logger()))
+    assert timing.drain_worker_timings(stopping=True) == 0
+    assert timing.drain_worker_timings(stopping=True) == 0
+
+
+@pytest.mark.asyncio
+async def test_two_workers_share_one_buffer_without_duplicate_rows(capture, monkeypatch):
+    rows = timing_logger(monkeypatch)
+    span = capture.begin(str(uuid.uuid4()))
+    capture.record(span, timing.Phase.CLAIM)
+    monkeypatch.setattr(capture, "active", lambda: False)
+
+    async def next_claim(**kwargs):
+        raise asyncio.CancelledError()
+
+    await asyncio.gather(loop_worker(next_claim).run(), loop_worker(next_claim).run())
+    assert len(rows) == 1 and capture.buffer_bytes == 0
