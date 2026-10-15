@@ -497,3 +497,38 @@ def test_runtime_config_root_symlink_outside_workdir_is_refused(tmp_path):
     (runtime / "config").symlink_to(external.parent, target_is_directory=True)
     with pytest.raises(ComposeSourceError, match="outside selected checkout"):
         _runtime_selection(runtime, repo, base, [base, runtime / "config" / external.name])
+
+
+@pytest.mark.parametrize("document", [
+    "services:\n  processor:\n    build: sensitive-value\nservices:\n  processor:\n    ports: []\n",
+    "services:\n  processor:\n    build: sensitive-value\n  processor:\n    ports: []\n",
+    "services:\n  processor:\n    image: sensitive-value\n  'processor':\n    ports: []\n",
+    "services:\n  processor:\n    ports: [sensitive-value]\n    ports: []\n",
+    "services: {processor: {ports: [sensitive-value], ports: []}}\n",
+    "x-unused: {setting: sensitive-value, setting: safe}\nservices: {processor: {ports: []}}\n",
+    "x-host: &host\n  ports: [sensitive-value]\n  ports: []\nservices:\n  processor:\n    <<: *host\n",
+    "x-a: &a {ports: []}\nx-b: &b {environment: {MODE: safe}}\nservices:\n  processor:\n    <<: *a\n    <<: *b\n",
+], ids=["root", "service", "quoted-service", "property", "flow", "extension", "anchor", "merge-key"])
+def test_duplicate_runtime_overlay_keys_refuse_before_refresh_side_effects(monkeypatch, tmp_path, document):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    override.write_text(document, encoding="utf-8")
+    config = runtime / "config"
+    (config / ".env").write_text(f"COMPOSE_FILE={base}:{override}\n", encoding="utf-8")
+    calls = _refresh(monkeypatch, repo, base.parent, config)
+    with pytest.raises(SystemExit, match="compose_source_mismatch") as raised:
+        cli.main()
+    assert str(override.resolve()) in str(raised.value)
+    assert "sensitive-value" not in str(raised.value)
+    assert calls == []
+
+
+def test_unique_runtime_overlay_merge_overrides_and_alias_reuse_are_supported(tmp_path):
+    runtime, repo, base, override = _runtime_layout(tmp_path)
+    override.write_text(
+        "x-defaults: &defaults\n  environment: {MODE: default}\n"
+        "x-host: &host\n  <<: *defaults\n  environment: {MODE: host}\n"
+        "services:\n  processor:\n    <<: *host\n    ports: ['127.0.0.1:9080:8080']\n"
+        "  gateway:\n    <<: *host\n    ports: ['127.0.0.1:9081:8081']\n",
+        encoding="utf-8",
+    )
+    assert _runtime_selection(runtime, repo, base, [base, override]) == (base.resolve(), override.resolve())

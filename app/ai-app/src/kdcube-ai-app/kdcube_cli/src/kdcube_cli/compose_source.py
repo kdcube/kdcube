@@ -228,11 +228,38 @@ def resolve_compose_files(
     return tuple(resolved)
 
 
+class _RuntimeOverlayLoader(yaml.SafeLoader):
+    """Safe YAML construction with unique explicit keys in every mapping."""
+
+    def __init__(self, stream) -> None:
+        super().__init__(stream)
+        self._checked_mappings: set[int] = set()
+        self._merge_key = object()
+
+    def flatten_mapping(self, node) -> None:
+        # Check before merge expansion: an explicit override of an inherited
+        # key is valid YAML, but repeated explicit keys are ambiguous. Aliased
+        # nodes may be flattened more than once, so check their original form
+        # only once. SafeLoader still constructs every nested mapping.
+        if id(node) not in self._checked_mappings:
+            self._checked_mappings.add(id(node))
+            keys: set[object] = set()
+            for key_node, _ in node.value:
+                key = self._merge_key if key_node.tag == "tag:yaml.org,2002:merge" else self.construct_object(key_node)
+                try:
+                    if key in keys:
+                        raise yaml.YAMLError("duplicate mapping key")
+                    keys.add(key)
+                except TypeError:
+                    raise yaml.YAMLError("unsupported mapping key") from None
+        super().flatten_mapping(node)
+
+
 def _require_runtime_overlay(file: Path) -> None:
     """Runtime-owned overlays configure services without selecting their source."""
     try:
         with file.open(encoding="utf-8-sig") as stream:
-            document = yaml.safe_load(stream)
+            document = yaml.load(stream, Loader=_RuntimeOverlayLoader)
     except (OSError, UnicodeError, yaml.YAMLError, RecursionError):
         # Parser exceptions can include file contents. Only the safe diagnostic
         # below is exposed, never the YAML exception or its values.
