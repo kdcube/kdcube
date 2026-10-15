@@ -46,14 +46,13 @@ def _roles_user_type(roles: list[str] | None) -> UserType:
 
 
 class PlatformTokenAuthenticator(_core.PlatformTokenAuthenticator):
-    def __init__(self, *, auth_manager: Any) -> None:
-        super().__init__(
-            auth_manager=auth_manager,
-            role_normalizer=ensure_platform_registered_role,
-            user_type_resolver=_roles_user_type,
-            authentication_errors=(AuthenticationError,),
-            debug_enabled=_auth_debug_enabled,
-        )
+    def __init__(self, *, auth_manager: Any, **kwargs: Any) -> None:
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
+        kwargs.setdefault("role_normalizer", ensure_platform_registered_role)
+        kwargs.setdefault("user_type_resolver", _roles_user_type)
+        kwargs.setdefault("authentication_errors", (AuthenticationError,))
+        kwargs.setdefault("debug_enabled", _auth_debug_enabled)
+        super().__init__(auth_manager=auth_manager, **kwargs)
 
 
 class RequestAuthResolver(_core.RequestAuthResolver):
@@ -62,19 +61,19 @@ class RequestAuthResolver(_core.RequestAuthResolver):
         *,
         auth_manager: Any | None,
         session_factory: Any,
+        **kwargs: Any,
     ) -> None:
-        platform_authenticator = (
-            PlatformTokenAuthenticator(auth_manager=auth_manager)
-            if auth_manager is not None
-            else None
-        )
-        super().__init__(
-            session_factory=session_factory,
-            platform_authenticator=platform_authenticator,
-            anonymous_user_type=UserType.ANONYMOUS,
-            propagated_errors=(AuthenticationError, AuthorizationError),
-            debug_enabled=_auth_debug_enabled,
-        )
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
+        if "platform_authenticator" not in kwargs:
+            kwargs["platform_authenticator"] = (
+                PlatformTokenAuthenticator(auth_manager=auth_manager)
+                if auth_manager is not None
+                else None
+            )
+        kwargs.setdefault("anonymous_user_type", UserType.ANONYMOUS)
+        kwargs.setdefault("propagated_errors", (AuthenticationError, AuthorizationError))
+        kwargs.setdefault("debug_enabled", _auth_debug_enabled)
+        super().__init__(session_factory=session_factory, **kwargs)
 
     async def resolve_delegated_resource_session(
         self,

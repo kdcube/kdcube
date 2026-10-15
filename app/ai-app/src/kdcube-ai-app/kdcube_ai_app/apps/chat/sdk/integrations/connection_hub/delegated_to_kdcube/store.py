@@ -44,11 +44,14 @@ class DelegatedToKdcubeStore(_core.DelegatedToKdcubeStore):
         user_id: str,
         bundle_id: str = _core.CONNECTION_HUB_BUNDLE_ID,
         backend: Any | None = None,
+        **kwargs: Any,
     ) -> None:
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
         super().__init__(
             user_id=user_id,
             bundle_id=bundle_id,
             backend=backend or _KdcubeUserConfigurationStore(),
+            **kwargs,
         )
 
 

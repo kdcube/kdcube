@@ -79,8 +79,11 @@ def test_kdcube_constructor_adapters_accept_every_portable_parameter(
 ) -> None:
     host_parameters = inspect.signature(host_type).parameters
     portable_parameters = inspect.signature(portable_type).parameters
+    # W303: a wrapper that forwards **kwargs accepts every portable keyword, including
+    # ones added later; test_wrapper_keyword_forwarding.py proves each one arrives.
+    forwards_the_rest = any(p.kind is p.VAR_KEYWORD for p in host_parameters.values())
 
-    assert set(portable_parameters) - set(host_parameters) == set()
+    assert forwards_the_rest or set(portable_parameters) - set(host_parameters) == set()
 
 
 def test_kdcube_automation_access_forwards_the_authority_backend() -> None:

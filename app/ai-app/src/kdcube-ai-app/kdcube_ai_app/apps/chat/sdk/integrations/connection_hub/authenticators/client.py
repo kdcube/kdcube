@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation
 from connection_hub.authenticators.client import (
     DEFAULT_CONNECTION_HUB_BUNDLE_ID,
@@ -22,12 +24,15 @@ class ConnectionHubAuthenticatorsClient(PortableAuthenticatorsClient):
         connection_hub_bundle_id: str = DEFAULT_CONNECTION_HUB_BUNDLE_ID,
         tenant: str | None = None,
         project: str | None = None,
+        **kwargs: Any,
     ) -> None:
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
+        kwargs.setdefault("operation_caller", call_bundle_operation)
         super().__init__(
             connection_hub_bundle_id=connection_hub_bundle_id,
             tenant=tenant,
             project=project,
-            operation_caller=call_bundle_operation,
+            **kwargs,
         )
 
 

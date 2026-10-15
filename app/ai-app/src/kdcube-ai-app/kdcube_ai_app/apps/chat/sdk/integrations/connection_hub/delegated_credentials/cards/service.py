@@ -43,12 +43,15 @@ class DelegatedCardService(_PortableDelegatedCardService):
         cache: Any,
         settings: Any = None,
         mutation_lock: CardMutationLock | None = None,
+        **kwargs: Any,
     ) -> None:
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
         super().__init__(
             store=store,
             cache=cache,
             settings=settings,
             mutation_lock=mutation_lock or _kdcube_card_mutation_lock,
+            **kwargs,
         )
 
 
