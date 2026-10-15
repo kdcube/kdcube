@@ -236,6 +236,18 @@ class _RuntimeOverlayLoader(yaml.SafeLoader):
         self._checked_mappings: set[int] = set()
         self._merge_key = object()
 
+    def construct_compose_value(self, node):
+        """Inspect Compose's two merge directives as their ordinary YAML value."""
+        if isinstance(node, yaml.ScalarNode):
+            tag = self.resolve(yaml.ScalarNode, node.value, (node.style is None, False))
+            plain = yaml.ScalarNode(tag, node.value, node.start_mark, node.end_mark, style=node.style)
+            return self.construct_object(plain, deep=True)
+        if isinstance(node, yaml.SequenceNode):
+            return self.construct_sequence(node, deep=True)
+        if isinstance(node, yaml.MappingNode):
+            return self.construct_mapping(node, deep=True)
+        raise yaml.YAMLError("unsupported Compose value")
+
     def flatten_mapping(self, node) -> None:
         # Check before merge expansion: an explicit override of an inherited
         # key is valid YAML, but repeated explicit keys are ambiguous. Aliased
@@ -253,6 +265,10 @@ class _RuntimeOverlayLoader(yaml.SafeLoader):
                 except TypeError:
                     raise yaml.YAMLError("unsupported mapping key") from None
         super().flatten_mapping(node)
+
+
+_RuntimeOverlayLoader.add_constructor("!override", _RuntimeOverlayLoader.construct_compose_value)
+_RuntimeOverlayLoader.add_constructor("!reset", _RuntimeOverlayLoader.construct_compose_value)
 
 
 def _require_runtime_overlay(file: Path) -> None:
