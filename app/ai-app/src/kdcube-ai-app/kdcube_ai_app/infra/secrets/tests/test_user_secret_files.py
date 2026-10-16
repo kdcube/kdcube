@@ -567,3 +567,25 @@ def test_the_sandbox_writes_records_independently_and_never_leaks_the_env_var(tm
         monkeypatch.delenv(name, raising=False)
     assert py_code_exec_entry._materialize_runtime_descriptor_payloads(log) is None
     assert "KDCUBE_RUNTIME_SECRET_RECORDS_B64" not in os.environ
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("folder", ["config@home", "with space", "literal%40", "plain"])
+async def test_the_runtime_root_is_refused_when_it_is_the_descriptor_folder_whatever_its_spelling(tmp_path, folder):
+    """Review: the separation guard compared the raw, percent-encoded URI path; it must use the decoded one."""
+    from kdcube_ai_app.infra.secrets.manager import SecretsManagerWriteError
+
+    config = tmp_path / folder
+    config.mkdir()
+    descriptor = config / "secrets.yaml"
+    descriptor.write_text("platform: {}\n")
+    for yaml_ref in (descriptor.as_uri(), str(descriptor)):
+        manager = SecretsFileSecretsManager(SecretsManagerConfig(
+            provider="secrets-file", component="proc", global_secrets_yaml=yaml_ref,
+            runtime_secrets_root=str(config)))
+        with pytest.raises(SecretsManagerWriteError, match="runtime_secret_storage_must_be_separate"):
+            await manager.set_secret(_key(), "synthetic")
+        with pytest.raises(SecretsManagerWriteError, match="runtime_secret_storage_must_be_separate"):
+            await manager.create_ephemeral_secret(namespace="card-credentials", secret_ref="a" * 32, value="v",
+                                                  expires_at=2_000_000_000)
+    assert sorted(os.listdir(config)) == ["secrets.yaml"]

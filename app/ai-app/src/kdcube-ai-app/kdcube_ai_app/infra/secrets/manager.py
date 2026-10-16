@@ -965,6 +965,13 @@ def resolve_runtime_secrets_root(
     return None
 
 
+def _descriptor_folder(uri: str) -> Path:
+    """The real folder of a local descriptor: the DECODED file URI path (or a plain path), resolved."""
+    parsed = urlparse(uri)
+    path = local_file_uri_path(uri) if parsed.scheme == "file" else uri
+    return Path(path).expanduser().resolve().parent
+
+
 def _is_user_secret_key(key: str) -> bool:
     """Per-user and app (bundle) secret keys: the secrets-file provider keeps them in the folder (W670)."""
     return (key in (USER_SECRET_INVENTORY_KEY, BUNDLE_SECRET_INVENTORY_KEY) or key.startswith("users.")
@@ -1099,7 +1106,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         runtime_root = Path(self._runtime_secrets_root).resolve()
         for uri in (self._global_uri, self._bundle_uri):
             parsed = urlparse(uri or "")
-            if parsed.scheme == "file" and runtime_root == Path(parsed.path).resolve().parent:
+            if parsed.scheme in {"", "file"} and uri and runtime_root == _descriptor_folder(uri):
                 raise SecretsManagerWriteError("runtime_secret_storage_must_be_separate")
         return UserSecretFileStore(root=self._runtime_secrets_root)
 
@@ -1181,7 +1188,7 @@ class SecretsFileSecretsManager(ISecretsManager):
         runtime_root = Path(self._runtime_secrets_root).resolve()
         for uri in (self._global_uri, self._bundle_uri):
             parsed = urlparse(uri or "")
-            if parsed.scheme == "file" and runtime_root == Path(parsed.path).resolve().parent:
+            if parsed.scheme in {"", "file"} and uri and runtime_root == _descriptor_folder(uri):
                 raise SecretsManagerWriteError("runtime_secret_storage_must_be_separate")
         # <root>/<owner bundle or platform>/<namespace>/<ref>.json (W670).
         return RuntimeFileStore(
