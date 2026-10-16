@@ -98,6 +98,14 @@ def _counting_yaml_loader(monkeypatch):
         return real(uri, **kwargs)
 
     monkeypatch.setattr(bundle_store, "_load_yaml_mapping_from_storage", wrapper)
+    # W883: a registry read parses the exact bytes it hashed; count that parse as a descriptor parse too.
+    real_bytes = bundle_store._parse_descriptor_bytes
+
+    def bytes_wrapper(raw):
+        calls["n"] += 1
+        return real_bytes(raw)
+
+    monkeypatch.setattr(bundle_store, "_parse_descriptor_bytes", bytes_wrapper)
     return calls
 
 

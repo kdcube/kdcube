@@ -46,10 +46,10 @@ def test_one_registry_read_scans_the_examples_folder_once(tmp_path, monkeypatch)
     assert len(scans) <= 2  # once per mode (respecting the enabled flag, and not), not once per bundle
     scans.clear()
     store.load_registry_readonly()
-    assert 1 <= len(scans) <= 2  # the memo lives for one read only: the next read scans again
-    scans.clear()
-    store.load_bundle_props("app-1@1-0")
-    assert len(scans) <= 1
+    assert scans == []  # W883: an unchanged descriptor is not parsed again, so nothing is rescanned
+    bundle_store.forget_descriptor_registry()
+    store.load_registry_readonly()
+    assert 1 <= len(scans) <= 2  # the memo lives for one build only: the next build scans again
 
 
 def test_a_caller_changing_returned_props_does_not_change_the_next_read(tmp_path, monkeypatch):

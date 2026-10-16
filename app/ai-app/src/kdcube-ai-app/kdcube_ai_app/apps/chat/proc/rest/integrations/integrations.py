@@ -3309,7 +3309,14 @@ async def _do_reload_bundles_from_authority(
         payload: Optional[BundleReloadAuthorityRequest] = None,
 ):
     settings = get_settings()
-    from kdcube_ai_app.infra.plugin.bundle_store import BundleActivationConfig, reload_registry_from_authority
+    from kdcube_ai_app.infra.plugin.bundle_store import (
+        BundleActivationConfig,
+        forget_descriptor_registry,
+        reload_registry_from_authority,
+    )
+
+    # W389 / W883: a reload is a configuration change; the parsed descriptor registry is dropped.
+    forget_descriptor_registry()
     from kdcube_ai_app.infra.plugin.bundle_registry import get_all as get_registry_entries, set_registry_async
     from kdcube_ai_app.infra.plugin.bundle_snapshot import BundleSnapshotError, prepare_activation
     from kdcube_ai_app.infra.plugin.bundle_loader import (
@@ -3862,6 +3869,9 @@ async def internal_remove_bundle(payload: BundleRemoveRequest, request: Request)
     client_ip = request.client.host if request.client else ""
     if client_ip not in _LOCALHOST:
         raise HTTPException(status_code=403, detail="Internal endpoint: localhost only")
+    from kdcube_ai_app.infra.plugin.bundle_store import forget_descriptor_registry
+
+    forget_descriptor_registry()  # W389 / W883: removing a bundle is a configuration change
     automation_session = UserSession(
         session_id="internal-automation",
         user_type=UserType.PRIVILEGED,

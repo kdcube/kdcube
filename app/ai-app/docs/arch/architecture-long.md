@@ -138,9 +138,13 @@ source, path, module, singleton behavior, non-secret configuration, surfaces,
 and website declarations. `assembly.yaml` selects deployment/platform behavior;
 it is not the long-term owner of app provider internals or Scene composition.
 
-The app store parses descriptor state with a process cache keyed by file stat
-identity. The file remains authoritative: a changed path modification time or
-size causes a reparse. Secret values are not cached there.
+The app store keeps, per process, the registry parsed from `bundles.yaml`,
+keyed by the sha256 of the exact bytes it was parsed from (W883). Every read
+re-reads and hashes the file, so any change (a hand edit, a CLI write, another
+process or ECS task on shared EFS) is parsed on the next read in every process.
+A platform write, a reload or a removal also drops it, and the config listener
+drops it on every `bundles.update` and `bundles.props.update` broadcast. Readers
+get copies. Secret values are not cached there.
 
 Startup app preload is collaborative across workers:
 

@@ -973,6 +973,17 @@ the read. `kdcube bundle reload` prints the block as `Loaded:` lines and
 exits nonzero when the receipt's commit is not the pinned one. A git-backed
 entry (`repo`/`ref`) refuses `--commit`: its version is its `ref`.
 
+### How a change to `bundles.yaml` reaches every process
+
+Each proc process keeps the registry parsed from `bundles.yaml`, keyed by the
+sha256 of the file's bytes. Every read re-reads and hashes the file (0.3 ms for
+a 355 KB descriptor on dev-main), so an edit is parsed on the next read in every
+process and every task, whoever made it: the platform, the CLI, or a hand edit
+on shared storage. Nothing waits for a message. A platform write, a bundle
+reload or removal, and the `bundles.update` / `bundles.props.update` broadcasts
+also drop it at once. A descriptor without a local file path is parsed on every
+read.
+
 ### Every consumer of a pinned app runs the snapshot
 
 In each proc process, the request path (REST and MCP operations, peer calls,

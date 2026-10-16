@@ -57,6 +57,15 @@ _log = logging.getLogger(__name__)
 # both changes the stat key and explicitly pops this cache.
 _DESCRIPTOR_MAPPING_CACHE: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
 _DESCRIPTOR_MAPPING_CACHE_LOCK = threading.Lock()
+# W389 (operator, W883, verbatim: "the first cache which you said exist is invalidated when soemthing
+# changes. when config changes. if we have something additional it also should be invalidated"):
+# the registry parsed from bundles.yaml, keyed by the sha256 of the exact bytes it was parsed from
+# (operator, W883: "yes, content hash"), so any rewrite is seen on the next read, a same-size one
+# within a timestamp tick included. Also dropped on every _write_mapping, clear_descriptor_read_caches,
+# and forget_descriptor_registry for configuration changes that do not touch the file (bundle reload,
+# removal). Readers get copies; what is kept is only the parse of bundles.yaml (no Cards, grants or
+# secrets). Measured in chat-proc on dev-main: read + sha256 of the 355 KB file p50 0.32 ms.
+_DESCRIPTOR_REGISTRY_CACHE: Dict[str, Tuple[str, "BundlesRegistry", Dict[str, Dict[str, Any]]]] = {}
 
 # Per-process guard for the Redis write-back done on descriptor reads.
 # Maps redis key -> (descriptor stat key, monotonic ts of last write-back).
@@ -96,10 +105,17 @@ def _record_redis_writeback(key: str, state: Optional[Tuple[int, int]]) -> None:
         _REDIS_WRITEBACK_STATE[key] = (state, time.monotonic())
 
 
+def forget_descriptor_registry() -> None:
+    """Drop the parsed descriptor registry (W389): the next read parses bundles.yaml again."""
+    with _DESCRIPTOR_MAPPING_CACHE_LOCK:
+        _DESCRIPTOR_REGISTRY_CACHE.clear()
+
+
 def clear_descriptor_read_caches() -> None:
     """Drop per-process descriptor read caches (tests / explicit admin reset)."""
     with _DESCRIPTOR_MAPPING_CACHE_LOCK:
         _DESCRIPTOR_MAPPING_CACHE.clear()
+        _DESCRIPTOR_REGISTRY_CACHE.clear()
     with _REDIS_WRITEBACK_STATE_LOCK:
         _REDIS_WRITEBACK_STATE.clear()
     with _RESERVED_LOADER_WARNING_LOCK:
@@ -742,15 +758,24 @@ def _resolve_props_node(node: Any) -> Any:
     return node
 
 
-def _read_only_bundle_item(payload: Any, bundle_id: str) -> Optional[Dict[str, Any]]:
-    """The descriptor item for ``bundle_id`` without changing ``payload`` (the last one wins, as in a build)."""
-    bundles_root = payload.get("bundles") if isinstance(payload, dict) else None
-    items = bundles_root.get("items") if isinstance(bundles_root, dict) else None
-    found = None
-    for item in items if isinstance(items, list) else ():
-        if isinstance(item, dict) and str(item.get("id") or "").strip() == bundle_id:
-            found = item
-    return found
+def _parse_descriptor_bytes(raw: bytes) -> Dict[str, Any]:
+    """bundles.yaml bytes to the descriptor mapping, with the loader _load_yaml_mapping_from_storage uses."""
+    import yaml
+
+    text = raw.decode("utf-8")
+    loader = getattr(yaml, "CSafeLoader", None)
+    payload = (yaml.load(text, Loader=loader) if loader is not None else yaml.safe_load(text)) or {}
+    if not isinstance(payload, dict):
+        raise ValueError("bundles.yaml must contain a mapping at top level")
+    return payload
+
+
+def _registry_copy(reg: "BundlesRegistry") -> "BundlesRegistry":
+    """A registry the caller may change without reaching the cached parse (W389)."""
+    return BundlesRegistry(
+        default_bundle_id=reg.default_bundle_id,
+        bundles={bid: entry.model_copy(deep=True) for bid, entry in (reg.bundles or {}).items()},
+    )
 
 
 def _split_bundles_and_props(
@@ -1570,6 +1595,7 @@ class _FileBundleDescriptorStore:
         # same-process coherence even on filesystems with coarse timestamps.
         with _DESCRIPTOR_MAPPING_CACHE_LOCK:
             _DESCRIPTOR_MAPPING_CACHE.pop(self._bundles_yaml_uri, None)
+            _DESCRIPTOR_REGISTRY_CACHE.pop(self._bundles_yaml_uri, None)
 
     def _bundle_items(self, payload: Dict[str, Any]) -> list[dict[str, Any]]:
         return _secrets_bundle_descriptor_items(payload)
@@ -1630,20 +1656,63 @@ class _FileBundleDescriptorStore:
 
     def load_registry(self) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
         with self._lock, self._acquire_file_lock():
-            return self._registry_from_payload(self._load_mapping())
+            # W883: the same content-hashed parse as the read-only path, read under the file lock; copies out.
+            cached = self._cached_registry()
+            if cached is None:
+                return None
+            return _registry_copy(cached[0]), copy.deepcopy(cached[1])
 
-    def load_registry_readonly(self) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
+    def load_registry_readonly(self, *, include_props: bool = True) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
         # Read-only components such as ingress can read the descriptor file
         # without creating a sibling lock file under /config. Writers replace
         # local descriptor files atomically (tmp + rename), so readers see
         # either the old or the new complete YAML document; a parse error here
         # is therefore almost certainly transient — retry once before failing.
         with self._lock:
-            try:
-                return self._registry_from_payload(self._load_mapping())
-            except Exception:
-                time.sleep(0.05)
-                return self._registry_from_payload(self._load_mapping())
+            cached = self._cached_registry()
+            if cached is None:
+                return None
+            reg, props_map = cached
+            # include_props=False: a caller that needs no props skips copying them (W389).
+            return _registry_copy(reg), (copy.deepcopy(props_map) if include_props else {})
+
+    def _cached_registry(self) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
+        """W389 / W883: the registry parsed from the current descriptor bytes, built once per content.
+
+        Shared objects: callers copy what they hand out (load_registry_readonly, load_bundle_props).
+        A descriptor with no local file path is not kept: it is parsed on every read, as before.
+        """
+        path = self._descriptor_local_path()
+        if path is None:
+            return self._registry_from_mapping_with_retry()
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return self._registry_from_mapping_with_retry()
+        digest = hashlib.sha256(raw).hexdigest()
+        with _DESCRIPTOR_MAPPING_CACHE_LOCK:
+            entry = _DESCRIPTOR_REGISTRY_CACHE.get(self._bundles_yaml_uri)
+        if entry is not None and entry[0] == digest:
+            return entry[1], entry[2]
+        try:
+            built = self._registry_from_payload(_parse_descriptor_bytes(raw))
+        except Exception:
+            # A parse error is almost certainly a writer mid-replace: read the file again once.
+            time.sleep(0.05)
+            raw = path.read_bytes()
+            digest = hashlib.sha256(raw).hexdigest()
+            built = self._registry_from_payload(_parse_descriptor_bytes(raw))
+        if built is not None:
+            with _DESCRIPTOR_MAPPING_CACHE_LOCK:
+                _DESCRIPTOR_REGISTRY_CACHE[self._bundles_yaml_uri] = (digest, built[0], built[1])
+        return built
+
+    def _registry_from_mapping_with_retry(self) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
+        try:
+            return self._registry_from_payload(self._load_mapping())
+        except Exception:
+            time.sleep(0.05)
+            return self._registry_from_payload(self._load_mapping())
 
     def save_registry(
         self,
@@ -1697,28 +1766,12 @@ class _FileBundleDescriptorStore:
         # atomically, so lock-free reads are consistent (see
         # load_registry_readonly); this keeps request-path reads off the
         # (potentially networked) lock file entirely.
-        # W389: read only this bundle's item (the same filters and parse as the registry build),
-        # not a full registry build of every bundle, and copy only that item.
-        bid = str(bundle_id or "").strip()
-        if not bid or not _bundle_allowed(bid):
+        # W389: one bundle's props from the registry parsed once per descriptor state, copied.
+        with self._lock:
+            cached = self._cached_registry()
+        if cached is None:
             return {}
-        with self._lock, _one_example_scan_per_read():
-            try:
-                mapping = self._load_mapping(copy_result=False)
-            except Exception:
-                time.sleep(0.05)  # a parse error here is almost certainly transient, as in load_registry_readonly
-                mapping = self._load_mapping(copy_result=False)
-            item = _read_only_bundle_item(mapping, bid)
-            if item is None:
-                return {}
-            if not _examples_enabled() and _is_example_bundle_id(bid) and not item.get("repo"):
-                return {}
-            try:
-                _entry, props = self._bundle_item_entry_and_props(bid, copy.deepcopy(item))
-            except Exception:
-                _log.warning("Failed to parse file-backed bundle descriptor for %s", bid, exc_info=True)
-                return {}
-        return dict(props or {})
+        return copy.deepcopy(dict(cached[1].get(str(bundle_id or "").strip()) or {}))
 
     def set_bundle_props(self, bundle_id: str, entry: "BundleEntry", props: Dict[str, Any]) -> None:
         with self._lock, self._acquire_file_lock():
@@ -2119,7 +2172,13 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
     if _is_live_file_authority(store):
         # Read-only w.r.t. the descriptor file: no flock needed (writers replace
         # the file atomically; see load_registry_readonly).
-        loaded = store.load_registry_readonly()
+        # Refresh the Redis runtime cache only when the descriptor changed (or
+        # periodically, to self-heal after a Redis flush). Admin mutation paths
+        # rewrite the descriptor file AND set these keys directly, so a skipped
+        # write-back here never hides an admin update. Props are copied only then (W389).
+        state = store.descriptor_state_key()
+        writeback_due = _redis_writeback_due(key, state)
+        loaded = store.load_registry_readonly(include_props=writeback_due)
         if loaded is None:
             reg = BundlesRegistry()
             props_map: Dict[str, Dict[str, Any]] = {}
@@ -2127,12 +2186,7 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
             reg, props_map = loaded
         reg, _ = _merge_example_bundles(reg)
         reg = _ensure_admin_bundle(reg)
-        # Refresh the Redis runtime cache only when the descriptor changed (or
-        # periodically, to self-heal after a Redis flush). Admin mutation paths
-        # rewrite the descriptor file AND set these keys directly, so a skipped
-        # write-back here never hides an admin update.
-        state = store.descriptor_state_key()
-        if _redis_writeback_due(key, state):
+        if writeback_due:
             await redis.set(key, reg.model_dump_json())
             await _sync_bundle_props_authoritative(redis, tenant=t, project=p, props_map=props_map)
             _record_redis_writeback(key, state)
