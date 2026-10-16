@@ -871,11 +871,18 @@ With `--include-platform-descriptors`, export writes `assembly.yaml`,
 `secrets.yaml`, `gateway.yaml`, `economics.yaml`, `bundles.yaml`, and
 `bundles.secrets.yaml`. For what `economics.yaml` owns, see
 [economics-descriptor-README.md](../../economics/economics-descriptor-README.md).
-When the selected provider is not `secrets-file`, export performs one browser-
-confirmed whole-inventory transaction and reconstructs all platform, bundle,
-user, and user-bundle values into the ordinary private descriptor pair.
+When the selected provider is not `secrets-file` (secrets-service, host-vault,
+aws-sm), export performs one browser-confirmed `bootstrap` transaction and writes
+exactly the same output as a `secrets-file` export (below): `platform.*` in
+`secrets.yaml`, app secrets in `secrets/` and as `secrets:` blocks in
+`bundles.secrets.yaml`, and with `--include-user-data` the per-user secrets and
+user props. The server filters before it reads any value: no user secret
+without `--include-user-data`, never a token Connection Hub acquires. The
+deployment needs `management.secret_export.enabled: true`; a user secret that
+belongs to no app has no folder home and refuses the export.
 
-With the `secrets-file` provider, app and per-user secrets live only in the
+With the `secrets-file` provider (and, through the same writer, every other
+provider), app and per-user secrets live only in the
 runtime secrets folder (`<workdir>/config/secrets`, or the host folder of a
 declared `secrets.runtime.root`), not in the two YAML files. Since the export is
 a configuration bootstrap, `--include-platform-descriptors` also writes:

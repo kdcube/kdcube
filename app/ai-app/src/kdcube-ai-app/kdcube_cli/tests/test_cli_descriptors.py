@@ -4729,28 +4729,23 @@ def test_provider_backed_config_export_writes_one_complete_descriptor_directory(
             target=ManagementSecretTarget.create(
                 scope="user",
                 user_id="owner-1",
+                bundle_id="demo.bundle",
                 key="provider.token",
             ),
             value="user-export-canary",
         ),
     )
 
-    async def _export_pair(**kwargs):
-        assert kwargs["selection"] == "all"
-        assert kwargs["into_existing_directory"] is True
-        exported = write_secret_descriptors_into_directory(
-            kwargs["output_directory"],
-            values,
-            replace=kwargs["replace"],
-        )
-        return (
-            SimpleNamespace(
-                request_digest="a" * 64,
-                assurance="session_confirmation",
-                approval_method="browser_session",
-                approval_verified_at=1,
-            ),
-            exported,
+    async def _export_bootstrap(**kwargs):
+        # W885: one bootstrap exchange; its values go through the secrets-file writer.
+        assert kwargs["user_data"] is False
+        return SimpleNamespace(
+            request_digest="a" * 64,
+            assurance="session_confirmation",
+            approval_method="browser_session",
+            approval_verified_at=1,
+            values=values,
+            user_props=(),
         )
 
     monkeypatch.setattr(cli_mod, "_load_cli_defaults", lambda: {})
@@ -4767,7 +4762,7 @@ def test_provider_backed_config_export_writes_one_complete_descriptor_directory(
     )
     monkeypatch.setattr(cli_mod, "_parse_workdir_namespace", lambda _workdir: ("demo", "project"))
     monkeypatch.setattr(cli_mod, "local_management_target", lambda _workdir: object())
-    monkeypatch.setattr(cli_mod, "export_secret_descriptor_pair", _export_pair)
+    monkeypatch.setattr(cli_mod, "export_bootstrap_values", _export_bootstrap)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -4793,20 +4788,20 @@ def test_provider_backed_config_export_writes_one_complete_descriptor_directory(
         "economics.yaml",
         "gateway.yaml",
         "secrets.yaml",
+        "secrets",
     }
     platform = yaml.safe_load((output / "secrets.yaml").read_text(encoding="utf-8"))
     bundles = yaml.safe_load(
         (output / "bundles.secrets.yaml").read_text(encoding="utf-8")
     )
-    assert platform["platform"]["services"]["fixture"]["token"] == (
-        "platform-export-canary"
+    assert platform == {"platform": {"services": {"fixture": {"token": "platform-export-canary"}}}}
+    assert bundles["bundles"]["items"][0]["secrets"]["provider.token"] == "bundle-export-canary"
+    assert (output / "secrets" / "demo.bundle" / "provider.token.json").read_text() == (
+        '{"value": "bundle-export-canary"}'
     )
-    assert platform["users"]["owner-1"]["secrets"]["provider"]["token"] == (
-        "user-export-canary"
-    )
-    assert bundles["bundles"]["items"][0]["secrets"]["provider"]["token"] == (
-        "bundle-export-canary"
-    )
+    assert b"user-export-canary" not in b"".join(
+        path.read_bytes() for path in output.rglob("*") if path.is_file()
+    ), "a user secret goes out only with --include-user-data"
     output_text = capsys.readouterr().out
     assert "platform-export-canary" not in output_text
     assert "bundle-export-canary" not in output_text

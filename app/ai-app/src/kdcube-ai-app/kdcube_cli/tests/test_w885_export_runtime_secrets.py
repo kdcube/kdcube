@@ -21,14 +21,70 @@ from kdcube_cli.runtime_secrets_export import RuntimeSecretsExportError, export_
 from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileStore
 from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileStore
 
-from test_cli_descriptors import _write_initialized_runtime_config
+# Self-contained (README: a sibling test module imported by bare name does not collect under importlib).
+
+
+def _write_initialized_runtime_config(
+    workdir: Path,
+    *,
+    marker: str = "old",
+    secrets_provider: str = "secrets-file",
+) -> Path:
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (workdir / "bundles" / "demo.bundle").mkdir(parents=True)
+    (config_dir / "install-meta.json").write_text(
+        json.dumps(
+            {
+                "tenant": "demo",
+                "project": "project",
+                "repo_root": str(workdir / "repo"),
+            }
+        )
+    )
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "context": {"tenant": "demo", "project": "project"},
+                "platform": {"repo": "https://github.com/example/platform.git", "ref": marker},
+                "secrets": {"provider": secrets_provider},
+                "auth": {"type": "simple"},
+                "proxy": {"ssl": False},
+                "paths": {"host_bundles_path": str(workdir / "bundles")},
+            },
+            sort_keys=False,
+        )
+    )
+    (config_dir / "secrets.yaml").write_text(
+        f"platform:\n  services:\n    marker: {marker}\n"
+    )
+    (config_dir / "gateway.yaml").write_text(f"routes:\n  marker: {marker}\n")
+    (config_dir / "economics.yaml").write_text(f"economics:\n  marker: {marker}\n")
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "items": [{"id": "demo.bundle", "path": "/bundles/demo.bundle", "module": "entrypoint"}],
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    (config_dir / "bundles.secrets.yaml").write_text(
+        yaml.safe_dump(
+            {"bundles": {"version": "1", "items": [{"id": "demo.bundle", "secrets": {"api": {"key": marker}}}]}},
+            sort_keys=False,
+        )
+    )
+    return config_dir
 
 APP = {("demo.bundle", "provider.token"): "app-canary-1", ("other.bundle", "api.key"): "app-canary-2"}
 USERS = {("person-1", "demo.bundle", "github.token"): "user-canary-1",
-         ("Person.Two@example.test", "other.bundle", "email.accounts.acct.tokens"): "user-canary-2"}
+         ("person-two", "other.bundle", "email.accounts.acct.tokens"): "user-canary-2"}
 ACQUIRED = {("person-1", "demo.bundle", "connections.accounts.gmail.tokens"): "acquired-canary-1",
             ("person-1", "demo.bundle", "delegated_to_kdcube.grant"): "acquired-canary-2",
-            ("Person.Two@example.test", "other.bundle", "remote_mcp.ref"): "acquired-canary-3",
+            ("person-two", "other.bundle", "remote_mcp.ref"): "acquired-canary-3",
             ("person-1", "other.bundle", "linkedin.accounts.acct.tokens"): "acquired-canary-4"}
 RECORD = "record-canary"
 LEGACY_YAML_USERS = {"person-1": {"secrets": {"connections": {"accounts": {"gmail": {"tokens": "legacy-acquired-canary"}}}},
@@ -82,7 +138,7 @@ def _all_bytes(root: Path) -> bytes:
 def _assert_nothing_named(text: str) -> None:
     for value in [*SHOWN, *NEVER]:
         assert value not in text
-    for name in ("person-1", "Person.Two", "provider.token", "github.token"):
+    for name in ("person-1", "person-two", "provider.token", "github.token"):
         assert name not in text
 
 
@@ -241,3 +297,114 @@ def test_a_refused_folder_export_leaves_no_unflagged_legacy_user_secret_behind(m
         _export(monkeypatch, workdir, config_dir, output)
     left = _all_bytes(output)
     assert b"legacy-user-canary" not in left and b"legacy-acquired-canary" not in left
+
+
+def _tree_bytes(root: Path) -> dict[str, bytes]:
+    return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+@pytest.mark.parametrize("flag", [(), ("--include-user-data",)])
+def test_a_provider_source_gives_the_same_output_as_the_secrets_file_source(monkeypatch, tmp_path, flag):
+    """Operator, 2026-10-16: "this must be simply equal and the same code for any export"."""
+    from types import SimpleNamespace
+
+    from kdcube_cli.management.models import ManagementSecretTarget
+    from kdcube_cli.management.secret_export import ExportedSecret
+
+    workdir, config_dir, _root = _runtime(tmp_path)
+    # Since the move to folders the app secrets live in the folder, as they do in a provider.
+    (config_dir / "bundles.secrets.yaml").write_text(yaml.safe_dump({"bundles": {"version": "1", "items": []}}))
+    file_out = tmp_path / "from-file"
+    _export(monkeypatch, workdir, config_dir, file_out, *flag)
+
+    values = [ExportedSecret(target=ManagementSecretTarget.create(scope="bundle", bundle_id=b, key=k), value=v)
+              for (b, k), v in APP.items()]
+    values += [ExportedSecret(target=ManagementSecretTarget.create(scope="user", user_id=u, bundle_id=b, key=k),
+                              value=v) for (u, b, k), v in USERS.items()] if flag else []
+
+    async def bootstrap(**kwargs):
+        assert kwargs["user_data"] is bool(flag)
+        return SimpleNamespace(request_digest="a" * 64, assurance="session_confirmation",
+                               approval_method="browser_session", approval_verified_at=1,
+                               values=tuple(values), user_props=tuple(dict(row) for row in PROPS) if flag else ())
+
+    provider_config = _write_initialized_runtime_config(tmp_path / "vault__project", secrets_provider="secrets-service")
+    provider_out = tmp_path / "from-provider"
+    monkeypatch.setattr(cli_mod, "local_management_target", lambda _w: object())
+    monkeypatch.setattr(cli_mod, "export_bootstrap_values", bootstrap)
+    _export(monkeypatch, tmp_path / "vault__project", provider_config, provider_out, *flag)
+
+    assert _tree_bytes(provider_out / "secrets") == _tree_bytes(file_out / "secrets")
+    def app_blocks(out):
+        items = yaml.safe_load((out / "bundles.secrets.yaml").read_text())["bundles"]["items"]
+        return {item["id"]: item.get("secrets") for item in items if item.get("secrets")}
+    assert app_blocks(provider_out) == app_blocks(file_out)
+    if flag:
+        assert (provider_out / "user-data" / "user_bundle_props.json").read_bytes() == (
+            file_out / "user-data" / "user_bundle_props.json").read_bytes()
+    else:
+        assert not (provider_out / "user-data").exists()
+
+
+def test_the_cli_folder_encoding_is_the_file_store_encoding():
+    from kdcube_ai_app.infra.secrets.user_secret_files import encode_segment as store_encoding
+    from kdcube_cli.runtime_secrets_export import encode_segment
+
+    for name in ["github.token", "Person.Two@example.test", ".hidden", "ünïcode key", "a/b\\c", "UPPER_case-1"]:
+        assert encode_segment(name) == store_encoding(name)
+
+
+def _provider_export(monkeypatch, tmp_path, *extra, prepare=None):
+    """A provider-backed export whose exchange records whether it was called."""
+    from types import SimpleNamespace
+
+    calls = []
+
+    async def bootstrap(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(request_digest="a" * 64, assurance="session_confirmation",
+                               approval_method="browser_session", approval_verified_at=1, values=(), user_props=())
+
+    workdir = tmp_path / "vault__project"
+    config_dir = _write_initialized_runtime_config(workdir, secrets_provider="secrets-service")
+    output = tmp_path / "out"
+    output.mkdir()
+    if prepare:
+        prepare(output)
+    monkeypatch.setattr(cli_mod, "local_management_target", lambda _w: object())
+    monkeypatch.setattr(cli_mod, "export_bootstrap_values", bootstrap)
+    return calls, lambda: _export(monkeypatch, workdir, config_dir, output, *extra), output
+
+
+def test_an_existing_descriptor_pair_refuses_before_anything_is_disclosed(monkeypatch, tmp_path):
+    """codex-infra on #381: no overwrite without --replace-descriptor-files, checked before the exchange."""
+    calls, run, output = _provider_export(
+        monkeypatch, tmp_path, prepare=lambda out: (out / "secrets.yaml").write_text("old: pair\n"))
+    with pytest.raises(SystemExit):
+        run()
+    assert calls == [] and (output / "secrets.yaml").read_text() == "old: pair\n"
+
+
+def test_replace_descriptor_files_allows_replacing_the_pair(monkeypatch, tmp_path):
+    calls, run, output = _provider_export(
+        monkeypatch, tmp_path, "--replace-descriptor-files",
+        prepare=lambda out: (out / "secrets.yaml").write_text("old: pair\n"))
+    run()
+    assert len(calls) == 1 and (output / "secrets.yaml").read_text() != "old: pair\n"
+
+
+@pytest.mark.parametrize("conflict", ["link", "secrets", "props"])
+def test_a_linked_pair_or_existing_output_refuses_before_the_exchange(monkeypatch, tmp_path, conflict):
+    def prepare(out):
+        if conflict == "link":
+            (out / "bundles.secrets.yaml").symlink_to(tmp_path / "elsewhere.yaml")
+        elif conflict == "secrets":
+            (out / "secrets").mkdir()
+        else:
+            (out / "user-data").mkdir()
+            (out / "user-data" / "user_bundle_props.json").write_text("{}")
+    calls, run, _output = _provider_export(monkeypatch, tmp_path, "--include-user-data", "--replace-descriptor-files",
+                                           prepare=prepare)
+    with pytest.raises(SystemExit):
+        run()
+    assert calls == [], "nothing is disclosed when the destination is wrong"

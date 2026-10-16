@@ -271,11 +271,10 @@ async def start_secret_export(request: Request) -> JSONResponse:
             ) from None
         normalized_payload = dict(payload)
         selection = str(normalized_payload.pop("selection", "") or "").strip()
+        user_data = normalized_payload.pop("user_data", False) if selection == "bootstrap" else False
         if selection:
-            if selection != "all" or normalized_payload.get("targets") not in (
-                None,
-                [],
-            ):
+            if (selection not in {"all", "bootstrap"} or type(user_data) is not bool
+                    or normalized_payload.get("targets") not in (None, [])):
                 raise SecretExportError(
                     "secret_export_selection_invalid",
                     status_code=400,
@@ -285,7 +284,12 @@ async def start_secret_export(request: Request) -> JSONResponse:
                 tenant=tenant,
                 project=project,
             ).inventory()
-            if not targets:
+            if selection == "bootstrap":
+                # W885: filtered before the manifest is frozen, so nothing left out is ever read.
+                targets = bootstrap_targets(targets, user_data=user_data)
+                if user_data:
+                    normalized_payload["user_props"] = True
+            if not targets and not user_data:
                 raise SecretExportError(
                     "secret_export_inventory_empty",
                     status_code=404,
@@ -347,7 +351,7 @@ async def start_secret_export(request: Request) -> JSONResponse:
             # provider inventory until the approved one-use exchange.
             "targets": (
                 []
-                if selection == "all"
+                if selection in {"all", "bootstrap"}
                 else [
                     target.public_dict() for target in transaction.request.targets
                 ]
@@ -414,6 +418,13 @@ async def authorize_secret_export(
             "</li>"
         )
     action = html.escape(request.url.path, quote=True)
+    # W885: the person sees the user-props scope they approve, not only the secret list.
+    user_props_scope = (
+        "<strong>included</strong>: every user's stored props for every application in "
+        f"<code>{html.escape(tenant)} / {html.escape(project)}</code>, read at the moment of export"
+        if transaction.request.user_props
+        else "not included"
+    )
     content = f"""
 <h1>Export KDCube secrets</h1>
 <p class="warning">This action discloses plaintext secret values to the local
@@ -424,6 +435,7 @@ Connection Hub CLI. The approval is bound to this exact list and can be used onc
 <p><strong>Required assurance:</strong> <code>{html.escape(transaction.required_assurance)}</code></p>
 <p><strong>Secrets ({len(target_rows)}):</strong></p>
 <ul>{''.join(target_rows)}</ul>
+<p><strong>User props:</strong> {user_props_scope}</p>
 <form method="post" action="{action}">
   <input type="hidden" name="transaction" value="{html.escape(transaction.transaction_id, quote=True)}">
   <input type="hidden" name="csrf" value="{html.escape(transaction.csrf_token, quote=True)}">
@@ -555,8 +567,9 @@ async def exchange_secret_export(request: Request) -> JSONResponse:
                     "secret provider returned an invalid value"
                 )
             values.append({**target.public_dict(), "value": value})
+        user_props = await read_user_props() if grant.request.user_props else []
         if secret_export_values_size(
-            [str(item["value"]) for item in values]
+            [str(item["value"]) for item in values] + [str(row["value_json"]) for row in user_props]
         ) > grant.max_total_value_bytes:
             raise SecretExportError("secret_export_result_too_large", status_code=413)
     except SecretExportError as exc:
@@ -588,9 +601,45 @@ async def exchange_secret_export(request: Request) -> JSONResponse:
                 "verified_at": grant.approval_verified_at,
             },
             "values": values,
+            **({"user_props": user_props} if grant.request.user_props else {}),
         },
         headers=SECRET_RESPONSE_HEADERS,
     )
+
+
+# W885: tokens Connection Hub and its integrations acquire at runtime are never part of a configuration
+# bootstrap (docs/sdk/solutions/connections/connection-hub-token-storage-README.md). The CLI keeps the same list.
+BOOTSTRAP_EXCLUDED_USER_PREFIXES = (
+    "connections.accounts.", "delegated_to_kdcube.", "remote_mcp.", "linkedin.accounts.",
+)
+MAX_BOOTSTRAP_USER_PROPS = 20000
+
+
+def bootstrap_targets(targets: Any, *, user_data: bool) -> tuple[Any, ...]:
+    """Platform and app secrets always; user secrets only with user_data, never the acquired tokens."""
+    return tuple(
+        target for target in targets
+        if target.scope != "user"
+        or (user_data and not target.key.startswith(BOOTSTRAP_EXCLUDED_USER_PREFIXES))
+    )
+
+
+async def read_user_props() -> list[dict[str, str]]:
+    """Every user_bundle_props row of this deployment, its JSON value as text, read at exchange."""
+    from kdcube_ai_app.infra.props.manager import get_props_manager
+
+    manager = get_props_manager()
+    pool = await manager._pool()
+    async with pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT user_id, bundle_id, key, subsystem, value_json::text AS value_json "
+            f"FROM {manager._schema}.user_bundle_props ORDER BY user_id, bundle_id, key "
+            f"LIMIT {MAX_BOOTSTRAP_USER_PROPS + 1}"
+        )
+    if len(rows) > MAX_BOOTSTRAP_USER_PROPS:
+        raise SecretExportError("secret_export_result_too_large", status_code=413)
+    return [{name: str(row[name]) for name in ("user_id", "bundle_id", "key", "subsystem", "value_json")}
+            for row in rows]
 
 
 __all__ = ["SECRET_RESPONSE_HEADERS", "router"]

@@ -153,7 +153,10 @@ def _targets(
     values: Any,
     *,
     maximum: int,
+    allow_empty: bool = False,
 ) -> tuple[SecretTarget, ...]:
+    if allow_empty and values == []:
+        return ()
     if not isinstance(values, list) or not values or len(values) > maximum:
         raise SecretExportError("secret_export_targets_invalid", status_code=400)
     targets: list[SecretTarget] = []
@@ -186,6 +189,8 @@ class SecretExportRequest:
     state: str
     code_challenge: str
     targets: tuple[SecretTarget, ...]
+    # W885: a configuration-bootstrap export also returns the user props; bound into the digest.
+    user_props: bool = False
 
     @classmethod
     def from_mapping(
@@ -203,11 +208,14 @@ class SecretExportRequest:
             "code_challenge",
             "code_challenge_method",
             "targets",
+            "user_props",
         }
+        user_props = value.get("user_props", False)
         if (
             set(value) - allowed
             or value.get("schema") != SECRET_EXPORT_REQUEST_SCHEMA
             or value.get("code_challenge_method") != "S256"
+            or type(user_props) is not bool
         ):
             raise SecretExportError("secret_export_request_invalid", status_code=400)
         return cls(
@@ -216,7 +224,8 @@ class SecretExportRequest:
             callback_uri=_callback_uri(value.get("callback_uri")),
             state=_token(value.get("state"), code="secret_export_state_invalid"),
             code_challenge=_challenge(value.get("code_challenge")),
-            targets=_targets(value.get("targets"), maximum=max_targets),
+            targets=_targets(value.get("targets"), maximum=max_targets, allow_empty=user_props),
+            user_props=user_props,
         )
 
     @property
@@ -230,6 +239,7 @@ class SecretExportRequest:
             "code_challenge": self.code_challenge,
             "code_challenge_method": "S256",
             "targets": [target.public_dict() for target in self.targets],
+            **({"user_props": True} if self.user_props else {}),
         }
 
     @property

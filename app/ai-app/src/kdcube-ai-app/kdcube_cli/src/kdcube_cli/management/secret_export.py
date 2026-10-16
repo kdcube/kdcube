@@ -104,6 +104,9 @@ def _origin(value: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+MAX_BOOTSTRAP_USER_PROPS = 20000
+
+
 @dataclass(frozen=True)
 class SecretExportRequest:
     target: ManagementTarget
@@ -112,6 +115,12 @@ class SecretExportRequest:
     code_challenge: str
     targets: tuple[ManagementSecretTarget, ...]
     selection: str = ""
+    # W885: with the bootstrap selection, user secrets and the user props travel only with user_data.
+    user_data: bool = False
+
+    @property
+    def user_props(self) -> bool:
+        return self.selection == "bootstrap" and self.user_data
 
     @classmethod
     def create(
@@ -123,6 +132,7 @@ class SecretExportRequest:
         code_challenge: str,
         targets: Sequence[ManagementSecretTarget] = (),
         selection: str = "",
+        user_data: bool = False,
     ) -> SecretExportRequest:
         callback = validate_web_url(
             callback_uri,
@@ -152,9 +162,9 @@ class SecretExportRequest:
             )
         ordered = tuple(sorted(targets, key=lambda item: item.identity))
         exact_selection = str(selection or "").strip()
-        if exact_selection not in {"", "all"} or bool(ordered) == bool(
+        if exact_selection not in {"", "all", "bootstrap"} or bool(ordered) == bool(
             exact_selection
-        ):
+        ) or (user_data and exact_selection != "bootstrap"):
             raise _fixed_error(
                 "secret_export_targets_invalid",
                 "The secret export must select all secrets or name exact targets.",
@@ -174,6 +184,7 @@ class SecretExportRequest:
             code_challenge=exact_challenge,
             targets=ordered,
             selection=exact_selection,
+            user_data=bool(user_data),
         )
 
     @property
@@ -187,6 +198,8 @@ class SecretExportRequest:
         }
         if self.selection:
             payload["selection"] = self.selection
+            if self.selection == "bootstrap":
+                payload["user_data"] = self.user_data
         else:
             payload["targets"] = [target.to_dict() for target in self.targets]
         return payload
@@ -204,6 +217,7 @@ class SecretExportRequest:
             "code_challenge": self.code_challenge,
             "code_challenge_method": "S256",
             "targets": [target.to_dict() for target in targets],
+            **({"user_props": True} if self.user_props else {}),
         }
 
     def request_digest_for(
@@ -254,6 +268,7 @@ class SecretExportResult:
     approval_method: str
     approval_verified_at: int
     values: tuple[ExportedSecret, ...] = field(repr=False)
+    user_props: tuple[dict[str, str], ...] = field(default=(), repr=False)
 
 
 class SecretExportTransport(Protocol):
@@ -366,6 +381,12 @@ class SecretExportClient:
             return
         error = payload.get("error")
         code = error.get("code") if isinstance(error, Mapping) else ""
+        if code == "secret_export_disabled":
+            raise _fixed_error(
+                "secret_export_disabled",
+                "Secret export is turned off on this deployment; set management.secret_export.enabled: true "
+                "in its assembly.yaml and regenerate the runtime config.",
+            )
         raise _fixed_error(str(code or "secret_export_rejected"))
 
     async def start(self, request: SecretExportRequest) -> SecretExportStart:
@@ -429,11 +450,11 @@ class SecretExportClient:
             and frozen_targets == request.targets
         )
         whole_targets_hidden = (
-            request.selection == "all"
+            request.selection in {"all", "bootstrap"}
             and not frozen_targets
             and isinstance(target_count, int)
             and not isinstance(target_count, bool)
-            and 0 < target_count <= MAX_SECRET_EXPORT_TARGETS
+            and (0 if request.user_props else 1) <= target_count <= MAX_SECRET_EXPORT_TARGETS
         )
         if (
             not _TOKEN_RE.fullmatch(transaction_id)
@@ -499,17 +520,17 @@ class SecretExportClient:
             },
         )
         self._raise_response(status, payload)
+        expected_result_fields = {
+            "schema",
+            "ok",
+            "transaction_id",
+            "request_digest",
+            "target",
+            "approval",
+            "values",
+        } | ({"user_props"} if request.user_props else set())
         if (
-            set(payload)
-            != {
-                "schema",
-                "ok",
-                "transaction_id",
-                "request_digest",
-                "target",
-                "approval",
-                "values",
-            }
+            set(payload) != expected_result_fields
             or payload.get("schema") != SECRET_EXPORT_RESULT_SCHEMA
             or payload.get("ok") is not True
         ):
@@ -551,7 +572,9 @@ class SecretExportClient:
             raise _fixed_error("secret_export_response_invalid")
         raw_values = payload.get("values")
         expected_target_count = start.target_count or len(start.targets)
-        if not isinstance(raw_values, list) or len(raw_values) != expected_target_count:
+        if not isinstance(raw_values, list) or (
+            len(raw_values) != expected_target_count and not (request.user_props and not raw_values)
+        ):
             raise _fixed_error("secret_export_response_invalid")
         values: list[ExportedSecret] = []
         total_value_bytes = 0
@@ -603,6 +626,20 @@ class SecretExportClient:
             )
         ):
             raise _fixed_error("secret_export_response_invalid")
+        user_props: list[dict[str, str]] = []
+        if request.user_props:
+            raw_props = payload.get("user_props")
+            fields = {"user_id", "bundle_id", "key", "subsystem", "value_json"}
+            if not isinstance(raw_props, list) or len(raw_props) > MAX_BOOTSTRAP_USER_PROPS or any(
+                not isinstance(row, Mapping) or set(row) != fields
+                or not all(isinstance(row[name], str) for name in fields)
+                for row in raw_props
+            ):
+                raise _fixed_error("secret_export_response_invalid")
+            user_props = [dict(row) for row in raw_props]
+            identities = [(row["user_id"], row["bundle_id"], row["key"]) for row in user_props]
+            if len(set(identities)) != len(identities) or identities != sorted(identities):
+                raise _fixed_error("secret_export_response_invalid")
         return SecretExportResult(
             transaction_id=start.transaction_id,
             request_digest=start.request_digest,
@@ -610,6 +647,7 @@ class SecretExportClient:
             approval_method=method,
             approval_verified_at=verified_at,
             values=tuple(values),
+            user_props=tuple(user_props),
         )
 
 
@@ -631,6 +669,7 @@ class BrowserSecretExportService:
         target: ManagementTarget,
         targets: Sequence[ManagementSecretTarget],
         selection: str = "",
+        user_data: bool = False,
         timeout_seconds: float = 300.0,
         browser_opener: BrowserOpener | None = None,
     ) -> SecretExportResult:
@@ -648,6 +687,7 @@ class BrowserSecretExportService:
                 code_challenge=pkce.code_challenge,
                 targets=targets,
                 selection=selection,
+                user_data=user_data,
             )
             start = await self._client.start(request)
             try:
