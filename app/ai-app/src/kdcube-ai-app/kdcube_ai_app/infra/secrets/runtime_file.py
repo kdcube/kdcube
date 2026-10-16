@@ -80,12 +80,21 @@ def adopt(target, owner: int, *, path=None) -> None:
         os.fchown(target, owner, -1)
         if path is None:
             return
+        expected = os.fstat(target)
     else:
         path = target
         os.chown(path, owner, -1, follow_symlinks=False)
-    if os.lstat(path).st_uid != owner:
+        expected = os.lstat(path)
+
+    def owned() -> bool:
+        current = os.lstat(path)  # the same file, never another entry under that name (as _settled checks)
+        if (current.st_ino, current.st_dev) != (expected.st_ino, expected.st_dev):
+            raise PermissionError("the secrets entry changed while its owner was set")
+        return current.st_uid == owner
+
+    if not owned():
         os.chown(path, owner, -1, follow_symlinks=False)
-        if os.lstat(path).st_uid != owner:
+        if not owned():
             raise PermissionError("the secrets owner could not be set")
 
 
