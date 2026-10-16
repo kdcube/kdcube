@@ -356,6 +356,31 @@ async def _run_export(
     return 0
 
 
+async def export_bootstrap_values(
+    *,
+    target: ManagementTarget,
+    user_data: bool,
+    timeout_seconds: float = 300.0,
+    no_open: bool = False,
+) -> SecretExportResult:
+    """W885: one browser-approved configuration-bootstrap export; the server filters before any value read.
+    The caller writes the result with the same writer a secrets-file export uses."""
+    service = BrowserSecretExportService(
+        client=SecretExportClient(transport=HttpxSecretExportTransport())
+    )
+    browser_options: dict[str, Any] = {}
+    if no_open:
+        browser_options["browser_opener"] = _print_manual_authorization_url
+    return await service.export(
+        target=target,
+        targets=(),
+        selection="bootstrap",
+        user_data=user_data,
+        timeout_seconds=timeout_seconds,
+        **browser_options,
+    )
+
+
 async def export_secret_descriptor_pair(
     *,
     target: ManagementTarget,

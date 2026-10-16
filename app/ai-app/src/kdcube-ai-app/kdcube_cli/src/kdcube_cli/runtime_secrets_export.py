@@ -46,6 +46,7 @@ class RuntimeSecretsExport:
     user_records_left_out: int = 0
     acquired_tokens_left_out: int = 0
     runtime_record_folders_left_out: int = 0
+    platform_values: dict[str, str] = field(default_factory=dict)  # provider exports only
 
 
 def export_runtime_secrets_folder(
@@ -242,3 +243,69 @@ def filter_user_secrets(global_secrets: dict, *, include_user_data: bool) -> tup
         document["secrets"] = root
         return document, left_out, acquired
     return root, left_out, acquired
+
+
+# The file store's on-disk encoding (kdcube_ai_app.infra.secrets.user_secret_files.encode_segment): lowercase
+# letters, digits and ``._@-`` stay, everything else (and a leading dot) is percent-encoded per UTF-8 byte.
+_SAFE = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._@-")
+
+
+def encode_segment(text: str) -> str:
+    encoded = "".join(
+        char if char in _SAFE and not (index == 0 and char == ".")
+        else "".join(f"%{byte:02X}" for byte in char.encode("utf-8"))
+        for index, char in enumerate(text)
+    )
+    if not text or len(encoded) > 200:
+        raise RuntimeSecretsExportError("A secret name cannot be represented in the secrets folder.")
+    return encoded
+
+
+def record_bytes(value: str) -> bytes:
+    """The bytes the file store writes for one record."""
+    return json.dumps({"value": value}, ensure_ascii=True).encode("ascii")
+
+
+def write_provider_values(
+    out_dir: Path, values: list[tuple[str, str, str, str, str]], *, include_user_data: bool
+) -> RuntimeSecretsExport:
+    """W885: approved provider values (scope, bundle_id, user_id, key, value) in the same ``secrets/`` layout a
+    secrets-file export copies, so every source store gives the same output. Platform values are returned in
+    ``platform_values`` for ``secrets.yaml``; a user secret with no bundle has no folder home and refuses."""
+    target = out_dir / EXPORT_FOLDER
+    if target.exists() or target.is_symlink():
+        raise RuntimeSecretsExportError(
+            f"{target} already exists; remove it or choose another --out-dir, so the export holds only "
+            "the current runtime secrets."
+        )
+    bundle_less = sum(1 for scope, bundle_id, *_rest in values if scope == "user" and not bundle_id)
+    if bundle_less:
+        raise RuntimeSecretsExportError(
+            f"{bundle_less} user secrets belong to no app and have no place in the secrets folder; export refused."
+        )
+    result = RuntimeSecretsExport(target=target)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _make_folder(target)
+    for scope, bundle_id, user_id, key, value in sorted(values):
+        if scope == "platform":
+            result.platform_values[key] = value
+            continue
+        if scope == "user":
+            if key.startswith(EXCLUDED_USER_PREFIXES):
+                result.acquired_tokens_left_out += 1
+                continue
+            if not include_user_data:
+                result.user_records_left_out += 1
+                continue
+            folder = target / bundle_id / USERS_FOLDER / encode_segment(user_id)
+            for part in (target / bundle_id, target / bundle_id / USERS_FOLDER, folder):
+                _ensure_folder(part)
+            _write_record(folder / (encode_segment(key) + _RECORD_SUFFIX), record_bytes(value))
+            result.record_count += 1
+            result.user_record_count += 1
+            continue
+        _ensure_folder(target / bundle_id)
+        _write_record(target / bundle_id / (encode_segment(key) + _RECORD_SUFFIX), record_bytes(value))
+        result.record_count += 1
+        result.app_secrets.setdefault(bundle_id, {})[key] = value
+    return result

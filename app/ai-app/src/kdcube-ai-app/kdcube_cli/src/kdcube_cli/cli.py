@@ -67,6 +67,7 @@ from kdcube_cli.runtime_secrets_export import (
     export_runtime_secrets_folder,
     merge_app_secrets,
     filter_user_secrets,
+    write_provider_values,
 )
 from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
@@ -86,6 +87,7 @@ from kdcube_cli.secrets_backend import backend_status
 from kdcube_cli.secrets_commands import (
     apply_secret_descriptor_import,
     delegated_credential_from_input,
+    export_bootstrap_values,
     export_secret_descriptor_pair,
     local_management_target,
     run_management_secret_command,
@@ -2699,6 +2701,74 @@ def _write_private_json(path: Path, payload: object) -> None:
         json.dump(payload, stream, ensure_ascii=True, indent=2, sort_keys=True)
         stream.write("\n")
     os.chmod(path, 0o600)
+
+
+def _nest_platform_values(values: dict[str, str]) -> dict[str, object]:
+    """``platform.*`` keys as the nested ``secrets.yaml`` the file provider reads; a key with a key below it
+    cannot be nested and refuses rather than losing either value."""
+    root: dict[str, object] = {}
+    for key in sorted(values):
+        node = root
+        parts = key.split(".")
+        for part in parts[:-1]:
+            child = node.setdefault(part, {})
+            if not isinstance(child, dict):
+                raise SystemExit("Two platform secrets cannot both be written to secrets.yaml (one is below the other).")
+            node = child
+        if parts[-1] in node:
+            raise SystemExit("Two platform secrets cannot both be written to secrets.yaml (one is below the other).")
+        node[parts[-1]] = values[key]
+    return root
+
+
+def _write_bootstrap_export(
+    console: Console,
+    *,
+    out_dir: Path,
+    result: object,
+    include_user_data: bool,
+    source: str,
+    quiet: bool = False,
+) -> list[dict[str, object]]:
+    """W885: approved provider values written exactly as a secrets-file export: ``secrets/``, the app
+    secrets also as ``secrets:`` blocks in ``bundles.secrets.yaml``, ``platform.*`` in ``secrets.yaml``, and
+    with ``include_user_data`` the user props. Counts only, never a name or value."""
+    values = [
+        (item.target.scope, item.target.bundle_id, item.target.user_id, item.target.key, item.value)
+        for item in result.values
+    ]
+    exported = write_provider_values(out_dir, values, include_user_data=include_user_data)
+    secrets_path = out_dir / "secrets.yaml"
+    write_descriptor_text(
+        secrets_path,
+        yaml.safe_dump(_nest_platform_values(exported.platform_values), sort_keys=False, allow_unicode=True),
+    )
+    bundles_secrets_path = out_dir / "bundles.secrets.yaml"
+    write_descriptor_text(
+        bundles_secrets_path,
+        yaml.safe_dump(merge_app_secrets({}, exported.app_secrets), sort_keys=False, allow_unicode=True),
+    )
+    files: list[dict[str, object]] = [
+        {"name": "secrets.yaml", "source": source, "target": str(secrets_path),
+         "platform_secret_count": len(exported.platform_values)},
+        {"name": "bundles.secrets.yaml", "source": source, "target": str(bundles_secrets_path)},
+        {"name": "secrets/", "source": source, "target": str(exported.target),
+         "record_count": exported.record_count, "user_record_count": exported.user_record_count,
+         "user_records_left_out": exported.user_records_left_out,
+         "acquired_tokens_left_out": exported.acquired_tokens_left_out, "include_user_data": include_user_data},
+    ]
+    if include_user_data:
+        props_path = out_dir / "user-data" / "user_bundle_props.json"
+        _write_private_json(props_path, {"schema": "kdcube.export.user_bundle_props.v1",
+                                         "rows": [dict(row) for row in result.user_props]})
+        files.append({"name": "user-data/user_bundle_props.json", "target": str(props_path),
+                      "row_count": len(result.user_props)})
+    if not quiet:
+        console.print("[green]Exported the configuration after one browser approval.[/green]")
+        console.print(f"[dim]  secrets/:[/dim] {exported.target} ({exported.record_count} records)")
+        if include_user_data:
+            console.print(f"[dim]  user props:[/dim] {len(result.user_props)} rows")
+    return files
 
 
 def _export_runtime_secrets(
@@ -6827,12 +6897,10 @@ def main() -> None:
                         "--include-platform-descriptors so one browser-confirmed whole export "
                         "can reconstruct both ordinary secret descriptor files."
                     )
-                if args.include_user_data and (
-                    _provider_backed_export or not args.include_platform_descriptors
-                ):
+                if args.include_user_data and not args.include_platform_descriptors:
                     raise SystemExit(
                         "--include-user-data applies to `kdcube config export "
-                        "--include-platform-descriptors` of a secrets-file runtime."
+                        "--include-platform-descriptors`."
                     )
                 export_live_bundle_descriptors(
                     _op_console,
@@ -6881,55 +6949,35 @@ def main() -> None:
                 _provider_export: dict[str, object] | None = None
                 if _provider_backed_export:
                     _management_target = local_management_target(_resolved)
-                    _export_result, _secret_descriptors = asyncio.run(
-                        export_secret_descriptor_pair(
+                    # W885: the same output as a secrets-file export, from one browser-approved
+                    # bootstrap exchange; the server filters before it reads any value.
+                    _export_result = asyncio.run(
+                        export_bootstrap_values(
                             target=_management_target,
-                            output_directory=_out_dir,
-                            selection="all",
+                            user_data=bool(args.include_user_data),
                             timeout_seconds=float(args.wait_seconds),
                             no_open=bool(args.no_open),
-                            into_existing_directory=True,
-                            replace=bool(args.replace_descriptor_files),
                         )
+                    )
+                    _written = _write_bootstrap_export(
+                        _op_console,
+                        out_dir=_out_dir,
+                        result=_export_result,
+                        include_user_data=bool(args.include_user_data),
+                        source=f"provider:{_secrets_provider}",
+                        quiet=bool(args.quiet or args.json_output),
                     )
                     _provider_export = {
                         "provider": _secrets_provider,
-                        "selection": "all",
+                        "selection": "bootstrap",
                         "request_digest": _export_result.request_digest,
                         "approval": {
                             "assurance": _export_result.assurance,
                             "method": _export_result.approval_method,
                             "verified_at": _export_result.approval_verified_at,
                         },
-                        "platform_secret_count": _secret_descriptors.platform_count,
-                        "bundle_secret_count": _secret_descriptors.bundle_count,
-                        "user_secret_count": _secret_descriptors.user_count,
-                        "total_secret_count": _secret_descriptors.total_count,
                     }
-                    _platform_files.extend(
-                        [
-                            {
-                                "name": "secrets.yaml",
-                                "source": f"provider:{_secrets_provider}",
-                                "target": str(_secret_descriptors.platform_path),
-                                "size_bytes": _secret_descriptors.platform_path.stat().st_size,
-                            },
-                            {
-                                "name": "bundles.secrets.yaml",
-                                "source": f"provider:{_secrets_provider}",
-                                "target": str(_secret_descriptors.bundles_path),
-                                "size_bytes": _secret_descriptors.bundles_path.stat().st_size,
-                            },
-                        ]
-                    )
-                    if not bool(args.quiet or args.json_output):
-                        console.print(
-                            "[green]Exported current selected-provider secrets after "
-                            "one browser approval.[/green]"
-                        )
-                        console.print(
-                            f"[dim]secret count:[/dim] {_secret_descriptors.total_count}"
-                        )
+                    _platform_files.extend(_written)
                 if args.json_output:
                     _print_json(
                         {

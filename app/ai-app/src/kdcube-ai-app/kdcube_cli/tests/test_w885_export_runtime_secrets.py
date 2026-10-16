@@ -25,10 +25,10 @@ from test_cli_descriptors import _write_initialized_runtime_config
 
 APP = {("demo.bundle", "provider.token"): "app-canary-1", ("other.bundle", "api.key"): "app-canary-2"}
 USERS = {("person-1", "demo.bundle", "github.token"): "user-canary-1",
-         ("Person.Two@example.test", "other.bundle", "email.accounts.acct.tokens"): "user-canary-2"}
+         ("person-two", "other.bundle", "email.accounts.acct.tokens"): "user-canary-2"}
 ACQUIRED = {("person-1", "demo.bundle", "connections.accounts.gmail.tokens"): "acquired-canary-1",
             ("person-1", "demo.bundle", "delegated_to_kdcube.grant"): "acquired-canary-2",
-            ("Person.Two@example.test", "other.bundle", "remote_mcp.ref"): "acquired-canary-3",
+            ("person-two", "other.bundle", "remote_mcp.ref"): "acquired-canary-3",
             ("person-1", "other.bundle", "linkedin.accounts.acct.tokens"): "acquired-canary-4"}
 RECORD = "record-canary"
 LEGACY_YAML_USERS = {"person-1": {"secrets": {"connections": {"accounts": {"gmail": {"tokens": "legacy-acquired-canary"}}}},
@@ -82,7 +82,7 @@ def _all_bytes(root: Path) -> bytes:
 def _assert_nothing_named(text: str) -> None:
     for value in [*SHOWN, *NEVER]:
         assert value not in text
-    for name in ("person-1", "Person.Two", "provider.token", "github.token"):
+    for name in ("person-1", "person-two", "provider.token", "github.token"):
         assert name not in text
 
 
@@ -241,3 +241,58 @@ def test_a_refused_folder_export_leaves_no_unflagged_legacy_user_secret_behind(m
         _export(monkeypatch, workdir, config_dir, output)
     left = _all_bytes(output)
     assert b"legacy-user-canary" not in left and b"legacy-acquired-canary" not in left
+
+
+def _tree_bytes(root: Path) -> dict[str, bytes]:
+    return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+@pytest.mark.parametrize("flag", [(), ("--include-user-data",)])
+def test_a_provider_source_gives_the_same_output_as_the_secrets_file_source(monkeypatch, tmp_path, flag):
+    """Operator, 2026-10-16: "this must be simply equal and the same code for any export"."""
+    from types import SimpleNamespace
+
+    from kdcube_cli.management.models import ManagementSecretTarget
+    from kdcube_cli.management.secret_export import ExportedSecret
+
+    workdir, config_dir, _root = _runtime(tmp_path)
+    # Since the move to folders the app secrets live in the folder, as they do in a provider.
+    (config_dir / "bundles.secrets.yaml").write_text(yaml.safe_dump({"bundles": {"version": "1", "items": []}}))
+    file_out = tmp_path / "from-file"
+    _export(monkeypatch, workdir, config_dir, file_out, *flag)
+
+    values = [ExportedSecret(target=ManagementSecretTarget.create(scope="bundle", bundle_id=b, key=k), value=v)
+              for (b, k), v in APP.items()]
+    values += [ExportedSecret(target=ManagementSecretTarget.create(scope="user", user_id=u, bundle_id=b, key=k),
+                              value=v) for (u, b, k), v in USERS.items()] if flag else []
+
+    async def bootstrap(**kwargs):
+        assert kwargs["user_data"] is bool(flag)
+        return SimpleNamespace(request_digest="a" * 64, assurance="session_confirmation",
+                               approval_method="browser_session", approval_verified_at=1,
+                               values=tuple(values), user_props=tuple(dict(row) for row in PROPS) if flag else ())
+
+    provider_config = _write_initialized_runtime_config(tmp_path / "vault__project", secrets_provider="secrets-service")
+    provider_out = tmp_path / "from-provider"
+    monkeypatch.setattr(cli_mod, "local_management_target", lambda _w: object())
+    monkeypatch.setattr(cli_mod, "export_bootstrap_values", bootstrap)
+    _export(monkeypatch, tmp_path / "vault__project", provider_config, provider_out, *flag)
+
+    assert _tree_bytes(provider_out / "secrets") == _tree_bytes(file_out / "secrets")
+    def app_blocks(out):
+        items = yaml.safe_load((out / "bundles.secrets.yaml").read_text())["bundles"]["items"]
+        return {item["id"]: item.get("secrets") for item in items if item.get("secrets")}
+    assert app_blocks(provider_out) == app_blocks(file_out)
+    if flag:
+        assert (provider_out / "user-data" / "user_bundle_props.json").read_bytes() == (
+            file_out / "user-data" / "user_bundle_props.json").read_bytes()
+    else:
+        assert not (provider_out / "user-data").exists()
+
+
+def test_the_cli_folder_encoding_is_the_file_store_encoding():
+    from kdcube_ai_app.infra.secrets.user_secret_files import encode_segment as store_encoding
+    from kdcube_cli.runtime_secrets_export import encode_segment
+
+    for name in ["github.token", "Person.Two@example.test", ".hidden", "ünïcode key", "a/b\\c", "UPPER_case-1"]:
+        assert encode_segment(name) == store_encoding(name)
