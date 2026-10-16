@@ -464,98 +464,41 @@ def _entry_field(entry: Any, name: str) -> Any:
     return getattr(entry, name, None)
 
 
-def activation_record_key(*, tenant: str, project: str, bundle_id: str) -> str:
-    from kdcube_ai_app.infra import namespaces
+def pinned_snapshot_path(entry: Any, *, tenant: str, project: str, readiness: Any = None) -> Optional[str]:
+    """W333: the snapshot a pinned app runs in this process, from this process's own preparation.
 
-    return namespaces.CONFIG.BUNDLES.ACTIVATION_KEY_FMT.format(tenant=tenant, project=project, bundle_id=bundle_id)
+    ``None`` means the app runs its declared path: a Git (``repo``) entry, an entry the
+    lifecycle already resolved (``mounted_path`` set), or an app this process prepared
+    from its mounted folder with no pin. When this process's lifecycle prepared a pinned
+    snapshot (from the descriptor's ``activation.commit`` or a reload's ``--commit``), the
+    answer is that snapshot: what this process imported. That keeps the request path, peer
+    calls and the Data Bus on the same code as the lifecycle, and needs no shared store.
 
-
-async def write_activation_record(
-    redis: Any, *, tenant: str, project: str, bundle_id: str, ref: str, commit: str, path: str,
-) -> None:
-    """W333: what the lifecycle prepared for a pinned app, for every other consumer to load.
-
-    Written when preparation succeeds (startup, reconcile and reload), so a pin that came
-    only in a reload request reaches the request path and the Data Bus too.
-    """
-    record = {"bundle_id": bundle_id, "ref": ref or commit, "commit": commit, "path": path, "prepared_at": _now()}
-    await redis.set(activation_record_key(tenant=tenant, project=project, bundle_id=bundle_id),
-                    json.dumps(record, sort_keys=True))
-
-
-async def clear_activation_record(redis: Any, *, tenant: str, project: str, bundle_id: str) -> None:
-    """The app was prepared without a pin: its consumers load the declared path again."""
-    await redis.delete(activation_record_key(tenant=tenant, project=project, bundle_id=bundle_id))
-
-
-async def read_activation_record(redis: Any, *, tenant: str, project: str, bundle_id: str) -> Optional[Dict[str, Any]]:
-    if redis is None or not callable(getattr(redis, "get", None)):
-        return None
-    raw = await redis.get(activation_record_key(tenant=tenant, project=project, bundle_id=bundle_id))
-    if not raw:
-        return None
-    record = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
-    return record if isinstance(record, dict) and record.get("commit") and record.get("path") else None
-
-
-async def pinned_snapshot_path(entry: Any, *, redis: Any, tenant: str, project: str) -> Optional[str]:
-    """W333: the prepared snapshot a pinned app must load, found without git.
-
-    ``None`` means the app is not pinned: a Git (``repo``) entry, an entry the lifecycle
-    already resolved (``mounted_path`` set), or one with no ``activation`` and no activation
-    record. A pin is the descriptor's ``activation.commit`` or ``require_commit``, or the
-    record a reload pin leaves. With a pin, the answer is the record's snapshot path when
-    the record matches the declared commit (as the ref it named or its sha) and the
-    snapshot's marker names that sha: one Redis GET, one stat and one small file read.
-
-    Anything else raises ``BundleSnapshotError("bundle_snapshot_not_prepared")``. It never
-    falls back to the mounted folder. The lifecycle stays the only place that exports and
-    verifies a snapshot.
+    A pinned app (``activation.commit`` or ``require_commit``) that this process has not
+    prepared as a snapshot raises ``BundleSnapshotError("bundle_snapshot_not_prepared")``:
+    a new or restarted process prepares it first, or refuses. It never falls back to the
+    mounted folder.
     """
 
     if _entry_field(entry, "repo") or _entry_field(entry, "mounted_path"):
         return None
+    from kdcube_ai_app.infra.plugin.app_readiness import application_readiness_registry
+
     bundle_id = str(_entry_field(entry, "id") or "")
+    registry = readiness if readiness is not None else application_readiness_registry
+    prepared = registry.snapshot(tenant=tenant, project=project, application_id=bundle_id)
+    if prepared is not None and prepared.ready and prepared.prepared_source_commit and prepared.prepared_source_path:
+        return str(prepared.prepared_source_path)
     block = activation_block(entry if isinstance(entry, Mapping) else {"activation": _entry_field(entry, "activation")})
     declared = str(block.get("commit") or "").strip()
-    pinned_by_descriptor = bool(declared or block.get("require_commit"))
-    try:
-        record = await read_activation_record(redis, tenant=tenant, project=project, bundle_id=bundle_id)
-    except Exception as exc:
-        if pinned_by_descriptor:
-            raise BundleSnapshotError(
-                "bundle_snapshot_not_prepared",
-                f"Bundle '{bundle_id}' is pinned and its activation record could not be read.",
-                bundle_id=bundle_id,
-            ) from exc
-        raise
-    if record is None:
-        if pinned_by_descriptor:
-            raise BundleSnapshotError(
-                "bundle_snapshot_not_prepared",
-                f"Bundle '{bundle_id}' is pinned and no snapshot has been prepared for it yet.",
-                bundle_id=bundle_id,
-                commit=declared,
-            )
-        return None
-    commit = str(record["commit"])
-    if declared and declared not in (str(record.get("ref") or ""), commit):
+    if declared or block.get("require_commit"):
         raise BundleSnapshotError(
             "bundle_snapshot_not_prepared",
-            f"Bundle '{bundle_id}' is pinned to {declared!r}; the prepared snapshot is {commit[:12]}.",
+            f"Bundle '{bundle_id}' is pinned and this process has not prepared its snapshot.",
             bundle_id=bundle_id,
             commit=declared,
-            prepared=commit,
         )
-    snapshot = read_snapshot(pathlib.Path(str(record["path"])))
-    if snapshot is None or snapshot.commit != commit:
-        raise BundleSnapshotError(
-            "bundle_snapshot_not_prepared",
-            f"Bundle '{bundle_id}': the prepared snapshot of {commit[:12]} is missing or does not match.",
-            bundle_id=bundle_id,
-            commit=commit,
-        )
-    return str(record["path"])
+    return None
 
 
 @dataclass(frozen=True)

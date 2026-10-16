@@ -1070,9 +1070,7 @@ class DataBusRuntimeManager:
             # W333: a pinned app's consumers run its prepared snapshot; when it is not
             # ready they stay inactive with a log line, never on the mounted folder.
             try:
-                snapshot_path = await pinned_snapshot_path(
-                    entry, redis=self._redis, tenant=self._tenant, project=self._project
-                )
+                snapshot_path = pinned_snapshot_path(entry, tenant=self._tenant, project=self._project)
             except Exception as exc:
                 _log.warning(
                     "[data_bus] Pinned application source unavailable; handlers remain inactive: "

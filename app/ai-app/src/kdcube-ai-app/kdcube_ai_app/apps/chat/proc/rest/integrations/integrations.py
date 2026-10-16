@@ -2878,21 +2878,26 @@ async def internal_bundle_status(payload: BundleStatusRequest, request: Request)
             "widgets": sorted(widget_manifest.widgets),
         }
 
-    # W333: what the request path and the Data Bus load for this app, from the same resolver.
-    from kdcube_ai_app.infra.plugin.bundle_snapshot import pinned_snapshot_path, read_activation_record
+    # W333: what this process's request path, peer calls and Data Bus load for the app (this
+    # process only; another proc process answers for itself).
+    from kdcube_ai_app.infra.plugin.app_readiness import application_readiness_registry
+    from kdcube_ai_app.infra.plugin.bundle_snapshot import pinned_snapshot_path
 
-    consumers: Dict[str, Any] = {"activation_record": None, "path": None, "refused": None}
-    try:
-        consumers["activation_record"] = await read_activation_record(
-            redis, tenant=tenant_id, project=project_id, bundle_id=bundle_id
-        )
-        if entry is not None:
+    prepared = application_readiness_registry.snapshot(tenant=tenant_id, project=project_id, application_id=bundle_id)
+    consumers: Dict[str, Any] = {
+        "scope": "this process",
+        "pid": os.getpid(),
+        "prepared_commit": getattr(prepared, "prepared_source_commit", None),
+        "path": None,
+        "refused": None,
+    }
+    if entry is not None:
+        try:
             consumers["path"] = (
-                await pinned_snapshot_path(entry, redis=redis, tenant=tenant_id, project=project_id)
-                or str(entry.path or "")
+                pinned_snapshot_path(entry, tenant=tenant_id, project=project_id) or str(entry.path or "")
             )
-    except Exception as exc:
-        consumers["refused"] = str(getattr(exc, "code", "") or type(exc).__name__)
+        except Exception as exc:
+            consumers["refused"] = str(getattr(exc, "code", "") or type(exc).__name__)
 
     return {
         "status": "ok",

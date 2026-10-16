@@ -3224,19 +3224,15 @@ def print_bundle_status(console: Console, status: dict[str, object]) -> None:
     server_source = loaded.get("source") if isinstance(loaded.get("source"), dict) else {}
     for field, value in server_source.items():
         console.print(f"[dim]chat-proc source.{field}:[/dim] {value}")
-    # W333: what the request path and the Data Bus consumers load for this app.
+    # W333: what this proc process's request path and Data Bus consumers load for the app.
     consumers = live.get("consumers") if isinstance(live.get("consumers"), dict) else None
     if consumers is not None:
         if consumers.get("refused"):
-            console.print(f"[red]Request path and Data Bus:[/red] refused ({consumers.get('refused')})")
+            console.print(f"[red]Request path and Data Bus (this proc):[/red] refused ({consumers.get('refused')})")
         else:
-            console.print(f"[dim]Request path and Data Bus load:[/dim] {consumers.get('path') or 'unknown'}")
-        record = consumers.get("activation_record") if isinstance(consumers.get("activation_record"), dict) else None
-        if record:
-            console.print(
-                f"[dim]Activation record:[/dim] ref={record.get('ref')} commit={record.get('commit')} "
-                f"prepared_at={record.get('prepared_at')}"
-            )
+            console.print(f"[dim]Request path and Data Bus load (this proc):[/dim] {consumers.get('path') or 'unknown'}")
+        if consumers.get("prepared_commit"):
+            console.print(f"[dim]Prepared snapshot commit (this proc):[/dim] {consumers.get('prepared_commit')}")
     widget = live.get("widget") if isinstance(live.get("widget"), dict) else None
     if widget is None:
         console.print("[dim]Widget publication:[/dim] unavailable")

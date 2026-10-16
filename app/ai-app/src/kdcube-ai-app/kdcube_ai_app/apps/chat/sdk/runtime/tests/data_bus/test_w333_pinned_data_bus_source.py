@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
-"""W333: a commit-pinned app runs its pinned snapshot on every path, or refuses; never the mounted folder.
+"""W333: a commit-pinned app runs, in each process, the snapshot that process prepared, or refuses.
 
-The mounted folder holds an uncommitted edit after the pin. The lifecycle prepares
-the snapshot and leaves a durable activation record; the request path
-(resolve_bundle_spec_from_store) and the Data Bus manager resolve the app from the
-descriptor entry and the record, without git.
+Never the mounted folder. The mounted folder holds an uncommitted edit after the pin. Each
+proc process's lifecycle prepares the app and records what it imported on its own readiness
+record. The request path (resolve_bundle_spec_from_store, used by REST, MCP and both
+peer-call paths) and the Data Bus manager resolve the app from that record, with no shared
+store and no git.
 """
 from __future__ import annotations
 
@@ -15,8 +16,14 @@ from types import SimpleNamespace
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import worker as data_bus_worker
+from kdcube_ai_app.infra.plugin import app_readiness
 from kdcube_ai_app.infra.plugin import bundle_snapshot as snap
 from kdcube_ai_app.infra.plugin import bundle_store
+from kdcube_ai_app.infra.plugin.app_readiness import (
+    ApplicationLifecycleState,
+    ApplicationReadinessRegistry,
+    DesiredApplicationState,
+)
 from kdcube_ai_app.infra.plugin.bundle_store import BundleActivationConfig, BundleEntry, BundlesRegistry
 
 BUNDLE_ID = "pinned.app"
@@ -24,39 +31,26 @@ SUBDIR = "apps/pinned@1-0"
 T, P = "tenant", "project"
 
 
-class _Redis:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-
-    async def get(self, key):
-        return self.values.get(key)
-
-    async def set(self, key, value):
-        self.values[key] = value
-        return True
-
-    async def delete(self, key):
-        return 1 if self.values.pop(key, None) is not None else 0
-
-
 def _git(repo: pathlib.Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
 @pytest.fixture
-def pinned(tmp_path: pathlib.Path, monkeypatch):
-    repo = tmp_path / "work"
-    bundle = repo / SUBDIR
+def repo(tmp_path: pathlib.Path, monkeypatch):
+    """Commits A and B of the app; the mounted folder holds a third, uncommitted edit."""
+    work = tmp_path / "work"
+    bundle = work / SUBDIR
     bundle.mkdir(parents=True)
-    _git(repo, "init", "-q")
-    (bundle / "entrypoint.py").write_text("VERSION = 'A'\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "A")
-    commit = _git(repo, "rev-parse", "HEAD")
-    _git(repo, "branch", "release")
-    (bundle / "entrypoint.py").write_text("VERSION = 'B uncommitted'\n", encoding="utf-8")
+    _git(work, "init", "-q")
+    commits = {}
+    for version in ("A", "B"):
+        (bundle / "entrypoint.py").write_text(f"VERSION = '{version}'\n", encoding="utf-8")
+        _git(work, "add", "-A")
+        _git(work, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", version)
+        commits[version] = _git(work, "rev-parse", "HEAD")
+    (bundle / "entrypoint.py").write_text("VERSION = 'mounted, uncommitted'\n", encoding="utf-8")
     monkeypatch.setattr(snap, "resolve_managed_bundles_root", lambda: tmp_path / "managed")
-    return bundle, commit
+    return SimpleNamespace(bundle=bundle, **commits)
 
 
 def _entry(bundle, *, commit=None, require=False):
@@ -64,26 +58,35 @@ def _entry(bundle, *, commit=None, require=False):
     return BundleEntry(id=BUNDLE_ID, path=str(bundle), module="entrypoint", activation=activation)
 
 
-async def _prepare(redis, bundle, ref):
-    """What the lifecycle does at startup and reload: materialize, then record."""
-    resolved = await snap.resolve_activation_entry({"id": BUNDLE_ID, "path": str(bundle), "activation": {"commit": ref}})
-    await snap.write_activation_record(redis, tenant=T, project=P, bundle_id=BUNDLE_ID, ref=ref,
-                                       commit=resolved["source"]["commit"], path=resolved["path"])
-    return resolved["path"]
+async def _prepare(readiness: ApplicationReadinessRegistry, bundle, ref, *, generation="g1") -> str | None:
+    """What one process's lifecycle does: materialize the pin (or not) and record what it imported."""
+    readiness.replace_desired(tenant=T, project=P, applications={BUNDLE_ID: DesiredApplicationState(generation=generation)})
+    readiness.transition(tenant=T, project=P, application_id=BUNDLE_ID, generation=generation,
+                         state=ApplicationLifecycleState.PREPARING)
+    path = commit = None
+    if ref:
+        resolved = await snap.resolve_activation_entry({"id": BUNDLE_ID, "path": str(bundle), "activation": {"commit": ref}})
+        path, commit = resolved["path"], resolved["source"]["commit"]
+    readiness.record_prepared_source(tenant=T, project=P, application_id=BUNDLE_ID, generation=generation,
+                                     path=path, commit=commit)
+    readiness.transition(tenant=T, project=P, application_id=BUNDLE_ID, generation=generation,
+                         state=ApplicationLifecycleState.READY)
+    return path
 
 
-async def _data_bus_loads(entry, redis, monkeypatch) -> list[str]:
+def _in_process(monkeypatch, readiness):
+    monkeypatch.setattr(app_readiness, "application_readiness_registry", readiness)
+
+
+async def _data_bus_loads(entry, monkeypatch) -> list[str]:
     loaded: list[str] = []
 
     def manifest(spec, *, bundle_id):
         loaded.append(str(spec.path))
         return SimpleNamespace(data_bus_handlers=())
 
-    from kdcube_ai_app.infra.plugin import app_readiness
-
     monkeypatch.setattr(data_bus_worker, "load_bundle_manifest", manifest)
-    monkeypatch.setattr(app_readiness.application_readiness_registry, "require_ready", lambda **kwargs: None)
-    manager = data_bus_worker.DataBusRuntimeManager(redis=redis, redis_url=None, tenant=T, project=P, instance_id="i")
+    manager = data_bus_worker.DataBusRuntimeManager(redis=object(), redis_url=None, tenant=T, project=P, instance_id="i")
     try:
         await manager.reconcile(SimpleNamespace(bundles={BUNDLE_ID: entry}))
     finally:
@@ -91,12 +94,12 @@ async def _data_bus_loads(entry, redis, monkeypatch) -> list[str]:
     return loaded
 
 
-async def _request_path_spec(entry, redis, monkeypatch):
+async def _request_path(entry, monkeypatch):
     async def registry(_redis, tenant=None, project=None):
         return BundlesRegistry(default_bundle_id=BUNDLE_ID, bundles={BUNDLE_ID: entry})
 
     monkeypatch.setattr(bundle_store, "load_registry", registry)
-    return await bundle_store.resolve_bundle_spec_from_store(redis, tenant=T, project=P, bundle_id=BUNDLE_ID)
+    return await bundle_store.resolve_bundle_spec_from_store(object(), tenant=T, project=P, bundle_id=BUNDLE_ID)
 
 
 def _content(path) -> str:
@@ -105,75 +108,73 @@ def _content(path) -> str:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ref_kind", ["sha", "branch"])
-async def test_a_descriptor_pin_loads_the_prepared_snapshot_on_both_paths(pinned, monkeypatch, ref_kind):
-    bundle, commit = pinned
-    ref = commit if ref_kind == "sha" else "release"  # the descriptor documents "any ref"
-    redis = _Redis()
-    snapshot = await _prepare(redis, bundle, ref)
-    entry = _entry(bundle, commit=ref, require=True)
+async def test_a_descriptor_pin_runs_the_prepared_snapshot_on_every_consumer(repo, monkeypatch, ref_kind):
+    readiness = ApplicationReadinessRegistry()
+    _in_process(monkeypatch, readiness)
+    ref = repo.B if ref_kind == "sha" else "HEAD"
+    snapshot = await _prepare(readiness, repo.bundle, ref)
+    entry = _entry(repo.bundle, commit=ref, require=True)
 
-    assert await _data_bus_loads(entry, redis, monkeypatch) == [snapshot]
-    spec = await _request_path_spec(entry, redis, monkeypatch)
-    assert spec.path == snapshot and _content(spec.path) == "VERSION = 'A'\n"
-
-
-@pytest.mark.asyncio
-async def test_a_reload_pin_reaches_both_paths_through_the_record(pinned, monkeypatch):
-    """The reload's pin never reaches bundles.yaml: the descriptor entry names no commit."""
-    bundle, commit = pinned
-    redis = _Redis()
-    snapshot = await _prepare(redis, bundle, commit)
-    entry = _entry(bundle)
-
-    assert await _data_bus_loads(entry, redis, monkeypatch) == [snapshot]
-    assert (await _request_path_spec(entry, redis, monkeypatch)).path == snapshot
+    assert await _data_bus_loads(entry, monkeypatch) == [snapshot]
+    spec = await _request_path(entry, monkeypatch)
+    assert spec.path == snapshot and _content(spec.path) == "VERSION = 'B'\n"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["not-prepared", "require-without-commit", "record-for-another-commit",
-                                  "snapshot-removed"])
-async def test_a_pin_without_a_matching_prepared_snapshot_refuses_and_never_loads_the_mounted_folder(
-        pinned, monkeypatch, case):
-    bundle, commit = pinned
-    redis = _Redis()
-    entry = _entry(bundle, commit=commit, require=True)
-    if case == "require-without-commit":
-        entry = _entry(bundle, require=True)
-    if case == "record-for-another-commit":
-        await snap.write_activation_record(redis, tenant=T, project=P, bundle_id=BUNDLE_ID, ref="0" * 40,
-                                           commit="0" * 40, path=str(bundle))
-    if case == "snapshot-removed":
-        snapshot = await _prepare(redis, bundle, commit)
-        (pathlib.Path(snapshot) / snap.SNAPSHOT_MARKER).unlink()
+async def test_f1_a_reload_to_b_over_a_descriptor_pinned_to_a_runs_b_on_every_consumer(repo, monkeypatch):
+    """claude-ops F1: the lifecycle runs the reload's B, so every consumer in that process runs B."""
+    readiness = ApplicationReadinessRegistry()
+    _in_process(monkeypatch, readiness)
+    await _prepare(readiness, repo.bundle, repo.A, generation="g1")
+    snapshot_b = await _prepare(readiness, repo.bundle, repo.B, generation="g2")
+    entry = _entry(repo.bundle, commit=repo.A, require=True)  # bundles.yaml still says A
 
-    assert await _data_bus_loads(entry, redis, monkeypatch) == []
+    assert await _data_bus_loads(entry, monkeypatch) == [snapshot_b]
+    assert _content((await _request_path(entry, monkeypatch)).path) == "VERSION = 'B'\n"
+
+
+@pytest.mark.asyncio
+async def test_two_processes_a_restart_in_y_does_not_change_what_x_runs(repo, monkeypatch):
+    """claude-ops F2: each process answers from its own preparation; nothing is shared."""
+    x, y = ApplicationReadinessRegistry(), ApplicationReadinessRegistry()
+    entry = _entry(repo.bundle, commit=repo.A, require=True)
+    await _prepare(x, repo.bundle, repo.A)
+    snapshot_b = await _prepare(x, repo.bundle, repo.B, generation="g2")   # X reloaded to B
+    await _prepare(y, repo.bundle, repo.A, generation="g9")                # Y restarted from the descriptor
+
+    assert snap.pinned_snapshot_path(entry, tenant=T, project=P, readiness=x) == snapshot_b
+    assert _content(snap.pinned_snapshot_path(entry, tenant=T, project=P, readiness=y)) == "VERSION = 'A'\n"
+    _in_process(monkeypatch, x)
+    assert await _data_bus_loads(entry, monkeypatch) == [snapshot_b]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["no-lifecycle-record", "preparing", "prepared-unpinned", "require-without-commit"])
+async def test_a_pinned_app_this_process_has_not_prepared_refuses_and_never_runs_the_mounted_folder(
+        repo, monkeypatch, case):
+    """A new or restarted process, a startup race, or a process without a lifecycle: refuse."""
+    readiness = ApplicationReadinessRegistry()
+    _in_process(monkeypatch, readiness)
+    entry = _entry(repo.bundle, require=True) if case == "require-without-commit" else _entry(repo.bundle, commit=repo.A)
+    if case == "preparing":
+        await _prepare(readiness, repo.bundle, repo.A)
+        readiness.replace_desired(tenant=T, project=P, applications={BUNDLE_ID: DesiredApplicationState(generation="g2")})
+        readiness.transition(tenant=T, project=P, application_id=BUNDLE_ID, generation="g2",
+                             state=ApplicationLifecycleState.PREPARING)
+    if case == "prepared-unpinned":
+        await _prepare(readiness, repo.bundle, None)  # prepared before the descriptor was pinned
+
+    assert await _data_bus_loads(entry, monkeypatch) == []
     with pytest.raises(snap.BundleSnapshotError) as refused:
-        await _request_path_spec(entry, redis, monkeypatch)
+        await _request_path(entry, monkeypatch)
     assert refused.value.code == "bundle_snapshot_not_prepared"
 
 
 @pytest.mark.asyncio
-async def test_an_unpinned_app_keeps_its_declared_path(pinned, monkeypatch):
-    bundle, _ = pinned
-    redis = _Redis()
-    entry = _entry(bundle)
-    assert await _data_bus_loads(entry, redis, monkeypatch) == [str(bundle)]
-    assert (await _request_path_spec(entry, redis, monkeypatch)).path == str(bundle)
-
-
-@pytest.mark.asyncio
-async def test_the_lifecycle_records_a_pinned_preparation_and_clears_an_unpinned_one(pinned):
-    from kdcube_ai_app.apps.chat.proc.app_lifecycle.runtime import ProcApplicationLifecycle
-
-    bundle, commit = pinned
-    redis = _Redis()
-    lifecycle = object.__new__(ProcApplicationLifecycle)
-    lifecycle.redis, lifecycle.tenant, lifecycle.project = redis, T, P
-    resolved = await snap.resolve_activation_entry({"id": BUNDLE_ID, "path": str(bundle), "activation": {"commit": "release"}})
-
-    await lifecycle._record_activation(_entry(bundle, commit="release"), resolved)
-    record = await snap.read_activation_record(redis, tenant=T, project=P, bundle_id=BUNDLE_ID)
-    assert record["commit"] == commit and record["ref"] == "release" and record["path"] == resolved["path"]
-
-    await lifecycle._record_activation(_entry(bundle), {"id": BUNDLE_ID, "path": str(bundle), "source": {}})
-    assert await snap.read_activation_record(redis, tenant=T, project=P, bundle_id=BUNDLE_ID) is None
+async def test_an_unpinned_app_keeps_its_declared_path(repo, monkeypatch):
+    readiness = ApplicationReadinessRegistry()
+    _in_process(monkeypatch, readiness)
+    await _prepare(readiness, repo.bundle, None)
+    entry = _entry(repo.bundle)
+    assert await _data_bus_loads(entry, monkeypatch) == [str(repo.bundle)]
+    assert (await _request_path(entry, monkeypatch)).path == str(repo.bundle)

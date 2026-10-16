@@ -1055,7 +1055,7 @@ async def resolve_bundle_spec_from_store(
     if not t or not p:
         t2, p2 = _tp_from_env()
         t, p = t or t2, p or p2
-    snapshot_path = await pinned_snapshot_path(entry, redis=redis, tenant=t, project=p)
+    snapshot_path = pinned_snapshot_path(entry, tenant=t, project=p)
     if snapshot_path is not None:
         entry = entry.model_copy(update={"path": snapshot_path, "mounted_path": entry.path})
     return bundle_entry_to_spec(entry)

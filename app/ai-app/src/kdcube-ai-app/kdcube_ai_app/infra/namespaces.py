@@ -106,8 +106,6 @@ class CONFIG:
         BUNDLE_MAPPING_KEY_FMT = "kdcube:config:bundles:mapping:{tenant}:{project}"
         UPDATE_CHANNEL = "kdcube:config:bundles:update:{tenant}:{project}"
         PROPS_KEY_FMT = "kdcube:config:bundles:props:{tenant}:{project}:{bundle_id}"
-        # W333: the snapshot the lifecycle prepared for a pinned app (bundle_snapshot.write_activation_record).
-        ACTIVATION_KEY_FMT = "kdcube:config:bundles:activation:{tenant}:{project}:{bundle_id}"
         PROPS_UPDATE_CHANNEL = "kdcube:config:bundles:props:update:{tenant}:{project}"
         SECRETS_KEYS_FMT = "kdcube:config:bundles:secrets:{tenant}:{project}:{bundle_id}"
         USER_SECRETS_KEYS_FMT = "kdcube:config:bundles:user-secrets:{tenant}:{project}:{bundle_id}:{user_id}"

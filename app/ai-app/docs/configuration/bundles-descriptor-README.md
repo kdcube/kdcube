@@ -975,32 +975,28 @@ entry (`repo`/`ref`) refuses `--commit`: its version is its `ref`.
 
 ### Every consumer of a pinned app runs the snapshot
 
-The request path (REST and MCP operations, widgets) and the Data Bus
-consumers run the same snapshot as the activation, never the mounted folder.
-When the proc prepares a pinned app (at startup, reconcile and reload), it
-writes an activation record for that app: the ref, the full sha and the
-snapshot path, under
-`kdcube:config:bundles:activation:{tenant}:{project}:{bundle_id}` (see
-[Runtime configuration and secrets store](runtime-configuration-and-secrets-store-README.md#redis-role-in-pinned-activations)).
-Each consumer reads that record. That is one Redis read, plus a check that
-the snapshot's marker names the same sha; no git runs on a request.
+In each proc process, the request path (REST and MCP operations, peer calls,
+widgets) and the Data Bus consumers run the snapshot that this process's app
+lifecycle prepared and imported, never the mounted folder. The lifecycle
+records what it imported on the app's readiness record in that process; each
+consumer reads it there. No shared store and no git run on a request.
 
-A pin reaches every consumer through the record, including a `--commit` pin
-from a reload that the descriptor never sees. When an app is pinned
-(`activation.commit`, `require_commit: true`, or a reload pin) and there is
-no matching record, the consumer refuses with
-`bundle_snapshot_not_prepared`:
+- **A descriptor pin** (`activation.commit`, any ref) runs in every process,
+  because each process prepares it from the descriptor at startup and
+  reconcile.
+- **A `--commit` reload pin** runs in the process that prepared it, on every
+  consumer of that process. It is not durable: the descriptor does not hold
+  it, so a restarted or another process runs the descriptor's pin, or the
+  mounted folder for an unpinned app, as described above.
+- **A pinned app this process has not prepared as a snapshot** refuses with
+  `bundle_snapshot_not_prepared`. That covers a new or restarting process, a
+  preparation in progress, and `require_commit: true` with no commit. A REST
+  call answers `503`; the Data Bus leaves that app's handlers inactive, with a
+  log line. Neither ever falls back to the mounted folder.
 
-- a REST call answers `503`;
-- the Data Bus leaves that app's handlers inactive, with a log line.
-
-Neither ever falls back to the mounted folder. A record matches when it
-names the descriptor's `activation.commit` as its ref or its sha, so a
-branch or short sha works as documented above. A later unpinned preparation
-of the app clears its record.
-
-`kdcube bundle status` shows the record and the path both consumers resolve
-under `consumers` (`activation_record`, `path`, or `refused` with the code).
+`kdcube bundle status` shows, for the proc process that answered, the path
+both consumers load and the prepared snapshot's commit (`consumers`, scoped
+to that process; another proc process answers for itself).
 
 ## `bundles.yaml` by run mode
 

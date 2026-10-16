@@ -58,11 +58,7 @@ from kdcube_ai_app.infra.plugin.bundle_registry import (
     resolve_git_bundle_entry_async,
     upsert_bundles_async,
 )
-from kdcube_ai_app.infra.plugin.bundle_snapshot import (
-    bundle_source_identity,
-    clear_activation_record,
-    write_activation_record,
-)
+from kdcube_ai_app.infra.plugin.bundle_snapshot import bundle_source_identity
 from kdcube_ai_app.infra.plugin.bundle_store import (
     BundleEntry,
     BundlesRegistry,
@@ -463,34 +459,10 @@ class ProcApplicationLifecycle:
             resolve_git=False,
             source="application.preparation.resolved",
         )
-        await self._record_activation(entry, resolved)
         return resolved_entry, bundle_source_identity(
             resolved.get("source"),
             entry=registry_entry,
         )
-
-    async def _record_activation(self, entry: BundleEntry, resolved: dict[str, Any]) -> None:
-        """W333: tell every consumer which snapshot a pinned app loads (or that it is no longer pinned).
-
-        The request path and the Data Bus resolve the app from the descriptor, which never
-        carries a reload's pin. They read this record instead, and refuse without one.
-        """
-        if not (callable(getattr(self.redis, "set", None)) and callable(getattr(self.redis, "delete", None))):
-            return  # no shared store in this runtime (tests, tools): nothing to tell other consumers
-        source = resolved.get("source") or {}
-        commit = str(source.get("commit") or "").strip()
-        snapshot_path = str(resolved.get("path") or "").strip()
-        if resolved.get("mounted_path") and commit and snapshot_path:
-            # A failed write fails the preparation: consumers would otherwise refuse anyway.
-            await write_activation_record(
-                self.redis, tenant=self.tenant, project=self.project, bundle_id=entry.id,
-                ref=str(source.get("ref") or commit), commit=commit, path=snapshot_path,
-            )
-        elif not resolved.get("repo"):
-            try:
-                await clear_activation_record(self.redis, tenant=self.tenant, project=self.project, bundle_id=entry.id)
-            except Exception:
-                self.logger.warning("Could not clear the activation record of unpinned app %s", entry.id, exc_info=True)
 
     async def _prepare(self, preparation: ApplicationPreparation) -> None:
         entry = preparation.payload
@@ -582,6 +554,16 @@ class ProcApplicationLifecycle:
             "application_generation": preparation.generation,
             "path": resolved_entry.path,
         }
+        # W333: this process's request path, peer calls and Data Bus run what it imported here.
+        pinned = bool(source_identity.get("mounted_path") and source_identity.get("commit"))
+        self.registry.record_prepared_source(
+            tenant=self.tenant,
+            project=self.project,
+            application_id=resolved_entry.id,
+            generation=preparation.generation,
+            path=resolved_entry.path if pinned else None,
+            commit=str(source_identity.get("commit")) if pinned else None,
+        )
 
     async def wait_for_current(self) -> None:
         await self.supervisor.wait_for_current()
