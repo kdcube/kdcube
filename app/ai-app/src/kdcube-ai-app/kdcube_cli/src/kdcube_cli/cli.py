@@ -66,6 +66,7 @@ from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
 from kdcube_cli.runtime_secrets_export import (
     export_runtime_secrets_folder,
     merge_app_secrets,
+    merge_user_secrets,
     filter_user_secrets,
     write_provider_values,
 )
@@ -2757,9 +2758,13 @@ def _write_bootstrap_export(
     ]
     exported = write_provider_values(out_dir, values, include_user_data=include_user_data)
     secrets_path = out_dir / "secrets.yaml"
+    secrets_document = _nest_platform_values(exported.platform_values)
+    if include_user_data and exported.user_secrets:
+        # W890: the users root the cloud secrets intake reads, from the same values as secrets/.
+        secrets_document = merge_user_secrets(secrets_document, exported.user_secrets)
     write_descriptor_text(
         secrets_path,
-        yaml.safe_dump(_nest_platform_values(exported.platform_values), sort_keys=False, allow_unicode=True),
+        yaml.safe_dump(secrets_document, sort_keys=False, allow_unicode=True),
     )
     bundles_secrets_path = out_dir / "bundles.secrets.yaml"
     write_descriptor_text(
@@ -2823,6 +2828,15 @@ def _export_runtime_secrets(
     legacy_acquired = int((legacy_yaml or {}).get("acquired_tokens_left_out") or 0)
     files[0]["legacy_yaml_user_entries_left_out"] = legacy_user_entries
     files[0]["acquired_tokens_left_out"] += legacy_acquired
+    secrets_path = out_dir / "secrets.yaml"
+    if include_user_data and exported.user_secrets and secrets_path.exists():
+        # W890: the users root the cloud secrets intake reads, from the same values as secrets/.
+        current_secrets = yaml.safe_load(secrets_path.read_text(encoding="utf-8")) or {}
+        write_descriptor_text(
+            secrets_path,
+            yaml.safe_dump(merge_user_secrets(current_secrets, exported.user_secrets), sort_keys=False,
+                           allow_unicode=True),
+        )
     if exported.app_secrets:
         bundles_secrets_path = out_dir / "bundles.secrets.yaml"
         current = yaml.safe_load(bundles_secrets_path.read_text(encoding="utf-8")) if bundles_secrets_path.exists() else {}

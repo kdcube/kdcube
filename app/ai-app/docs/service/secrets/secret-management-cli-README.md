@@ -294,9 +294,11 @@ The output directory contains the ordinary descriptor set plus `secrets.yaml`
 (platform values), `secrets/` (app secrets in the folder layout the file
 backend reads, `secrets/<bundle>/<key>.json`) and `bundles.secrets.yaml`, which
 repeats the app secrets as `secrets:` blocks so a provider-backed import can
-write them. With `--include-user-data` it adds the per-user secrets
-(`secrets/<bundle>/users/<user>/<key>.json`) and the user props
-(`user-data/user_bundle_props.json`); the browser approval page states whether
+write them. Both YAML files are nested, so the pair is also the cloud secrets
+bootstrap. With `--include-user-data` it adds the per-user secrets
+(`secrets/<bundle>/users/<user>/<key>.json`, and the same values as the
+`users` root of `secrets.yaml`, where a user secret with no app also goes) and
+the user props (`user-data/user_bundle_props.json`); the browser approval page states whether
 user props are included. Tokens Connection Hub acquires at runtime are never
 exported, and a user secret that belongs to no app refuses the export. An
 existing descriptor pair is replaced only with `--replace-descriptor-files`,

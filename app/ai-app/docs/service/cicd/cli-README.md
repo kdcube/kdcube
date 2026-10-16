@@ -895,7 +895,15 @@ user-data/user_bundle_props.json             user props from PostgreSQL (only wi
 ```
 
 The `secrets:` blocks let a provider-backed `kdcube config import` write the
-app secrets into its store. User props are read inside the running processor
+app secrets into its store. Both YAML files are written nested, the shape the
+secrets readers resolve (`a.b` is read as `a: {b: …}`), so the pair is also the
+cloud secrets bootstrap (`SECRETS_YAML` and `BUNDLES_SECRETS_YAML`, written into
+AWS Secrets Manager by the ECS secrets intake). With `--include-user-data`,
+`secrets.yaml` also carries the `users` root built from the same values as
+`secrets/`: `users.<user>.bundles.<bundle>.secrets`, and `users.<user>.secrets`
+for a user secret that belongs to no app (it has no folder home). Two keys where
+one is below the other (`token` and `token.child`) cannot both be nested; the
+export refuses rather than drop one. User props have no cloud intake yet. User props are read inside the running processor
 with its own database connection (`docker compose exec chat-proc`), so the
 runtime must be started; each row keeps `user_id`, `bundle_id`, `key`,
 `subsystem` and its JSON value as text.

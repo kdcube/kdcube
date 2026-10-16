@@ -47,6 +47,8 @@ class RuntimeSecretsExport:
     acquired_tokens_left_out: int = 0
     runtime_record_folders_left_out: int = 0
     platform_values: dict[str, str] = field(default_factory=dict)  # provider exports only
+    # W890: (user id, bundle id or "" for a bundle-less one) -> key -> value, for the users root of secrets.yaml
+    user_secrets: dict[tuple[str, str], dict[str, str]] = field(default_factory=dict)
 
 
 def export_runtime_secrets_folder(
@@ -76,7 +78,7 @@ def export_runtime_secrets_folder(
                     result.runtime_record_folders_left_out += 1
                     continue
                 _copy_users(Path(entry.path), bundle_target / USERS_FOLDER, result,
-                            include_user_data=include_user_data)
+                            include_user_data=include_user_data, bundle_id=bundle.name)
                 continue
             if not entry.is_file(follow_symlinks=False) or not entry.name.endswith(_RECORD_SUFFIX):
                 continue
@@ -89,7 +91,8 @@ def export_runtime_secrets_folder(
     return result
 
 
-def _copy_users(source: Path, target: Path, result: RuntimeSecretsExport, *, include_user_data: bool) -> None:
+def _copy_users(source: Path, target: Path, result: RuntimeSecretsExport, *, include_user_data: bool,
+                bundle_id: str) -> None:
     for person in _entries(source):
         if not person.is_dir(follow_symlinks=False):
             continue
@@ -106,9 +109,12 @@ def _copy_users(source: Path, target: Path, result: RuntimeSecretsExport, *, inc
             _ensure_folder(target.parent)
             _ensure_folder(target)
             _ensure_folder(person_target)
-            _write_record(person_target / entry.name, _read_record(Path(entry.path)))
+            data = _read_record(Path(entry.path))
+            _write_record(person_target / entry.name, data)
             result.record_count += 1
             result.user_record_count += 1
+            key = unquote(entry.name[: -len(_RECORD_SUFFIX)])
+            result.user_secrets.setdefault((unquote(person.name), bundle_id), {})[key] = _record_value(data)
 
 
 def _entries(folder: Path) -> list[os.DirEntry]:
@@ -173,11 +179,32 @@ def _flatten(prefix: str, node: object, output: dict[str, object]) -> None:
         output[prefix] = node
 
 
+def nest_values(flat: dict[str, object], *, where: str) -> dict[str, object]:
+    """Dotted keys as the nested mapping the secrets readers resolve (aws-sm and the secrets-file provider
+    read ``a.b`` as ``doc["a"]["b"]``). A key with another key below it (``token`` and ``token.child``)
+    cannot be nested; the export refuses rather than drop one (W890)."""
+    root: dict[str, object] = {}
+    for key in sorted(flat):
+        node = root
+        parts = key.split(".")
+        for part in parts[:-1]:
+            child = node.setdefault(part, {})
+            if not isinstance(child, dict):
+                raise RuntimeSecretsExportError(
+                    f"Two secrets of {where} cannot both be written to the descriptor (one is below the other)."
+                )
+            node = child
+        if parts[-1] in node:
+            raise RuntimeSecretsExportError(
+                f"Two secrets of {where} cannot both be written to the descriptor (one is below the other)."
+            )
+        node[parts[-1]] = flat[key]
+    return root
+
+
 def merge_app_secrets(bundles_secrets: dict, app_secrets: dict[str, dict[str, str]]) -> dict:
-    """``bundles.secrets.yaml`` with each app secret in its bundle item's ``secrets:``, so a provider-backed
-    ``config import`` can write them into its store. Keys are written flat and dotted, exactly as the folder
-    holds them: the importer flattens a mapping to the same dotted keys, and flat keys keep both ``token``
-    and ``token.child`` (nesting would have to drop one). The folder value wins over an older YAML one."""
+    """``bundles.secrets.yaml`` with each app secret in its bundle item's ``secrets:`` block, nested as the
+    secrets readers and the cloud secrets intake read them. The folder value wins over an older YAML one."""
     document = dict(bundles_secrets or {})
     bundles = dict(document.get("bundles") or {"version": "1", "items": []})
     items = [dict(item) for item in (bundles.get("items") or []) if isinstance(item, dict)]
@@ -192,10 +219,37 @@ def merge_app_secrets(bundles_secrets: dict, app_secrets: dict[str, dict[str, st
         if isinstance(item.get("secrets"), dict):
             _flatten("", item["secrets"], flat)
         flat.update(app_secrets[bundle_id])
-        item["secrets"] = {key: flat[key] for key in sorted(flat)}
+        item["secrets"] = nest_values(flat, where=f"application {bundle_id}")
     bundles["items"] = items
     bundles.setdefault("version", "1")
     document["bundles"] = bundles
+    return document
+
+
+def merge_user_secrets(global_secrets: dict, user_secrets: dict[tuple[str, str], dict[str, str]]) -> dict:
+    """``secrets.yaml`` with the ``users`` root the secrets readers and the cloud intake read:
+    ``users.<user>.bundles.<bundle>.secrets`` and bundle-less ``users.<user>.secrets``, nested, from the same
+    values the ``secrets/`` folder holds (W890). An existing legacy entry is kept; the folder value wins."""
+    document = dict(global_secrets or {})
+    users = {user: dict(entry) for user, entry in dict(document.get("users") or {}).items() if isinstance(entry, dict)}
+    for (user_id, bundle_id), values in sorted(user_secrets.items()):
+        entry = users.setdefault(user_id, {})
+        if bundle_id:
+            bundles = entry.setdefault("bundles", {})
+            current = bundles.get(bundle_id, {}).get("secrets") if isinstance(bundles.get(bundle_id), dict) else None
+            flat: dict[str, object] = {}
+            if isinstance(current, dict):
+                _flatten("", current, flat)
+            flat.update(values)
+            bundles[bundle_id] = {"secrets": nest_values(flat, where=f"a user of application {bundle_id}")}
+        else:
+            flat = {}
+            if isinstance(entry.get("secrets"), dict):
+                _flatten("", entry["secrets"], flat)
+            flat.update(values)
+            entry["secrets"] = nest_values(flat, where="a user")
+    if users:
+        document["users"] = {user: users[user] for user in sorted(users)}
     return document
 
 
@@ -206,7 +260,7 @@ def _without_acquired(secrets: object, removed: list[int]) -> object:
     _flatten("", secrets, flat)
     kept = {key: value for key, value in flat.items() if not key.startswith(EXCLUDED_USER_PREFIXES)}
     removed[0] += len(flat) - len(kept)
-    return {key: kept[key] for key in sorted(kept)}
+    return nest_values(kept, where="a user")
 
 
 def filter_user_secrets(global_secrets: dict, *, include_user_data: bool) -> tuple[dict, int, int]:
@@ -271,17 +325,13 @@ def write_provider_values(
 ) -> RuntimeSecretsExport:
     """W885: approved provider values (scope, bundle_id, user_id, key, value) in the same ``secrets/`` layout a
     secrets-file export copies, so every source store gives the same output. Platform values are returned in
-    ``platform_values`` for ``secrets.yaml``; a user secret with no bundle has no folder home and refuses."""
+    ``platform_values`` for ``secrets.yaml``. A user secret with no bundle has no folder home: with
+    include_user_data it goes only to the ``users`` root of ``secrets.yaml`` (W890)."""
     target = out_dir / EXPORT_FOLDER
     if target.exists() or target.is_symlink():
         raise RuntimeSecretsExportError(
             f"{target} already exists; remove it or choose another --out-dir, so the export holds only "
             "the current runtime secrets."
-        )
-    bundle_less = sum(1 for scope, bundle_id, *_rest in values if scope == "user" and not bundle_id)
-    if bundle_less:
-        raise RuntimeSecretsExportError(
-            f"{bundle_less} user secrets belong to no app and have no place in the secrets folder; export refused."
         )
     result = RuntimeSecretsExport(target=target)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -297,6 +347,9 @@ def write_provider_values(
             if not include_user_data:
                 result.user_records_left_out += 1
                 continue
+            result.user_secrets.setdefault((user_id, bundle_id or ""), {})[key] = value
+            if not bundle_id:
+                continue  # no folder home; secrets.yaml users.<user>.secrets carries it
             folder = target / bundle_id / USERS_FOLDER / encode_segment(user_id)
             for part in (target / bundle_id, target / bundle_id / USERS_FOLDER, folder):
                 _ensure_folder(part)

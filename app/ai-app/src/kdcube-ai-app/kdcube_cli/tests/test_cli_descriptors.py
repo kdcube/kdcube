@@ -4795,7 +4795,7 @@ def test_provider_backed_config_export_writes_one_complete_descriptor_directory(
         (output / "bundles.secrets.yaml").read_text(encoding="utf-8")
     )
     assert platform == {"platform": {"services": {"fixture": {"token": "platform-export-canary"}}}}
-    assert bundles["bundles"]["items"][0]["secrets"]["provider.token"] == "bundle-export-canary"
+    assert bundles["bundles"]["items"][0]["secrets"]["provider"]["token"] == "bundle-export-canary"
     assert (output / "secrets" / "demo.bundle" / "provider.token.json").read_text() == (
         '{"value": "bundle-export-canary"}'
     )
