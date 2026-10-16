@@ -845,7 +845,12 @@ config/secrets/
   session, the one-time migration, `kdcube-secrets`) hands everything it
   creates to that owner; any other uid is refused. At start, chat-proc's
   entrypoint and `kdcube-secrets` re-own root-owned entries to the owner
-  (only uid 0; modes untouched; other owners stay refused). The isolated
+  (only uid 0; modes untouched; other owners stay refused). Every owner change
+  is read back by name: a Docker Desktop for macOS bind mount ignores `fchown`
+  on the descriptor that created a file, without an error, so the change is
+  then made by name (`fchownat`, no-follow, same inode). A record whose owner
+  still cannot be set is refused (writers) or reported as deferred (repair),
+  never published or counted as adopted root-owned (W885). The isolated
   runtime receives the records as a payload, and its root supervisor keeps
   its own private copy; generated code (uid 1001) cannot read it.
 - User ids and key paths are percent-encoded (everything outside
