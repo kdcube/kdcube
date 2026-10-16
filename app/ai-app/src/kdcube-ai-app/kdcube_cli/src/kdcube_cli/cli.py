@@ -53,7 +53,7 @@ from kdcube_cli.control import (
 )
 from kdcube_cli.compose_profiles import PROXYLOGIN_PROFILE
 from kdcube_cli.compose_source import ComposeSourceError, require_compose_source
-from kdcube_cli.descriptor_files import copy_descriptor_file
+from kdcube_cli.descriptor_files import copy_descriptor_file, write_descriptor_text
 from kdcube_cli.deployment_provenance import (
     DeploymentProvenanceError,
     collect_running_service_attestation,
@@ -63,8 +63,14 @@ from kdcube_cli.deployment_provenance import (
 )
 from kdcube_cli.docker_storage import build_storage_maintenance_commands
 from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
+from kdcube_cli.runtime_secrets_export import (
+    export_runtime_secrets_folder,
+    merge_app_secrets,
+    filter_user_secrets,
+)
 from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
+    runtime_compose_environment as host_runtime_compose_environment,
 )
 from kdcube_cli.host_vault import (
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
@@ -2522,20 +2528,35 @@ def _denormalize_exported_assembly_descriptor(data: dict[str, object]) -> bool:
     return changed
 
 
-def _export_platform_descriptor_file(source: Path, target: Path) -> None:
+def _export_platform_descriptor_file(
+    source: Path, target: Path, *, user_data_gate: bool | None = None
+) -> tuple[int, int]:
+    """Copy one platform descriptor. With ``user_data_gate`` set (a secrets-file bootstrap export, W885),
+    ``secrets.yaml`` is written already filtered, so its users root never reaches the output unless the gate
+    is open. Returns (user entries left out, acquired tokens left out)."""
+    if source.name == "secrets.yaml" and user_data_gate is not None:
+        filtered, left_out, acquired = filter_user_secrets(
+            yaml.safe_load(source.read_text(encoding="utf-8")) or {}, include_user_data=user_data_gate
+        )
+        if left_out or acquired:
+            write_descriptor_text(target, yaml.safe_dump(filtered, sort_keys=False, allow_unicode=True))
+        else:
+            copy_descriptor_file(source, target)
+        return left_out, acquired
     if source.name != "assembly.yaml":
         copy_descriptor_file(source, target)
-        return
+        return 0, 0
 
     data = installer_mod.load_release_descriptor_soft(source)
     if not data or not _denormalize_exported_assembly_descriptor(data):
         shutil.copyfile(source, target)
-        return
+        return 0, 0
 
     target.write_text(
         yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
     )
+    return 0, 0
 
 
 def _apply_platform_descriptor_file(
@@ -2586,6 +2607,7 @@ def _export_platform_descriptors(
     out_dir: Path,
     quiet: bool = False,
     include_secret_descriptor: bool = True,
+    user_data_gate: bool | None = None,
 ) -> list[dict[str, object]]:
     files: list[dict[str, object]] = []
     for name in PLATFORM_DESCRIPTOR_FILENAMES:
@@ -2596,19 +2618,156 @@ def _export_platform_descriptors(
         if not source.exists():
             raise SystemExit(f"{name} not found under runtime config directory: {config_dir}")
         out_dir.mkdir(parents=True, exist_ok=True)
-        _export_platform_descriptor_file(source, target)
-        files.append(
-            {
-                "name": name,
-                "source": str(source),
-                "target": str(target),
-                "size_bytes": target.stat().st_size,
-            }
-        )
+        left_out, acquired = _export_platform_descriptor_file(source, target, user_data_gate=user_data_gate)
+        entry: dict[str, object] = {
+            "name": name,
+            "source": str(source),
+            "target": str(target),
+            "size_bytes": target.stat().st_size,
+        }
+        if name == "secrets.yaml" and user_data_gate is not None:
+            entry["user_entries_left_out"] = left_out
+            entry["acquired_tokens_left_out"] = acquired
+        files.append(entry)
     if not quiet:
         console.print("[green]Exported platform descriptors.[/green]")
         for item in files:
             console.print(f"[dim]  {item['name']}:[/dim] {item['target']}")
+    return files
+
+
+def _runtime_secrets_host_root(config_dir: Path) -> Path:
+    """The host folder of the runtime secrets: ``secrets.runtime.root`` mapped under the config folder,
+    else ``<config folder>/secrets`` (W670 K2), resolved exactly as the installer mounts it."""
+    assembly = installer_mod.load_release_descriptor_soft(config_dir / "assembly.yaml")
+    try:
+        runtime_env = host_runtime_compose_environment(
+            assembly, host_config_dir=Path(config_dir).expanduser().resolve()
+        )
+    except HostVaultConfigurationError as exc:
+        raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
+    return Path(runtime_env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"])
+
+
+_USER_PROPS_EXPORT_SCRIPT = """
+import asyncio, json, sys
+from kdcube_ai_app.infra.props.manager import get_props_manager
+
+async def main():
+    manager = get_props_manager()
+    pool = await manager._pool()
+    async with pool.acquire() as con:
+        rows = await con.fetch(
+            "SELECT user_id, bundle_id, key, subsystem, value_json::text AS value_json "
+            f"FROM {manager._schema}.user_bundle_props ORDER BY user_id, bundle_id, key"
+        )
+    sys.stdout.write(json.dumps([dict(row) for row in rows], ensure_ascii=True) + "\\n")
+
+asyncio.run(main())
+"""
+
+
+def _read_user_props(*, repo_root: Path, workdir: Path, config_dir: Path) -> list[dict[str, object]]:
+    """user_bundle_props from inside the processor, with the runtime's own pool: no DSN on the host.
+    The rows travel on stdout and are never printed."""
+    env_file = config_dir / ".env"
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    command = ["docker", "compose", "--env-file", str(env_file), "exec", "-T", "chat-proc",
+               "python", "-c", _USER_PROPS_EXPORT_SCRIPT]
+    try:
+        result = subprocess.run(command, cwd=ctx.docker_dir, env=installer_mod.compose_env(env_file),
+                                text=True, capture_output=True, timeout=120, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit("User props could not be read from the running processor.") from exc
+    lines = [line for line in (result.stdout or "").splitlines() if line.strip()]
+    if result.returncode != 0 or not lines:
+        raise SystemExit("User props could not be read from the running processor (is the runtime started?).")
+    try:
+        rows = json.loads(lines[-1])
+    except ValueError as exc:
+        raise SystemExit("User props could not be read from the running processor.") from exc
+    if not isinstance(rows, list):
+        raise SystemExit("User props could not be read from the running processor.")
+    return rows
+
+
+def _write_private_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, ensure_ascii=True, indent=2, sort_keys=True)
+        stream.write("\n")
+    os.chmod(path, 0o600)
+
+
+def _export_runtime_secrets(
+    console: Console,
+    *,
+    config_dir: Path,
+    out_dir: Path,
+    include_user_data: bool,
+    quiet: bool = False,
+    repo_root: Path | None = None,
+    workdir: Path | None = None,
+    legacy_yaml: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """W885: the runtime secrets folder as ``out_dir/secrets``, its app secrets also as ``secrets:`` blocks
+    in ``bundles.secrets.yaml``, and with ``include_user_data`` the user props. Counts only, never a name or
+    value."""
+    exported = export_runtime_secrets_folder(
+        _runtime_secrets_host_root(config_dir), out_dir, include_user_data=include_user_data
+    )
+    files: list[dict[str, object]] = [
+        {
+            "name": "secrets/",
+            "source": "runtime secrets folder",
+            "target": str(exported.target),
+            "record_count": exported.record_count,
+            "user_record_count": exported.user_record_count,
+            "user_records_left_out": exported.user_records_left_out,
+            "acquired_tokens_left_out": exported.acquired_tokens_left_out,
+            "runtime_record_folders_left_out": exported.runtime_record_folders_left_out,
+            "include_user_data": include_user_data,
+        }
+    ]
+    legacy_user_entries = int((legacy_yaml or {}).get("user_entries_left_out") or 0)
+    legacy_acquired = int((legacy_yaml or {}).get("acquired_tokens_left_out") or 0)
+    files[0]["legacy_yaml_user_entries_left_out"] = legacy_user_entries
+    files[0]["acquired_tokens_left_out"] += legacy_acquired
+    if exported.app_secrets:
+        bundles_secrets_path = out_dir / "bundles.secrets.yaml"
+        current = yaml.safe_load(bundles_secrets_path.read_text(encoding="utf-8")) if bundles_secrets_path.exists() else {}
+        write_descriptor_text(
+            bundles_secrets_path,
+            yaml.safe_dump(merge_app_secrets(current or {}, exported.app_secrets), sort_keys=False, allow_unicode=True),
+        )
+    props_count = 0
+    if include_user_data:
+        rows = _read_user_props(repo_root=repo_root, workdir=workdir, config_dir=config_dir)
+        props_path = out_dir / "user-data" / "user_bundle_props.json"
+        _write_private_json(props_path, {"schema": "kdcube.export.user_bundle_props.v1", "rows": rows})
+        props_count = len(rows)
+        files.append({"name": "user-data/user_bundle_props.json", "target": str(props_path), "row_count": props_count})
+    if not quiet:
+        console.print("[green]Exported the runtime secrets folder.[/green]")
+        console.print(f"[dim]  secrets/:[/dim] {exported.target} ({exported.record_count} records)")
+        if exported.app_secrets:
+            console.print("[dim]  app secrets also written to bundles.secrets.yaml[/dim]")
+        if include_user_data:
+            console.print(f"[dim]  user props:[/dim] {props_count} rows")
+        if exported.user_records_left_out:
+            console.print(
+                f"[dim]  per-user secrets left out: {exported.user_records_left_out} "
+                "(add --include-user-data to export them)[/dim]"
+            )
+        if legacy_user_entries:
+            console.print(f"[dim]  user entries of the legacy secrets.yaml left out: {legacy_user_entries}[/dim]")
+        if exported.acquired_tokens_left_out or legacy_acquired:
+            console.print(
+                "[dim]  Connection Hub acquired tokens never exported: "
+                f"{exported.acquired_tokens_left_out + legacy_acquired}[/dim]"
+            )
     return files
 
 
@@ -5418,7 +5577,20 @@ def main() -> None:
     _sp.add_argument(
         "--include-platform-descriptors",
         action="store_true",
-        help="Include assembly.yaml, secrets.yaml, and gateway.yaml in addition to bundle descriptors",
+        help=(
+            "Include assembly.yaml, secrets.yaml, and gateway.yaml in addition to bundle descriptors. "
+            "With `config export` of a secrets-file runtime, also writes the runtime secrets folder "
+            "(app secrets) as secrets/ in the layout the services read."
+        ),
+    )
+    _sp.add_argument(
+        "--include-user-data",
+        action="store_true",
+        help=(
+            "With `config export --include-platform-descriptors` of a secrets-file runtime, also write "
+            "per-user secrets (secrets/<bundle>/users/) and user props (user-data/user_bundle_props.json). "
+            "Tokens Connection Hub acquires at runtime are never exported."
+        ),
     )
     _sp.add_argument("--aws-region", default="", help="With `config export`, AWS region for aws-sm bundle descriptor export")
     _sp.add_argument("--aws-profile", default="", help="With `config export`, AWS profile for aws-sm bundle descriptor export")
@@ -6655,6 +6827,13 @@ def main() -> None:
                         "--include-platform-descriptors so one browser-confirmed whole export "
                         "can reconstruct both ordinary secret descriptor files."
                     )
+                if args.include_user_data and (
+                    _provider_backed_export or not args.include_platform_descriptors
+                ):
+                    raise SystemExit(
+                        "--include-user-data applies to `kdcube config export "
+                        "--include-platform-descriptors` of a secrets-file runtime."
+                    )
                 export_live_bundle_descriptors(
                     _op_console,
                     tenant=_t,
@@ -6675,6 +6854,29 @@ def main() -> None:
                         out_dir=_out_dir,
                         quiet=bool(args.quiet or args.json_output),
                         include_secret_descriptor=not _provider_backed_export,
+                        # W885: secrets.yaml is written already filtered, before anything else can fail.
+                        user_data_gate=None if _provider_backed_export else bool(args.include_user_data),
+                    )
+                if args.include_platform_descriptors and not _provider_backed_export:
+                    # W885: app secrets, per-user secrets and runtime records live only in the runtime
+                    # secrets folder since W670; the export carries it as secrets/.
+                    _platform_files.extend(
+                        _export_runtime_secrets(
+                            _op_console,
+                            config_dir=_config_dir,
+                            out_dir=_out_dir,
+                            include_user_data=bool(args.include_user_data),
+                            quiet=bool(args.quiet or args.json_output),
+                            legacy_yaml=next(
+                                (item for item in _platform_files if item.get("name") == "secrets.yaml"), {}
+                            ),
+                            repo_root=_resolve_subcommand_repo(
+                                args.path, workdir=_resolved, path_provided=_arg_provided("--path")
+                            )
+                            if args.include_user_data
+                            else None,
+                            workdir=_resolved,
+                        )
                     )
                 _provider_export: dict[str, object] | None = None
                 if _provider_backed_export:
@@ -6756,6 +6958,8 @@ def main() -> None:
                     )
                 return
             if _action == "import":
+                if args.include_user_data:
+                    raise SystemExit("--include-user-data is only supported with `kdcube config export`.")
                 if (
                     str(getattr(args, "aws_region", "") or "").strip()
                     or str(getattr(args, "aws_profile", "") or "").strip()
@@ -6893,6 +7097,7 @@ def main() -> None:
                     or args.no_wait
                     or args.replace_descriptor_files
                     or args.skip_secret_values
+                    or args.include_user_data
                     or float(args.wait_seconds) != 300.0
                 ):
                     raise SystemExit(

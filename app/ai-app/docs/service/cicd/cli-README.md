@@ -875,6 +875,38 @@ When the selected provider is not `secrets-file`, export performs one browser-
 confirmed whole-inventory transaction and reconstructs all platform, bundle,
 user, and user-bundle values into the ordinary private descriptor pair.
 
+With the `secrets-file` provider, app and per-user secrets live only in the
+runtime secrets folder (`<workdir>/config/secrets`, or the host folder of a
+declared `secrets.runtime.root`), not in the two YAML files. Since the export is
+a configuration bootstrap, `--include-platform-descriptors` also writes:
+
+```text
+secrets/<bundle>/<key>.json                  app secrets, byte for byte
+secrets/<bundle>/users/<user>/<key>.json     per-user secrets (only with --include-user-data)
+bundles.secrets.yaml                         the app secrets again, as secrets: blocks per bundle
+user-data/user_bundle_props.json             user props from PostgreSQL (only with --include-user-data)
+```
+
+The `secrets:` blocks let a provider-backed `kdcube config import` write the
+app secrets into its store. User props are read inside the running processor
+with its own database connection (`docker compose exec chat-proc`), so the
+runtime must be started; each row keeps `user_id`, `bundle_id`, `key`,
+`subsystem` and its JSON value as text.
+
+Never exported: runtime-record folders (`login-attempts`, `card-credentials`,
+`oauth-refresh-tokens`) and the tokens Connection Hub acquires at runtime
+(per-user keys under `connections.accounts.`, `delegated_to_kdcube.`,
+`remote_mcp.`, `linkedin.accounts.`; see
+[connection-hub-token-storage-README.md](../../sdk/solutions/connections/connection-hub-token-storage-README.md)).
+Folders are `0700` and files `0600`, a symbolic link refuses the export, dot
+files are left out, and an existing `secrets/` in the out dir is refused rather
+than merged. The CLI prints counts only, never a secret name or value.
+
+`kdcube config import` does not place `secrets/` or the props. On a
+`secrets-file` target, copy `secrets/` into the target's secrets folder with its
+modes before `kdcube start` (`cp -Rp "$OUT_DIR/secrets/." "$WORKDIR/config/secrets/"`),
+owned by the user the runtime runs as.
+
 ### 2.3f Reconfigure authentication — `kdcube config apply`<a id="config-apply-auth"></a>
 
 `kdcube config apply` changes the platform authentication of an already-initialized
@@ -913,6 +945,7 @@ copy of the container runtime files:
 | --- | --- |
 | `bundles.yaml` | Git bundles keep `repo` / `ref` / `subdir`; local path bundles are normalized back to host paths when possible. |
 | `bundles.secrets.yaml` | Exported as the live descriptor secret overlay. |
+| `secrets/` (secrets-file) | The runtime secrets folder, byte for byte: app secrets; per-user secrets only with `--include-user-data`; never runtime records or Connection Hub acquired tokens. |
 | `secrets` backend in `assembly.yaml` | A Host Vault source is exported as portable `secrets-file`/ephemeral bootstrap; machine-specific vault address, certificate name, identity path, and a declared `local_service` block are cleared. |
 | `infra.postgres.host`, `infra.redis.host` | Exported as descriptor-facing `localhost` for local runtimes, even when containers use `host.docker.internal`. |
 | `paths.host_bundles_path` | Preserved. This is the host source root for unmanaged local bundles. |
