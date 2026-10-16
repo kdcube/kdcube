@@ -23,6 +23,9 @@ except ImportError:
 
 _JSON_META = {"ContentType": "application/json"}
 
+_UPLOAD_NAME_ATTEMPTS = 3
+
+
 async def attachment_rn_and_rel_name(tenant, project, user_or_fp, conversation_id, turn_id, role, filename: str):
     # Microseconds, not seconds. Three files named image.png attached in one
     # click share a second, so a seconds prefix gave all three the same stored
@@ -423,18 +426,29 @@ class ConversationStore:
         )
         # safe_name = os.path.basename(filename) or "file.bin"
         # rel_name = f"{ts}-{safe_name}"
+        meta = {"ContentType": mime} if mime else None
         if origin == "user":
-            rn, rel_name = await attachment_rn_and_rel_name(
-                tenant, project, user_or_fp, conversation_id, turn_id, role, filename
-            )
+            # W210: an upload never replaces another. The name is microsecond-stamped and the write is
+            # create-only, so a collision is refused by the store and the upload draws a fresh name.
+            for attempt in range(_UPLOAD_NAME_ATTEMPTS):
+                rn, rel_name = await attachment_rn_and_rel_name(
+                    tenant, project, user_or_fp, conversation_id, turn_id, role, filename
+                )
+                rel = self._join(base, rel_name)
+                try:
+                    await self.backend.create_bytes_a(rel, data, meta=meta)
+                    break
+                except FileExistsError:
+                    if attempt == _UPLOAD_NAME_ATTEMPTS - 1:
+                        raise
         else:
+            # Agent-written files keep the plain basename the resolver matches (conv:fi: refs); a
+            # same-name write replaces by design (W210 leaves that question to its own item).
             rn, rel_name = await file_rn_and_rel_name(
                 tenant, project, user_or_fp, conversation_id, turn_id, role, filename
             )
-        rel = self._join(base, rel_name)
-
-        meta = {"ContentType": mime} if mime else None
-        await self.backend.write_bytes_a(rel, data, meta=meta)
+            rel = self._join(base, rel_name)
+            await self.backend.write_bytes_a(rel, data, meta=meta)
 
         # RN is the logical filename (without timestamp) OR the actual stored name?
         # To keep dereferencing simple, we use the stored name.

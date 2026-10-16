@@ -79,6 +79,16 @@ def _s3_failure(path: str, exc: BaseException) -> BaseException:
     return exc
 
 
+def _s3_precondition_failed(exc: BaseException) -> bool:
+    """A conditional write lost to an existing key (If-None-Match), by code, never by text."""
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    code = str((response.get("Error") or {}).get("Code") or "")
+    status = int((response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0)
+    return code in {"PreconditionFailed", "ConditionalRequestConflict"} or status == 412
+
+
 def _raise_s3_failure(path: str, exc: BaseException):
     failure = _s3_failure(path, exc)
     if failure is exc:
@@ -156,6 +166,15 @@ class IStorageBackend(ABC):
 
     async def write_bytes_a(self, path: str, data: bytes, meta: Optional[dict] = None) -> None:
         return await asyncio.to_thread(self.write_bytes, path, data, meta)
+
+    async def create_bytes_a(self, path: str, data: bytes, meta: Optional[dict] = None) -> None:
+        """Write only when nothing is stored at ``path``; otherwise raise FileExistsError (W210).
+
+        The refusal is atomic in every built-in backend, so two writers drawing the same key
+        never silently replace each other. A backend without an atomic create does not
+        pretend to have one.
+        """
+        raise NotImplementedError(f"{type(self).__name__} has no atomic create-only write")
 
     async def read_text_a(self, path: str, encoding: str = "utf-8") -> str:
         return await asyncio.to_thread(self.read_text, path, encoding)
@@ -235,6 +254,15 @@ class LocalFileSystemBackend(IStorageBackend):
         resolved = self._resolve_path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_bytes(data)
+
+    def _create_bytes(self, path: str, data: bytes) -> None:
+        resolved = self._resolve_path(path)
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        with open(resolved, "xb") as handle:  # O_CREAT | O_EXCL: FileExistsError when taken
+            handle.write(data)
+
+    async def create_bytes_a(self, path: str, data: bytes, meta: Optional[dict] = None) -> None:
+        await asyncio.to_thread(self._create_bytes, path, data)
 
     def read_text(self, path: str, encoding: str = 'utf-8') -> str:
         return self._resolve_path(path).read_text(encoding=encoding)
@@ -646,13 +674,19 @@ class S3StorageBackend(IStorageBackend):
             except Exception as e:
                 _raise_s3_failure(path, e)
 
-    async def write_bytes_a(self, path: str, data: bytes, meta: Optional[dict] = None) -> None:
+    async def create_bytes_a(self, path: str, data: bytes, meta: Optional[dict] = None) -> None:
+        await self.write_bytes_a(path, data, meta, _create_only=True)
+
+    async def write_bytes_a(self, path: str, data: bytes, meta: Optional[dict] = None, *,
+                            _create_only: bool = False) -> None:
         key = self._get_s3_key(path)
         put_kwargs: Dict[str, Any] = {
             "Bucket": self.bucket_name,
             "Key": key,
             "Body": data,
         }
+        if _create_only:
+            put_kwargs["IfNoneMatch"] = "*"  # S3 conditional write: refused when the key exists
         # Copy of your sync metadata logic
         content_type = None
         if meta and isinstance(meta, dict):
@@ -712,6 +746,8 @@ class S3StorageBackend(IStorageBackend):
             try:
                 await s3.put_object(**put_kwargs)
             except Exception as e:
+                if _create_only and _s3_precondition_failed(e):
+                    raise FileExistsError(f"{path} already exists in S3") from e
                 raise IOError(f"Cannot write {path} to S3: {e}")
 
     async def read_text_a(self, path: str, encoding: str = "utf-8") -> str:
@@ -999,7 +1035,10 @@ class InMemoryStorageBackend(IStorageBackend):
                 return self.__fs_objects[path].data
         raise FileNotFoundError(f"{path} not found in storage")
 
-    def write_bytes(self, path: str, data: bytes,  meta: Optional[dict] = None) -> None:
+    async def create_bytes_a(self, path: str, data: bytes, meta: Optional[dict] = None) -> None:
+        self.write_bytes(path, data, meta, _create_only=True)
+
+    def write_bytes(self, path: str, data: bytes,  meta: Optional[dict] = None, *, _create_only: bool = False) -> None:
         if path.endswith('/'):
             raise ValueError(f"{path} is a directory")
         if self.max_file_size and len(data) > self.max_file_size:
@@ -1007,6 +1046,8 @@ class InMemoryStorageBackend(IStorageBackend):
         if self.max_total_size and self.__total_size + len(data) > self.max_total_size:
             raise ValueError(f"Max size of file system exceeded: {self.max_total_size} ")
         with self.__with_lock():
+            if _create_only and path in self.__fs_objects:
+                raise FileExistsError(f"{path} already exists in storage")
             self.__fs_objects[path] = InMemoryObject(path, data)
             self.__total_size += len(data)
 

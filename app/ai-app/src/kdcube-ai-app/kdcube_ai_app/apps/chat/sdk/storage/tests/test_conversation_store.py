@@ -68,3 +68,48 @@ async def test_artifact_file_preserves_workspace_relative_path(tmp_path):
     assert parse_file_path(key)["filename"] == "turn_1/outputs/analysis/report.json"
     assert await store.get_blob_bytes(key) == b'{"ok": true}\n'
     assert await store.get_blob_bytes(uri) == b'{"ok": true}\n'
+
+
+async def _upload(store, filename, data):
+    return await store.put_attachment(
+        tenant="tenant", project="project", user="user", fingerprint=None,
+        conversation_id="conversation", turn_id="turn_1", filename=filename, data=data,
+        mime="image/png", origin="user",
+    )
+
+
+@pytest.mark.asyncio
+async def test_three_uploads_with_one_name_are_three_stored_objects(tmp_path):
+    """W210: three files named image.png in one click keep three distinct objects and sizes."""
+    store = ConversationStore(storage_uri=tmp_path.as_uri())
+    payloads = [b"a" * 91, b"b" * 264, b"c" * 183]
+
+    uploaded = [await _upload(store, "image.png", data) for data in payloads]
+
+    keys = [key for _uri, key, _rn in uploaded]
+    assert len(set(keys)) == 3
+    assert [await store.get_blob_bytes(uri) for uri, _key, _rn in uploaded] == payloads
+
+
+@pytest.mark.asyncio
+async def test_an_upload_never_replaces_an_existing_attachment(tmp_path, monkeypatch):
+    """W210: even when two uploads draw the same stored name, the first keeps its bytes."""
+    import kdcube_ai_app.apps.chat.sdk.storage.conversation_store as module
+
+    store = ConversationStore(storage_uri=tmp_path.as_uri())
+    first_uri, first_key, _ = await _upload(store, "image.png", b"first")
+    taken = first_key.rsplit("/", 1)[1]
+    names = iter([taken, taken])  # the next upload collides twice, then draws a fresh name
+    original = module.attachment_rn_and_rel_name
+
+    async def colliding(*args, **kwargs):
+        rn, rel_name = await original(*args, **kwargs)
+        forced = next(names, None)
+        return (rn.replace(rel_name, forced), forced) if forced else (rn, rel_name)
+
+    monkeypatch.setattr(module, "attachment_rn_and_rel_name", colliding)
+    second_uri, second_key, _ = await _upload(store, "image.png", b"second")
+
+    assert second_key != first_key
+    assert await store.get_blob_bytes(first_uri) == b"first"
+    assert await store.get_blob_bytes(second_uri) == b"second"
