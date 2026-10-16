@@ -21,7 +21,63 @@ from kdcube_cli.runtime_secrets_export import RuntimeSecretsExportError, export_
 from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileStore
 from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileStore
 
-from test_cli_descriptors import _write_initialized_runtime_config
+# Self-contained (README: a sibling test module imported by bare name does not collect under importlib).
+
+
+def _write_initialized_runtime_config(
+    workdir: Path,
+    *,
+    marker: str = "old",
+    secrets_provider: str = "secrets-file",
+) -> Path:
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (workdir / "bundles" / "demo.bundle").mkdir(parents=True)
+    (config_dir / "install-meta.json").write_text(
+        json.dumps(
+            {
+                "tenant": "demo",
+                "project": "project",
+                "repo_root": str(workdir / "repo"),
+            }
+        )
+    )
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "context": {"tenant": "demo", "project": "project"},
+                "platform": {"repo": "https://github.com/example/platform.git", "ref": marker},
+                "secrets": {"provider": secrets_provider},
+                "auth": {"type": "simple"},
+                "proxy": {"ssl": False},
+                "paths": {"host_bundles_path": str(workdir / "bundles")},
+            },
+            sort_keys=False,
+        )
+    )
+    (config_dir / "secrets.yaml").write_text(
+        f"platform:\n  services:\n    marker: {marker}\n"
+    )
+    (config_dir / "gateway.yaml").write_text(f"routes:\n  marker: {marker}\n")
+    (config_dir / "economics.yaml").write_text(f"economics:\n  marker: {marker}\n")
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "items": [{"id": "demo.bundle", "path": "/bundles/demo.bundle", "module": "entrypoint"}],
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    (config_dir / "bundles.secrets.yaml").write_text(
+        yaml.safe_dump(
+            {"bundles": {"version": "1", "items": [{"id": "demo.bundle", "secrets": {"api": {"key": marker}}}]}},
+            sort_keys=False,
+        )
+    )
+    return config_dir
 
 APP = {("demo.bundle", "provider.token"): "app-canary-1", ("other.bundle", "api.key"): "app-canary-2"}
 USERS = {("person-1", "demo.bundle", "github.token"): "user-canary-1",

@@ -15,11 +15,87 @@ import json
 import re
 from urllib.parse import parse_qs, urlsplit
 
-from kdcube_ai_app.apps.chat.proc.rest.management import secret_export_routes
-from kdcube_ai_app.apps.chat.proc.rest.management.secret_contracts import SecretTarget
-from kdcube_ai_app.apps.chat.proc.rest.management.secret_export import SECRET_EXPORT_REQUEST_SCHEMA
+import time
+from types import SimpleNamespace
 
-from test_routes import _export_client
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from kdcube_ai_app.apps.chat.proc.rest.management import routes, secret_export_routes
+from kdcube_ai_app.apps.chat.proc.rest.management.config import HumanSecretExportConfig
+from kdcube_ai_app.apps.chat.proc.rest.management.human_approval import (
+    SESSION_CONFIRMATION,
+    HumanApprovalEvidence,
+)
+from kdcube_ai_app.apps.chat.proc.rest.management.secret_contracts import SecretTarget
+from kdcube_ai_app.apps.chat.proc.rest.management.secret_export import (
+    SECRET_EXPORT_REQUEST_SCHEMA,
+    RedisSecretExportStore,
+)
+
+# Self-contained (README: a sibling test module imported by bare name does not collect under importlib).
+TENANT, PROJECT = "tenant-a", "project-a"
+
+
+class _Redis:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def set(self, key, value, *, nx=False, ex=None):
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        return True
+
+    async def get(self, key):
+        return self.values.get(key)
+
+    async def eval(self, _script, _keys, key, expected, _ttl, replacement):
+        current = self.values.get(key)
+        if current is None:
+            return 0
+        if current != expected:
+            return -1
+        self.values[key] = replacement
+        return 1
+
+
+class _Approver:
+    async def evaluate(self, _request, *, context, phase):
+        return HumanApprovalEvidence(subject="human-a", assurance=SESSION_CONFIRMATION, method="test_browser_session",
+                                     request_digest=context.request_digest, verified_at=int(time.time()))
+
+
+class _SecretRuntime:
+    def __init__(self) -> None:
+        self.reads = []
+        self.inventory_targets: tuple[SecretTarget, ...] = ()
+
+    async def inventory(self):
+        return self.inventory_targets
+
+    async def read(self, target):
+        self.reads.append(target)
+        return {**target.public_dict(), "value": f"canary::{target.provider_key}"}
+
+
+def _export_client(monkeypatch):
+    config = HumanSecretExportConfig(enabled=True, required_assurance=SESSION_CONFIRMATION,
+                                     max_evidence_age_seconds=300, transaction_ttl_seconds=180,
+                                     consumed_tombstone_seconds=600, max_targets=8, max_total_value_bytes=1024 * 1024)
+    redis = _Redis()
+    store = RedisSecretExportStore(redis, tenant=TENANT, project=PROJECT,
+                                   transaction_ttl_seconds=config.transaction_ttl_seconds,
+                                   consumed_tombstone_seconds=config.consumed_tombstone_seconds,
+                                   max_targets=config.max_targets)
+    runtime = _SecretRuntime()
+    monkeypatch.setattr(secret_export_routes, "_configuration", lambda: (SimpleNamespace(), config, TENANT, PROJECT))
+    app = FastAPI()
+    app.state.secret_export_store = store
+    app.state.secret_export_runtime = runtime
+    app.state.human_approval_verifier = _Approver()
+    app.include_router(routes.router, prefix="/api/integrations")
+    return TestClient(app), redis, runtime
 
 PROPS = [{"user_id": "user-1", "bundle_id": "demo.bundle", "key": "theme", "subsystem": "bundle",
           "value_json": '{"dark": true, "n": 0, "x": null}'}]
