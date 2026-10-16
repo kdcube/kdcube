@@ -115,6 +115,17 @@ log_secret_statuses(force=True)
 logger = logging.getLogger("ChatProc.WebApp")
 
 
+async def _resolve_chat_bundle_spec(redis, *, tenant, project, bundle_id):
+    """The chat request path's bundle spec; a pinned app this proc has not prepared refuses by name (W333)."""
+    from kdcube_ai_app.infra.plugin.bundle_snapshot import BundleSnapshotError
+
+    try:
+        return await resolve_bundle_spec_from_store(redis, tenant=tenant, project=project, bundle_id=bundle_id)
+    except BundleSnapshotError as exc:
+        logger.warning("Pinned application source unavailable: bundle=%s code=%s reason=%s", bundle_id, exc.code, exc)
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
 def _is_bundle_mcp_route(path: str) -> bool:
     if not path.startswith("/api/integrations/bundles/"):
         return False
@@ -422,7 +433,7 @@ async def lifespan(app: FastAPI):
         cfg_req = ConfigRequest(**(comm_context.config.values or {}))
         cfg_req = await resolve_config_request_secrets(cfg_req, bundle_id=bundle_id)
         wf_config = create_workflow_config(cfg_req)
-        spec_resolved = await resolve_bundle_spec_from_store(
+        spec_resolved = await _resolve_chat_bundle_spec(
             app.state.redis_async,
             tenant=tenant_id,
             project=project_id,

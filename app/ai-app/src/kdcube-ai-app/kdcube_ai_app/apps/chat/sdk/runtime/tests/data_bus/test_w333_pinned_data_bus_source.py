@@ -332,3 +332,47 @@ async def test_a_peer_call_to_a_pinned_app_this_process_has_not_prepared_refuses
         await _peer_call(operations)
     assert refused.value.code == "bundle_snapshot_not_prepared"
     assert loaded == []
+
+
+@pytest.mark.asyncio
+async def test_a_named_service_call_to_an_unprepared_pinned_app_refuses_by_name(repo, monkeypatch):
+    """claude-main follow-up: bundle_operations' named-service path (the :770 caller) refuses like the peer call."""
+    from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import BundleNamedServiceCall
+    from kdcube_ai_app.apps.chat.sdk.protocol import (
+        ExternalEventActor, ExternalEventPayload, ExternalEventRequest, ExternalEventRouting, ExternalEventUser,
+    )
+
+    _in_process(monkeypatch, ApplicationReadinessRegistry())
+    loaded: list[str] = []
+    operations = _patch_peer_call(monkeypatch, _entry(repo.bundle, commit=repo.A, require=True), loaded)
+    context = ExternalEventPayload(
+        request=ExternalEventRequest(request_id="r"), routing=ExternalEventRouting(session_id="s", bundle_id="caller@1"),
+        actor=ExternalEventActor(tenant_id=T, project_id=P),
+        user=ExternalEventUser(user_type="registered", user_id="u", roles=["kdcube:role:member"]),
+    )
+    with pytest.raises(snap.BundleSnapshotError) as refused:
+        await operations.invoke_local_bundle_named_service(
+            BundleNamedServiceCall(bundle_id=BUNDLE_ID, request={}, tenant=T, project=P),
+            comm_context=context, redis=object(), pg_pool=None,
+        )
+    assert refused.value.code == "bundle_snapshot_not_prepared"
+    assert loaded == []
+
+
+@pytest.mark.asyncio
+async def test_the_chat_request_path_refuses_an_unprepared_pinned_app_with_a_named_503(repo, monkeypatch):
+    """claude-main follow-up: proc/web_app's chat path (the :425 caller) answers 503 with the code, not a bare 500."""
+    from fastapi import HTTPException
+    from kdcube_ai_app.apps.chat.proc import web_app
+
+    _in_process(monkeypatch, ApplicationReadinessRegistry())
+    entry = _entry(repo.bundle, commit=repo.A, require=True)
+
+    async def registry(_redis, tenant=None, project=None):
+        return BundlesRegistry(default_bundle_id=BUNDLE_ID, bundles={BUNDLE_ID: entry})
+
+    monkeypatch.setattr(bundle_store, "load_registry", registry)
+    with pytest.raises(HTTPException) as refused:
+        await web_app._resolve_chat_bundle_spec(object(), tenant=T, project=P, bundle_id=BUNDLE_ID)
+    assert refused.value.status_code == 503
+    assert refused.value.detail["code"] == "bundle_snapshot_not_prepared"
