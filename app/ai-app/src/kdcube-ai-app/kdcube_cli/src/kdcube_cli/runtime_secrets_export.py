@@ -187,19 +187,23 @@ def nest_values(flat: dict[str, object], *, where: str) -> dict[str, object]:
     for key in sorted(flat):
         node = root
         parts = key.split(".")
-        for part in parts[:-1]:
+        for index, part in enumerate(parts[:-1]):
             child = node.setdefault(part, {})
             if not isinstance(child, dict):
-                raise RuntimeSecretsExportError(
-                    f"Two secrets of {where} cannot both be written to the descriptor (one is below the other)."
-                )
+                _below_refusal(where, ".".join(parts[: index + 1]), key)
             node = child
         if parts[-1] in node:
-            raise RuntimeSecretsExportError(
-                f"Two secrets of {where} cannot both be written to the descriptor (one is below the other)."
-            )
+            _below_refusal(where, key, f"{key}.*")
         node[parts[-1]] = flat[key]
     return root
+
+
+def _below_refusal(where: str, upper: str, lower: str) -> None:
+    # Key names only, never a value, so the operator can find the pair (claude-ops on #385).
+    raise RuntimeSecretsExportError(
+        f"The secrets {upper!r} and {lower!r} of {where} cannot both be written to the descriptor "
+        "(one is below the other); rename one and export again."
+    )
 
 
 def merge_app_secrets(bundles_secrets: dict, app_secrets: dict[str, dict[str, str]]) -> dict:

@@ -551,3 +551,18 @@ def test_the_provider_export_pair_passes_the_intake_and_keeps_bundle_less_user_s
     else:
         assert "users" not in secrets_doc
         assert b"user-bundle-less-canary" not in everything and b"user-app-canary" not in everything
+
+
+def test_a_refused_nesting_names_both_keys_and_leaves_no_secrets_folder(monkeypatch, tmp_path):
+    """claude-ops on #385: the refusal names the keys (never a value), and the export folder it created is
+    removed, so a refused export leaves no partial secrets/."""
+    workdir, config_dir, root = _runtime(tmp_path)
+    (config_dir / "secrets.yaml").write_text(yaml.safe_dump({"platform": {"services": {"marker": "kept"}}}))
+    (root / "demo.bundle" / "provider.token.child.json").write_text('{"value": "child-canary"}')
+    output = tmp_path / "export"
+    with pytest.raises(SystemExit) as refused:
+        _export(monkeypatch, workdir, config_dir, output)
+    message = str(refused.value)
+    assert "'provider.token'" in message and "provider.token.child" in message
+    assert "canary" not in message
+    assert not (output / "secrets").exists()
