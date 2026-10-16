@@ -59,6 +59,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery im
     bind_named_service_discovery,
 )
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
+    BUNDLE_OPERATION_CALLER_NOT_ALLOWED,
+    bind_peer_caller_bundle_id,
+    peer_caller_allowed,
     BundleMCPCall,
     BundleMCPCaller,
     BundleMCPResult,
@@ -5852,6 +5855,7 @@ async def _call_bundle_mcp_inner(
                 session=resolved_session,
                 method_override=call.http_method or "POST",
                 _internal_peer_call=True,
+                _peer_caller_bundle_id=spec_resolved.id,
             )
 
         peer_redis = _get_app_redis(request)
@@ -6377,6 +6381,7 @@ async def _call_bundle_op_inner(
         path_tail: Optional[str] = None,
         method_override: Optional[str] = None,
         _internal_peer_call: bool = False,
+        _peer_caller_bundle_id: str = "",
 ):
     uploaded_files = list(uploaded_files or [])
     # W389: a nested peer call is timed by phase (the calling app waits on all of it).
@@ -6388,6 +6393,8 @@ async def _call_bundle_op_inner(
             uploaded_files=uploaded_files, request=request, operation=operation, route=route,
             session=session, path_tail=path_tail, method_override=method_override,
             _internal_peer_call=_internal_peer_call, phases=phases,
+            # W372: only a platform peer closure names a caller; a direct request has none.
+            peer_caller_bundle_id=(_peer_caller_bundle_id if _internal_peer_call else ""),
         )
         outcome = "ok"
         return result
@@ -6415,6 +6422,7 @@ async def _call_bundle_op_phases(
         method_override: Optional[str],
         _internal_peer_call: bool,
         phases: Optional[Dict[str, float]],
+        peer_caller_bundle_id: str = "",
 ):
     workflow, spec_resolved, tenant_id, project_id, comm_context = _unpack_loaded_bundle_workflow(
         await _load_bundle_workflow(
@@ -6529,6 +6537,12 @@ async def _call_bundle_op_phases(
         request_method=request_method,
         internal_peer_call=_internal_peer_call,
     )
+    if not peer_caller_allowed(endpoint_spec, peer_caller_bundle_id):
+        # W372: names only the caller bundle id, never the operation's own details.
+        raise HTTPException(
+            status_code=403,
+            detail={"code": BUNDLE_OPERATION_CALLER_NOT_ALLOWED, "caller": peer_caller_bundle_id},
+        )
 
     try:
         fn = getattr(workflow, endpoint_spec.method_name)
@@ -6567,6 +6581,7 @@ async def _call_bundle_op_phases(
                 session=session,
                 method_override=call.http_method or "POST",
                 _internal_peer_call=True,
+                _peer_caller_bundle_id=spec_resolved.id,
             )
 
         peer_redis = _get_app_redis(request)
@@ -6618,6 +6633,7 @@ async def _call_bundle_op_phases(
             bind_bundle_mcp_caller(_call_peer_bundle_mcp),
             bind_bundle_operation_caller(_call_peer_bundle_operation),
             bind_bundle_operation_stream_caller(_call_peer_bundle_operation_stream),
+            bind_peer_caller_bundle_id(peer_caller_bundle_id),
         ):
             _mark_peer_phase(phases, "prep")
             result = await _invoke_bundle_callable(fn, **extra)

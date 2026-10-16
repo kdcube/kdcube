@@ -572,6 +572,10 @@ async def _invoke_local_bundle_operation_raw(
         raise RuntimeError(f"Bundle {spec_resolved.id} is disabled")
     if not _api_enabled(props, endpoint_spec):
         raise RuntimeError(f"Bundle operation {operation} is not available")
+    # W372: the immediate caller is the bundle whose platform-built context made this call.
+    caller_bundle_id = str(getattr(getattr(comm_context, "routing", None), "bundle_id", None) or "").strip()
+    if not peer_caller_allowed(endpoint_spec, caller_bundle_id):
+        raise BundleOperationCallerNotAllowed(operation, caller_bundle_id)
 
     fn = getattr(workflow, endpoint_spec.method_name)
     extra = dict(call.data or {})
@@ -598,6 +602,7 @@ async def _invoke_local_bundle_operation_raw(
         bind_bundle_named_service_caller(nested_named_service_caller),
         bind_bundle_operation_caller(nested_caller),
         bind_bundle_operation_stream_caller(nested_stream_caller),
+        bind_peer_caller_bundle_id(caller_bundle_id),
     ):
         result = await _invoke_bundle_callable(fn, **extra)
 
@@ -941,6 +946,51 @@ def bind_bundle_mcp_caller(caller: BundleMCPCaller | None):
         yield caller
     finally:
         BUNDLE_MCP_CALLER_CV.reset(token)
+
+
+# W372: which bundle invoked the running operation through a platform peer call.
+#
+# The platform sets it per invocation, around the target's handler, from the calling bundle's
+# own platform-built context, and resets it after. It is never read from the payload, headers
+# or any request field. A direct HTTP or MCP request runs with it empty. For A -> B -> C, C sees
+# B, because each invocation binds its own immediate caller. Threat model: this stops external
+# and direct-HTTP callers, payload or header spoofing, and accidental cross-bundle calls through
+# platform paths. It does not stop malicious code in the same process, which can build its own
+# caller (make_local_bundle_operation_caller is public SDK).
+BUNDLE_OPERATION_CALLER_NOT_ALLOWED = "bundle_operation_caller_not_allowed"
+_PEER_CALLER_BUNDLE_ID_CV: ContextVar[str] = ContextVar("kdcube_peer_caller_bundle_id", default="")
+
+
+def current_peer_caller_bundle_id() -> str:
+    """The bundle id that invoked the running operation as a platform peer call; empty otherwise."""
+    return _PEER_CALLER_BUNDLE_ID_CV.get()
+
+
+@contextmanager
+def bind_peer_caller_bundle_id(bundle_id: str | None):
+    """Platform use only: bind the immediate peer caller for one operation invocation."""
+    token = _PEER_CALLER_BUNDLE_ID_CV.set(str(bundle_id or "").strip())
+    try:
+        yield
+    finally:
+        _PEER_CALLER_BUNDLE_ID_CV.reset(token)
+
+
+class BundleOperationCallerNotAllowed(PermissionError):
+    """An operation that declares peer_callers was called by another bundle, or directly."""
+
+    code = BUNDLE_OPERATION_CALLER_NOT_ALLOWED
+
+    def __init__(self, operation: str, caller: str) -> None:
+        self.operation = operation
+        self.caller = caller
+        super().__init__(f"{BUNDLE_OPERATION_CALLER_NOT_ALLOWED}: caller={caller or '-'}")
+
+
+def peer_caller_allowed(endpoint_spec: Any, caller: str) -> bool:
+    """True when the operation declares no peer_callers, or ``caller`` is one of them."""
+    allowed = tuple(getattr(endpoint_spec, "peer_callers", ()) or ())
+    return not allowed or (bool(caller) and caller in allowed)
 
 
 def get_current_bundle_mcp_caller() -> BundleMCPCaller | None:
