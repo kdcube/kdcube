@@ -198,19 +198,47 @@ def merge_app_secrets(bundles_secrets: dict, app_secrets: dict[str, dict[str, st
     return document
 
 
-def strip_user_secrets(global_secrets: dict) -> tuple[dict, int]:
-    """``secrets.yaml`` without its ``users`` root: a configuration bootstrap never takes user secrets from
-    the legacy YAML (they would bypass include_user_data and the acquired-token exclusion). Returns the
-    document and the number of user entries left out."""
+def _without_acquired(secrets: object, removed: list[int]) -> object:
+    if not isinstance(secrets, dict):
+        return secrets
+    flat: dict[str, object] = {}
+    _flatten("", secrets, flat)
+    kept = {key: value for key, value in flat.items() if not key.startswith(EXCLUDED_USER_PREFIXES)}
+    removed[0] += len(flat) - len(kept)
+    return {key: kept[key] for key in sorted(kept)}
+
+
+def filter_user_secrets(global_secrets: dict, *, include_user_data: bool) -> tuple[dict, int, int]:
+    """``secrets.yaml`` for the bootstrap: without include_user_data its ``users`` root is left out; with it,
+    each user keeps its secrets except the tokens Connection Hub acquires. Returns the document, the number
+    of user entries left out and the number of acquired tokens left out."""
     document = dict(global_secrets or {})
-    root = document.get("secrets") if isinstance(document.get("secrets"), dict) else document
-    users = root.get("users") if isinstance(root, dict) else None
-    if users is None:
-        return document, 0
-    root = dict(root)
-    root.pop("users")
-    count = len(users) if isinstance(users, dict) else 1
-    if isinstance(document.get("secrets"), dict):
+    wrapped = isinstance(document.get("secrets"), dict)
+    root = dict(document["secrets"]) if wrapped else document
+    users = root.get("users")
+    if not isinstance(users, dict):
+        return document, 0, 0
+    if not include_user_data:
+        root.pop("users")
+        left_out, acquired = len(users), 0
+    else:
+        removed = [0]
+        filtered = {}
+        for user_id, entry in users.items():
+            entry = dict(entry) if isinstance(entry, dict) else entry
+            if isinstance(entry, dict):
+                if "secrets" in entry:
+                    entry["secrets"] = _without_acquired(entry["secrets"], removed)
+                if isinstance(entry.get("bundles"), dict):
+                    entry["bundles"] = {
+                        bundle_id: ({**bundle, "secrets": _without_acquired(bundle.get("secrets"), removed)}
+                                    if isinstance(bundle, dict) and "secrets" in bundle else bundle)
+                        for bundle_id, bundle in entry["bundles"].items()
+                    }
+            filtered[user_id] = entry
+        root["users"] = filtered
+        left_out, acquired = 0, removed[0]
+    if wrapped:
         document["secrets"] = root
-        return document, count
-    return root, count
+        return document, left_out, acquired
+    return root, left_out, acquired

@@ -66,7 +66,7 @@ from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
 from kdcube_cli.runtime_secrets_export import (
     export_runtime_secrets_folder,
     merge_app_secrets,
-    strip_user_secrets,
+    filter_user_secrets,
 )
 from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
@@ -2712,13 +2712,16 @@ def _export_runtime_secrets(
             "include_user_data": include_user_data,
         }
     ]
-    legacy_user_entries = 0
+    legacy_user_entries = legacy_acquired = 0
     secrets_path = out_dir / "secrets.yaml"
     if secrets_path.exists():
-        stripped, legacy_user_entries = strip_user_secrets(yaml.safe_load(secrets_path.read_text(encoding="utf-8")) or {})
-        if legacy_user_entries:
-            write_descriptor_text(secrets_path, yaml.safe_dump(stripped, sort_keys=False, allow_unicode=True))
+        filtered, legacy_user_entries, legacy_acquired = filter_user_secrets(
+            yaml.safe_load(secrets_path.read_text(encoding="utf-8")) or {}, include_user_data=include_user_data
+        )
+        if legacy_user_entries or legacy_acquired:
+            write_descriptor_text(secrets_path, yaml.safe_dump(filtered, sort_keys=False, allow_unicode=True))
     files[0]["legacy_yaml_user_entries_left_out"] = legacy_user_entries
+    files[0]["acquired_tokens_left_out"] += legacy_acquired
     if exported.app_secrets:
         bundles_secrets_path = out_dir / "bundles.secrets.yaml"
         current = yaml.safe_load(bundles_secrets_path.read_text(encoding="utf-8")) if bundles_secrets_path.exists() else {}
@@ -2747,9 +2750,10 @@ def _export_runtime_secrets(
             )
         if legacy_user_entries:
             console.print(f"[dim]  user entries of the legacy secrets.yaml left out: {legacy_user_entries}[/dim]")
-        if exported.acquired_tokens_left_out:
+        if exported.acquired_tokens_left_out or legacy_acquired:
             console.print(
-                f"[dim]  Connection Hub acquired tokens never exported: {exported.acquired_tokens_left_out}[/dim]"
+                "[dim]  Connection Hub acquired tokens never exported: "
+                f"{exported.acquired_tokens_left_out + legacy_acquired}[/dim]"
             )
     return files
 

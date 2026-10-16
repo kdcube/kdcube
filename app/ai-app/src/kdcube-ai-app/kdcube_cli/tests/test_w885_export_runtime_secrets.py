@@ -38,6 +38,7 @@ PROPS = [{"user_id": "person-1", "bundle_id": "demo.bundle", "key": "theme", "su
          {"user_id": "person-1", "bundle_id": "demo.bundle", "key": "looks.like.json", "subsystem": "bundle",
           "value_json": '"{\\"not\\": \\"an object\\"}"'}]
 NEVER = [*ACQUIRED.values(), RECORD, "legacy-acquired-canary", "legacy-user-canary"]
+ACQUIRED_ALWAYS = [*ACQUIRED.values(), RECORD, "legacy-acquired-canary"]
 SHOWN = [*APP.values(), *USERS.values()]
 
 
@@ -102,7 +103,7 @@ def test_app_and_user_secrets_arrive_byte_for_byte_and_acquired_tokens_never(mon
         assert files.get(user_id=user, bundle_id=bundle, key=key) is None
     assert not (exported / "demo-bundle").exists(), "runtime-record folders are not configuration"
     everything = _all_bytes(output)
-    for value in NEVER:
+    for value in ACQUIRED_ALWAYS:
         assert value.encode() not in everything
     _assert_nothing_named(capsys.readouterr().out)
 
@@ -119,15 +120,24 @@ def test_app_secrets_are_also_in_bundles_secrets_yaml_for_a_provider_backed_impo
     assert platform == {"platform": {"services": {"marker": "kept"}}}, "the legacy users root is left out"
 
 
-@pytest.mark.parametrize("flag", [(), ("--include-user-data",)])
-def test_legacy_yaml_user_secrets_are_in_no_exported_file_with_or_without_the_flag(monkeypatch, tmp_path, capsys, flag):
+def test_without_the_flag_the_legacy_yaml_users_are_in_no_exported_file(monkeypatch, tmp_path, capsys):
     workdir, config_dir, _root = _runtime(tmp_path)
     output = tmp_path / "export"
-    _export(monkeypatch, workdir, config_dir, output, *flag)
+    _export(monkeypatch, workdir, config_dir, output)
     everything = _all_bytes(output)
     for value in NEVER:
         assert value.encode() not in everything
     assert "user entries of the legacy secrets.yaml left out: 1" in capsys.readouterr().out
+
+
+def test_with_the_flag_the_legacy_yaml_users_go_out_without_acquired_tokens(monkeypatch, tmp_path):
+    workdir, config_dir, _root = _runtime(tmp_path)
+    output = tmp_path / "export"
+    _export(monkeypatch, workdir, config_dir, output, "--include-user-data")
+    platform = yaml.safe_load((output / "secrets.yaml").read_text())
+    assert platform["users"]["person-1"]["bundles"]["demo.bundle"]["secrets"] == {"api.key": "legacy-user-canary"}
+    assert platform["users"]["person-1"]["secrets"] == {}
+    assert b"legacy-acquired-canary" not in _all_bytes(output)
 
 
 def test_a_key_and_a_key_below_it_both_survive_the_yaml_mirror_and_its_importer():
@@ -175,7 +185,7 @@ def test_props_keep_their_exact_json_and_subsystem_and_are_private(monkeypatch, 
     text = capsys.readouterr().out
     entries = {item["name"]: item for item in json.loads(text)["files"]}
     assert entries["user-data/user_bundle_props.json"]["row_count"] == 2
-    assert entries["secrets/"]["acquired_tokens_left_out"] == len(ACQUIRED)
+    assert entries["secrets/"]["acquired_tokens_left_out"] == len(ACQUIRED) + 1, "the folder plus the legacy YAML"
     assert "theme" not in text and "dark" not in text
     _assert_nothing_named(text)
 
