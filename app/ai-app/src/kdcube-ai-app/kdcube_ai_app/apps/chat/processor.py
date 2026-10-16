@@ -2412,6 +2412,11 @@ class EnhancedChatRequestProcessor:
                         continue
 
                     if evt.get("type") == "bundles.update":
+                        # W883 fast path: a published change drops this process's parsed descriptor
+                        # registry at once; the content hash on every read is the guarantee.
+                        from kdcube_ai_app.infra.plugin.bundle_store import forget_descriptor_registry
+
+                        forget_descriptor_registry()
                         bundles_patch = evt.get("bundles") or {}
                         changed_raw = evt.get("changed_bundle_ids")
                         if isinstance(changed_raw, list):
@@ -2655,6 +2660,9 @@ class EnhancedChatRequestProcessor:
                         props_update_channel,
                         props_update_channel.encode(),
                     ):
+                        from kdcube_ai_app.infra.plugin.bundle_store import forget_descriptor_registry
+
+                        forget_descriptor_registry()  # W883 fast path, as for bundles.update
                         evt = {}
                         try:
                             evt = json.loads((message.get("data") or b"{}").decode("utf-8"))

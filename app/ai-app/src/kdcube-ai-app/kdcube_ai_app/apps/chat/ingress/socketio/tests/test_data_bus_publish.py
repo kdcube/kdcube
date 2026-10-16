@@ -374,7 +374,7 @@ async def test_repeated_publish_and_readonly_registry_do_not_recompile_image_exa
     monkeypatch.setattr(bundle_store, "_redis_writeback_due", lambda key, state: False)
     state = {"registered": True, "disabled": False}
 
-    def registry():
+    def registry(include_props=True):  # W883: load_registry asks for props only on a write-back
         entries = {"task-tracker@1-0": bundle_store.BundleEntry(
             id="task-tracker@1-0", path=str(tmp_path / "task"), module="entrypoint",
         )} if state["registered"] else {}
