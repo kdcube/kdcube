@@ -153,3 +153,18 @@ def test_every_store_write_passes_the_file_path_to_adopt():
         source = (folder / name).read_text()
         assert "adopt(stream.fileno()" in source
         assert all("path=temporary" in line for line in source.splitlines() if "adopt(stream.fileno()" in line)
+
+
+def test_adopt_refuses_when_the_name_points_at_another_file(tmp_path, monkeypatch):
+    """claude-ops on #382: the readback by name checks it is still the file the descriptor created."""
+    path, other = tmp_path / "record.json", tmp_path / "other.json"
+    path.write_text("{}")
+    other.write_text("{}")
+    _share(monkeypatch, runtime_file, sticky_fchown=False)
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.replace(other, path)  # the name now names another inode
+        with pytest.raises(PermissionError):
+            runtime_file.adopt(descriptor, OWNER, path=str(path))
+    finally:
+        os.close(descriptor)
