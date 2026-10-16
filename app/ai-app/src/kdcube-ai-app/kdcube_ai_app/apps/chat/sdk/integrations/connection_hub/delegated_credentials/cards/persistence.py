@@ -38,7 +38,9 @@ class DurableCardPersistence(_PortableDurableCardPersistence):
         mutation_lock: CardMutationLock | None = None,
         credential_handles: CardCredentialHandleStore | None = None,
         authority_backend: str = AUTHORITY_BACKEND_REDIS_MIGRATION_SOURCE,
+        **kwargs: Any,
     ) -> None:
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
         super().__init__(
             redis=redis,
             tenant=tenant,
@@ -48,6 +50,7 @@ class DurableCardPersistence(_PortableDurableCardPersistence):
             mutation_lock=mutation_lock or _kdcube_card_mutation_lock,
             credential_handles=credential_handles,
             authority_backend=authority_backend,
+            **kwargs,
         )
 
 

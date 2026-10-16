@@ -27,13 +27,16 @@ class ConnectionEdgesClient(PortableConnectionEdgesClient):
         connection_hub_bundle_id: str | None = None,
         tenant: str | None = None,
         project: str | None = None,
+        **kwargs: Any,
     ) -> None:
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
+        kwargs.setdefault("operation_caller", call_bundle_operation)
         super().__init__(
             entrypoint,
             connection_hub_bundle_id=connection_hub_bundle_id,
             tenant=tenant,
             project=project,
-            operation_caller=call_bundle_operation,
+            **kwargs,
         )
 
 

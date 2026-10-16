@@ -44,7 +44,10 @@ class AuthorityRegistryClient(PortableAuthorityRegistryClient):
         redis: Any = None,
         registry: Mapping[str, Any] | None = None,
         bundle_props: Mapping[str, Any] | None = None,
+        **kwargs: Any,
     ) -> None:
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
+        kwargs.setdefault("bundle_props_loader", _load_bundle_props)
         super().__init__(
             entrypoint,
             connection_hub_bundle_id=connection_hub_bundle_id,
@@ -53,7 +56,7 @@ class AuthorityRegistryClient(PortableAuthorityRegistryClient):
             redis=redis,
             registry=registry,
             bundle_props=bundle_props,
-            bundle_props_loader=_load_bundle_props,
+            **kwargs,
         )
 
 

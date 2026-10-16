@@ -60,7 +60,9 @@ class AutomationAccessService(_core.AutomationAccessService):
         relay_factory: Any | None = None,
         resource_overlay_provider: Any | None = None,
         invocation_policy_service: Any | None = None,
+        **kwargs: Any,
     ) -> None:
+        # W303: keywords this wrapper does not handle go to the portable class unchanged.
         super().__init__(
             redis=redis,
             tenant=tenant,
@@ -81,6 +83,7 @@ class AutomationAccessService(_core.AutomationAccessService):
             relay_factory=relay_factory or _kdcube_relay_factory,
             resource_overlay_provider=resource_overlay_provider,
             invocation_policy_service=invocation_policy_service,
+            **kwargs,
         )
 
 

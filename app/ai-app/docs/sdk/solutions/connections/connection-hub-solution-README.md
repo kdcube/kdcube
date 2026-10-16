@@ -43,6 +43,14 @@ in the `connection-hub` package in that repository. KDCube imports Connection Hu
 and owns only the host bindings under
 `kdcube_ai_app.apps.chat.sdk.integrations.connection_hub`.
 
+A host binding that subclasses a portable class injects only what KDCube
+supplies (an operation caller, a mutation lock, role and auth adapters) and
+forwards every other constructor keyword to the portable class unchanged. A new
+portable parameter therefore needs no KDCube edit. The test
+`integrations/connection_hub/tests/test_wrapper_keyword_forwarding.py` builds
+each binding with every keyword its portable class declares, and fails when a
+new binding is added without being covered.
+
 It has eleven roles:
 
 ```text
