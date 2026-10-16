@@ -408,3 +408,22 @@ def test_a_linked_pair_or_existing_output_refuses_before_the_exchange(monkeypatc
     with pytest.raises(SystemExit):
         run()
     assert calls == [], "nothing is disclosed when the destination is wrong"
+
+
+@pytest.mark.parametrize("flag", [(), ("--include-user-data",)])
+def test_a_bundle_less_legacy_user_secret_follows_the_flag_and_an_acquired_one_never_goes(monkeypatch, tmp_path, flag):
+    """EMain, W885: a user secret with no app in a legacy secrets.yaml goes out only with --include-user-data,
+    and a Connection Hub acquired token never does, bundle-less or not."""
+    workdir, config_dir, _root = _runtime(tmp_path)
+    (config_dir / "secrets.yaml").write_text(yaml.safe_dump({"platform": {"services": {"marker": "kept"}}, "users": {
+        "person-1": {"secrets": {"provider": {"token": "bundle-less-ordinary-canary"},
+                                 "delegated_to_kdcube": {"grant": "bundle-less-acquired-canary"}}}}}), encoding="utf-8")
+    output = tmp_path / "export"
+    _export(monkeypatch, workdir, config_dir, output, *flag)
+    everything = _all_bytes(output)
+    assert b"bundle-less-acquired-canary" not in everything
+    platform = yaml.safe_load((output / "secrets.yaml").read_text())
+    if flag:
+        assert platform["users"]["person-1"]["secrets"] == {"provider.token": "bundle-less-ordinary-canary"}
+    else:
+        assert "users" not in platform and b"bundle-less-ordinary-canary" not in everything
