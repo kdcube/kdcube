@@ -381,6 +381,12 @@ class SecretExportClient:
             return
         error = payload.get("error")
         code = error.get("code") if isinstance(error, Mapping) else ""
+        if code == "secret_export_disabled":
+            raise _fixed_error(
+                "secret_export_disabled",
+                "Secret export is turned off on this deployment; set management.secret_export.enabled: true "
+                "in its assembly.yaml and regenerate the runtime config.",
+            )
         raise _fixed_error(str(code or "secret_export_rejected"))
 
     async def start(self, request: SecretExportRequest) -> SecretExportStart:
