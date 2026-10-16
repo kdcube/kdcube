@@ -110,6 +110,9 @@ INVENTORY = (
 )
 
 
+_PAGES: list[str] = []
+
+
 def _run(monkeypatch, *, user_data: bool, inventory=INVENTORY):
     client, redis, runtime = _export_client(monkeypatch)
     runtime.inventory_targets = inventory
@@ -128,6 +131,7 @@ def _run(monkeypatch, *, user_data: bool, inventory=INVENTORY):
     started = start.json()
     record = json.loads(next(iter(redis.values.values())))
     page = client.get(started["authorization_url"])
+    _PAGES.append(page.text)
     csrf = re.search(r'name="csrf" value="([A-Za-z0-9_-]+)"', page.text).group(1)
     approval = client.post("/api/integrations/management/v1/secrets/export/authorize", follow_redirects=False,
                            data={"transaction": started["transaction_id"], "csrf": csrf, "decision": "approve"})
@@ -176,3 +180,17 @@ def test_the_cli_keeps_the_same_acquired_token_prefixes():
     from kdcube_cli.runtime_secrets_export import EXCLUDED_USER_PREFIXES
 
     assert tuple(EXCLUDED_USER_PREFIXES) == secret_export_routes.BOOTSTRAP_EXCLUDED_USER_PREFIXES
+
+
+def test_the_approval_page_says_whether_user_props_are_included(monkeypatch):
+    """codex-infra on #381: the person must see the props scope they approve, also for a props-only export."""
+    _PAGES.clear()
+    _run(monkeypatch, user_data=False)
+    assert "User props:</strong> not included" in _PAGES[-1]
+    _run(monkeypatch, user_data=True)
+    assert "User props:</strong> <strong>included</strong>" in _PAGES[-1]
+    assert "every user&#x27;s stored props for every application" in _PAGES[-1] or (
+        "every user's stored props for every application" in _PAGES[-1])
+    _run(monkeypatch, user_data=True, inventory=(SecretTarget(scope="user", user_id="u", key="remote_mcp.ref"),))
+    page = _PAGES[-1]
+    assert "Secrets (0)" in page and "User props:</strong> <strong>included</strong>" in page

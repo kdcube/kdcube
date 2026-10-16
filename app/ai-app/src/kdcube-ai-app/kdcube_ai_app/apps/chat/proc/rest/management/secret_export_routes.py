@@ -418,6 +418,13 @@ async def authorize_secret_export(
             "</li>"
         )
     action = html.escape(request.url.path, quote=True)
+    # W885: the person sees the user-props scope they approve, not only the secret list.
+    user_props_scope = (
+        "<strong>included</strong>: every user's stored props for every application in "
+        f"<code>{html.escape(tenant)} / {html.escape(project)}</code>, read at the moment of export"
+        if transaction.request.user_props
+        else "not included"
+    )
     content = f"""
 <h1>Export KDCube secrets</h1>
 <p class="warning">This action discloses plaintext secret values to the local
@@ -428,6 +435,7 @@ Connection Hub CLI. The approval is bound to this exact list and can be used onc
 <p><strong>Required assurance:</strong> <code>{html.escape(transaction.required_assurance)}</code></p>
 <p><strong>Secrets ({len(target_rows)}):</strong></p>
 <ul>{''.join(target_rows)}</ul>
+<p><strong>User props:</strong> {user_props_scope}</p>
 <form method="post" action="{action}">
   <input type="hidden" name="transaction" value="{html.escape(transaction.transaction_id, quote=True)}">
   <input type="hidden" name="csrf" value="{html.escape(transaction.csrf_token, quote=True)}">
