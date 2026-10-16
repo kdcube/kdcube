@@ -19,6 +19,13 @@ from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
     get_current_bundle_operation_stream_caller,
     get_current_bundle_named_service_caller,
 )
+from kdcube_ai_app.apps.chat.sdk.identity_authority import (
+    NativePlatformIdentity,
+    PlatformAuthorityResolutionError,
+)
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import (
+    delegated_authority as delegated_authority_module,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import DataBusClaim
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     DATA_BUS_ORDERING_SERIAL_PER_PARTITION,
@@ -29,6 +36,12 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import worker as worker_module
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.worker import DataBusBundleWorker
+from kdcube_ai_app.auth.role_hierarchy import (
+    ADMIN_ROLE,
+    PAID_ROLE,
+    REGISTERED_ROLE,
+    SUPER_ADMIN_ROLE,
+)
 from kdcube_ai_app.infra.plugin.app_readiness import (
     ApplicationReadinessMode,
     DesiredApplicationState,
@@ -116,6 +129,7 @@ def _live_card(
         }
     return SimpleNamespace(
         access_id="card-a",
+        card_revision=7,
         client_id="worker-client-a",
         grantor_subject="grantor-user",
         delegate_subject="worker-a",
@@ -159,6 +173,71 @@ def _patch_live_card(monkeypatch, card) -> None:
         return card
 
     monkeypatch.setattr(worker_module, "resolve_live_grant_card", _resolve)
+
+
+@pytest.fixture
+def native_authority(monkeypatch):
+    state = SimpleNamespace(
+        roles=(REGISTERED_ROLE,),
+        permissions=("native:read",),
+        error=None,
+        reads=[],
+    )
+
+    async def resolve(*, tenant, project, platform_user_id):
+        state.reads.append((tenant, project, platform_user_id))
+        assert (tenant, project, platform_user_id) == (
+            "tenant-data-bus", "project-data-bus", "grantor-user",
+        )
+        if state.error is not None:
+            raise state.error
+        return NativePlatformIdentity(
+            authority_id="kdcube.platform",
+            user_id="grantor-user",
+            roles=state.roles,
+            permissions=state.permissions,
+            source="bundle_session_native_user",
+            updated_at=123,
+        )
+
+    monkeypatch.setattr(
+        delegated_authority_module, "resolve_native_platform_identity", resolve,
+    )
+    return state
+
+
+def _queued_delegated_invocation(monkeypatch, card, *, operation=""):
+    _patch_live_card(monkeypatch, card)
+    stream = _RecordingStream()
+    handler = DataBusHandlerSpec(
+        method_name="handle_publish",
+        subject="report.publish.requested",
+        operation_id="report.publish" if operation else "",
+        operation_id_explicit=bool(operation),
+    )
+    worker = _worker_with_handler(stream, handler)
+    observed = []
+
+    async def invoke(claim, _handler):
+        observed.append(claim.message.actor)
+        return DataBusResult.ok(claim.message), True
+
+    async def reply(_message, _result):
+        stream.calls.append("reply")
+
+    worker._invoke_handler = invoke
+    worker._send_default_reply = reply
+    message = DataBusMessage(
+        message_id="message-native-authority",
+        tenant="tenant-data-bus",
+        project="project-data-bus",
+        bundle_id="reports@1-0",
+        subject=handler.subject,
+        actor=_delegated_actor(
+            selected_operations=(operation,) if operation else (),
+        ),
+    )
+    return worker, message, stream, observed
 
 
 @pytest.mark.asyncio
@@ -322,6 +401,7 @@ async def test_worker_rejects_malformed_application_operation_policy(
 @pytest.mark.asyncio
 async def test_pre_policy_empty_wildcard_row_stays_compatible_and_live_role_downscopes(
     monkeypatch,
+    native_authority,
 ) -> None:
     stream = _RecordingStream()
     handler = DataBusHandlerSpec(
@@ -367,7 +447,9 @@ async def test_pre_policy_empty_wildcard_row_stays_compatible_and_live_role_down
 @pytest.mark.asyncio
 async def test_super_admin_card_enters_lower_tier_bundle_and_handler(
     monkeypatch,
+    native_authority,
 ) -> None:
+    native_authority.roles = (SUPER_ADMIN_ROLE,)
     stream = _RecordingStream()
     handler = DataBusHandlerSpec(
         method_name="handle_publish",
@@ -410,7 +492,9 @@ async def test_super_admin_card_enters_lower_tier_bundle_and_handler(
 
 
 @pytest.mark.asyncio
-async def test_live_registered_card_cannot_enter_privileged_handler(monkeypatch) -> None:
+async def test_live_registered_card_cannot_enter_privileged_handler(
+    monkeypatch, native_authority,
+) -> None:
     stream = _RecordingStream()
     operation = application_operation_ref(
         application_id="reports@1-0",
@@ -452,7 +536,9 @@ async def test_live_registered_card_cannot_enter_privileged_handler(monkeypatch)
 @pytest.mark.asyncio
 async def test_operation_role_override_is_local_to_one_data_bus_invocation(
     monkeypatch,
+    native_authority,
 ) -> None:
+    native_authority.roles = (SUPER_ADMIN_ROLE,)
     publish = application_operation_ref(
         application_id="reports@1-0",
         operation_id="report.publish",
@@ -515,6 +601,128 @@ async def test_operation_role_override_is_local_to_one_data_bus_invocation(
         ["kdcube:role:super-admin"],
         ["kdcube:role:registered"],
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_role", [PAID_ROLE, ADMIN_ROLE])
+async def test_native_demotion_after_enqueue_rejects_unchanged_card(
+    monkeypatch, native_authority, selected_role,
+) -> None:
+    native_authority.roles = (selected_role,)
+    card = _live_card(grants=(selected_role,), policy_enabled=False)
+    worker, queued, stream, observed = _queued_delegated_invocation(
+        monkeypatch, card,
+    )
+    queued.actor["roles"] = [selected_role]
+
+    native_authority.roles = (REGISTERED_ROLE,)
+    await worker._process_claim(_claim(queued))
+
+    assert card.resource_grants[_DELEGATED_RESOURCE] == (selected_role,)
+    assert observed == []
+    assert len(native_authority.reads) == 1
+    assert stream.calls == ["result", "reply", "ack"]
+    assert stream.results[0].status == "rejected"
+    assert stream.results[0].error == {
+        "code": "grantor_role_changed",
+        "message": "Native target authority does not admit this Data Bus invocation",
+        "details": {
+            "reason": "grantor_role_changed",
+            "status_code": 403,
+            "retryable": False,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override_role", [PAID_ROLE, SUPER_ADMIN_ROLE])
+async def test_operation_override_requires_current_native_role(
+    monkeypatch, native_authority, override_role,
+) -> None:
+    operation = application_operation_ref(
+        application_id="reports@1-0", operation_id="report.publish",
+    )
+    card = _live_card(
+        operations=(operation,),
+        default_role=REGISTERED_ROLE,
+        operation_roles={operation: override_role},
+    )
+    worker, queued, stream, observed = _queued_delegated_invocation(
+        monkeypatch, card, operation=operation,
+    )
+
+    await worker._process_claim(_claim(queued))
+
+    assert observed == []
+    assert len(native_authority.reads) == 1
+    assert stream.calls == ["result", "reply", "ack"]
+    assert stream.results[0].error["code"] == "grantor_role_changed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "status_code", "result_status"),
+    [
+        ("target_authority_identity_unresolved", 403, "rejected"),
+        ("target_authority_unavailable", 503, "error"),
+    ],
+)
+async def test_native_authority_failure_preserves_status_and_retryability(
+    monkeypatch, native_authority, reason, status_code, result_status,
+) -> None:
+    worker, queued, stream, observed = _queued_delegated_invocation(
+        monkeypatch, _live_card(policy_enabled=False),
+    )
+    native_authority.error = PlatformAuthorityResolutionError(reason, status_code)
+
+    await worker._process_claim(_claim(queued))
+
+    assert observed == []
+    assert len(native_authority.reads) == 1
+    assert stream.calls == ["result", "reply", "ack"]
+    assert stream.results[0].status == result_status
+    assert stream.results[0].error["code"] == reason
+    assert stream.results[0].error["details"] == {
+        "reason": reason,
+        "status_code": status_code,
+        "retryable": status_code == 503,
+    }
+
+
+@pytest.mark.asyncio
+async def test_legacy_actor_aliases_cannot_restore_unselected_privilege(
+    monkeypatch, native_authority,
+) -> None:
+    native_authority.roles = (REGISTERED_ROLE, SUPER_ADMIN_ROLE)
+    native_authority.permissions = ("native:read", "kdcube:*")
+    worker, queued, stream, observed = _queued_delegated_invocation(
+        monkeypatch,
+        _live_card(grants=("reports:read",), policy_enabled=False),
+    )
+    aliases = {
+        "platform_roles": [SUPER_ADMIN_ROLE],
+        "grantor_roles": [SUPER_ADMIN_ROLE],
+        "platform_permissions": ["kdcube:*"],
+        "grantor_permissions": ["kdcube:*"],
+        "economics_budget_bypass": True,
+    }
+    queued.actor["identity_authority"].update(aliases)
+
+    await worker._process_claim(_claim(queued))
+
+    assert stream.calls == ["result", "ack"]
+    assert stream.results[0].status == "ok"
+    assert len(observed) == 1
+    actor = observed[0]
+    authority = actor["identity_authority"]
+    assert actor["roles"] == [REGISTERED_ROLE]
+    assert actor["permissions"] == ["reports:read"]
+    assert actor["user_type"] == "registered"
+    assert not set(aliases).intersection(authority)
+    assert authority["budget_bypass"] is False
+    assert authority["delegated_roles_selected"] is False
+    assert authority["required_authority_cast"]["target_identity"] == "grantor-user"
+    assert authority["required_authority_cast"]["card_revision"] == 7
 
 
 @pytest.mark.asyncio
@@ -585,7 +793,9 @@ async def test_unavailable_card_state_is_rejected_with_reason(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_implicit_data_bus_handler_keeps_dynamic_dispatch_authority(monkeypatch) -> None:
+async def test_implicit_data_bus_handler_keeps_dynamic_dispatch_authority(
+    monkeypatch, native_authority,
+) -> None:
     stream = _RecordingStream()
     handler = DataBusHandlerSpec(
         method_name="handle_command",

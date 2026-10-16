@@ -56,7 +56,7 @@ class CurrentGrantorAuthority:
             "grantor_roles": list(self.roles),
             "grantor_permissions": list(self.permissions),
             "economics_budget_bypass": authority_has_platform_privilege(
-                self.roles, privileged_roles=PRIVILEGED_ROLES,
+                self.roles, privileged_roles=tuple(PRIVILEGED_ROLES),
             ),
         }
 

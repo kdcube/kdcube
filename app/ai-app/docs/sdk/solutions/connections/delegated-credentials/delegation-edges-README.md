@@ -173,6 +173,15 @@ fallback to consent metadata or a fabricated registered identity. A native
 record is not a live upstream IdP lookup or an immutable writer-audit ledger:
 trusted sign-in/admin paths and integration-subject separation own its writes.
 
+Each queued delegated Data Bus invocation resolves this ceiling again after
+restoring the current Card and selecting its operation, before bundle or handler
+role visibility is evaluated. Carried actor roles and economics aliases do not
+survive that boundary. A missing native identity produces a rejected 403 result;
+an unavailable store produces an error result with status code 503 and
+`retryable: true`. These terminal results are acknowledged; automatic requeue
+is not part of this contract. Hosted gateway discovery uses the same request's
+typed cast and verifies its Card revision against the freshly read Card.
+
 New codes, access/refresh bindings and selected edges serialize identity,
 grants and provenance, without role/permission/bypass snapshots. Refreshing an
 old record strips those entitlement fields from the successor; old records

@@ -900,14 +900,12 @@ def _delegated_runtime_projection(
             if not authority_has_platform_privilege((value,)) and value not in PRIVILEGED_ROLES
         )
 
-    live_record = bool(str(grant_record.get("registry_access_id") or "").strip())
     privileged_grantor = len(_unprivileged(current_roles)) != len(current_roles)
-    if live_record:
-        # Current platform authority is the ceiling. Live Cards still require
-        # an explicit privilege selection (W653), independent of that ceiling.
-        current_roles = _unprivileged(current_roles)
-        if privileged_grantor:
-            current_permissions = ()
+    # Current platform authority is the ceiling. Every Card still requires an
+    # explicit privilege selection, including legacy records without a role.
+    current_roles = _unprivileged(current_roles)
+    if privileged_grantor:
+        current_permissions = ()
     role_projection = delegated_role_projection(
         grants,
         fallback_roles=current_roles,
@@ -926,7 +924,7 @@ def _delegated_runtime_projection(
             "permissions": list(permissions),
             "delegated_roles_selected": role_projection.selected_on_card,
             "budget_bypass": authority_has_platform_privilege(
-                roles, privileged_roles=PRIVILEGED_ROLES,
+                roles, privileged_roles=tuple(PRIVILEGED_ROLES),
             ),
             "grantor_authority_source": current_grantor.source,
             "required_authority_cast": current_grantor.provenance(),
@@ -1082,7 +1080,7 @@ async def delegated_platform_admin_runtime_projection(
             raise SessionAuthorityUnavailable(exc.reason) from exc
         return {}
     if not authority_has_platform_privilege(
-        grantor.roles, privileged_roles=PRIVILEGED_ROLES,
+        grantor.roles, privileged_roles=tuple(PRIVILEGED_ROLES),
     ):
         # A Card-selected role is delegated authority, not evidence that the
         # grantor held that role. The all-resource administrator entrance must
@@ -1100,7 +1098,7 @@ async def delegated_platform_admin_runtime_projection(
 
     runtime = delegated_rest_runtime_projection(request)
     if not authority_has_platform_privilege(
-        runtime.get("roles") or (), privileged_roles=PRIVILEGED_ROLES,
+        runtime.get("roles") or (), privileged_roles=tuple(PRIVILEGED_ROLES),
     ):
         return {}
     request.state._delegated_admitted_runtime = runtime

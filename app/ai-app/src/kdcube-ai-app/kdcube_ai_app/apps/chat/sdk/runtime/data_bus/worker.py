@@ -34,6 +34,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles imp
     delegated_role_projection,
 )
 from kdcube_ai_app.auth.role_hierarchy import roles_satisfy_any
+from kdcube_ai_app.apps.chat.sdk.identity_authority import PlatformAuthorityResolutionError
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.delegated_authority import cast_delegated_platform_actor
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ConversationCtx,
     ExternalEventActor,
@@ -294,6 +296,7 @@ async def _resolve_live_delegated_actor(
                 "client_id": card.client_id,
                 "grantor_user_id": card.grantor_subject,
                 "delegate_identity": card.delegate_subject,
+                "card_revision": card.card_revision,
                 "expires_at": card.expires_at,
             },
         }
@@ -688,6 +691,22 @@ class DataBusBundleWorker:
                 await self._complete_terminal_result(claim, result)
                 return
             message = replace(message, actor=operation_actor)
+            claim = replace(claim, message=message)
+        try:
+            native_actor = await cast_delegated_platform_actor(
+                message.actor, tenant=message.tenant, project=message.project,
+            )
+        except PlatformAuthorityResolutionError as exc:
+            result = DataBusResult.error_result(
+                message, code=exc.reason,
+                message_text="Native target authority does not admit this Data Bus invocation",
+                details={"reason": exc.reason, "status_code": exc.status_code, "retryable": exc.status_code == 503},
+                status="error" if exc.status_code == 503 else "rejected",
+            )
+            await self._complete_terminal_result(claim, result)
+            return
+        if native_actor != message.actor:
+            message = replace(message, actor=native_actor)
             claim = replace(claim, message=message)
         if not _raw_roles_visible(self.bundle_allowed_roles, message.actor):
             result = DataBusResult.error_result(
