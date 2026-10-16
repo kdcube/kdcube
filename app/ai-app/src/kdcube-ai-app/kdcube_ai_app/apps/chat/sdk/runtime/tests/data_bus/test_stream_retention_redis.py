@@ -1,6 +1,7 @@
 """W827: Data Bus retention never drops unread or pending work, on a real disposable Redis.
 
-Only the message stream changed: results and DLQ keep their count caps. Set DATA_BUS_TEST_REDIS_URL to a
+Only the message stream changed: results and DLQ keep their count caps (the DLQ size and age bounds of W888 are
+in test_dlq_bounds_redis.py). Set DATA_BUS_TEST_REDIS_URL to a
 disposable Redis (never a running KDCube Redis: each test flushes its own
 database). The script computes the acknowledged boundary on every version; run it on Redis 7, 8.4 and the live
 8.x (XTRIM's own ACKED option removed nothing with "~ ... LIMIT" on 8.4.0). Old entries get explicit stream IDs far in the past, so no test sleeps. The fixture sets

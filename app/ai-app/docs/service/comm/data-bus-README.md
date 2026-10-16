@@ -787,9 +787,23 @@ could lose its body while still listed as pending.
   last-delivered ID, then runs `XTRIM key MINID ~ <boundary> LIMIT n`. It does
   not use XTRIM's own `ACKED` option: with `~ ... LIMIT`, that removed nothing
   on Redis 8.4.0.
-- **Result and DLQ streams: unchanged count caps.** They have no consumer
-  group and keep `DATA_BUS_RESULT_STREAM_MAXLEN` and `DATA_BUS_DLQ_STREAM_MAXLEN`
-  (10,000 each). A time window for them is a separate policy decision.
+- **Result stream: unchanged count cap.** It has no consumer group and keeps
+  `DATA_BUS_RESULT_STREAM_MAXLEN` (10,000); a result body above
+  `DATA_BUS_RESULT_INLINE_BYTES` is stored by reference.
+- **DLQ stream: bounded entries, seven days, and the count cap (W888).** The
+  operator's policy decision (2026-10-16, option c). A dead-letter entry keeps
+  its whole envelope (message id, subject, object, idempotency key, actor,
+  reason) and at most `DATA_BUS_DLQ_INLINE_BYTES` (16,384) UTF-8 bytes of the
+  failed body and of the details. A larger value becomes
+  `{"schema": "kdcube.data_bus.dlq_body.v1", "truncated": true, "bytes", "sha256", "head"}`,
+  where `head` is the first bytes, cut on a character boundary. An unreadable
+  record is bounded per field. After each DLQ write, entries older than
+  `DATA_BUS_DLQ_RETENTION_SECONDS` (604,800, seven days, by stream ID on the
+  server clock) are removed with `XTRIM MINID ~ ... LIMIT`; a refused trim
+  never fails the write. `DATA_BUS_DLQ_STREAM_MAXLEN` (10,000) stays as a
+  second bound. Measured before this: 178 entries held 18 MB (p90 568 KB, max
+  761 KB), so the count cap alone allowed several GB. On deploy, the first
+  DLQ write removes the existing entries older than seven days.
 - **When trimming runs.** After a terminal acknowledgement, at most once per
   stream every five seconds per process. One call removes at most 1,000
   entries. Nothing runs on a timer.
@@ -807,7 +821,8 @@ unlimited) and `REDIS_MAXMEMORY_POLICY` (default `noeviction`). Set the
 ceiling only after the protected backlog fits under it.
 
 Built-in defaults: `DATA_BUS_MESSAGE_RETENTION_SECONDS=21600`,
-`DATA_BUS_TRIM_LIMIT=1000` and `DATA_BUS_TRIM_INTERVAL_SECONDS=5`. The former
+`DATA_BUS_TRIM_LIMIT=1000`, `DATA_BUS_TRIM_INTERVAL_SECONDS=5`,
+`DATA_BUS_DLQ_INLINE_BYTES=16384` and `DATA_BUS_DLQ_RETENTION_SECONDS=604800`. The former
 `DATA_BUS_STREAM_MAXLEN` is ignored and logged. Any exposed override belongs in deployment
 descriptors; an environment-only override is not a public configuration
 contract.

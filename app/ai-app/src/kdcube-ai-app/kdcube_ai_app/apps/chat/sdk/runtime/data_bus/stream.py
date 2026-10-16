@@ -23,9 +23,18 @@ logger = logging.getLogger("kdcube.data_bus.stream")
 
 DATA_BUS_AUTOCLAIM_IDLE_MS = max(1000, int(os.getenv("DATA_BUS_AUTOCLAIM_IDLE_MS", "60000") or "60000"))
 
-# Results and DLQ have no consumer group: their existing count caps stay (a changed window is a policy decision).
+# Results and DLQ have no consumer group: their count caps stay (a changed window is a policy decision).
 DATA_BUS_RESULT_STREAM_MAXLEN = max(128, int(os.getenv("DATA_BUS_RESULT_STREAM_MAXLEN", "10000") or "10000"))
 DATA_BUS_DLQ_STREAM_MAXLEN = max(128, int(os.getenv("DATA_BUS_DLQ_STREAM_MAXLEN", "10000") or "10000"))
+
+# W888, the operator's policy decision (2026-10-16 about 23:37Z, "3. yes" to option (c), 16 KB inline plus 7 days):
+# a DLQ entry keeps the envelope (who, what, why) and at most this many UTF-8 bytes of each failed body, with the
+# body's size and SHA-256; the count cap above stays. Measured before: 178 entries held 18 MB, p90 568 KB, max
+# 761 KB, so the 10,000-entry cap alone allowed several GB.
+DATA_BUS_DLQ_INLINE_BYTES = max(1024, int(os.getenv("DATA_BUS_DLQ_INLINE_BYTES", "16384") or "16384"))
+# DLQ entries older than this are removed (by stream ID, the server clock) after a DLQ write.
+DATA_BUS_DLQ_RETENTION_SECONDS = max(3600, int(os.getenv("DATA_BUS_DLQ_RETENTION_SECONDS", "604800") or "604800"))
+DLQ_BODY_SCHEMA = "kdcube.data_bus.dlq_body.v1"
 
 # W827 S2d: result data above this many UTF-8 bytes is stored once under its own key and the results-stream entry
 # keeps a digest- and size-bound reference (live: p50 574 B, p90 158 KB). The body lives at least
@@ -179,6 +188,23 @@ def _json_dump(value: Any) -> str:
     return json.dumps(value if value is not None else {}, ensure_ascii=False, sort_keys=True)
 
 
+def _bounded_body(value: Any, limit: int) -> Any:
+    """``value`` itself when its JSON fits ``limit`` bytes, else its size, digest and first ``limit`` bytes (W888).
+
+    The head is cut on a UTF-8 character boundary, so it is always valid text, never re-parsed as the body.
+    """
+    raw = value.encode("utf-8") if isinstance(value, str) else _json_dump(value).encode("utf-8")
+    if len(raw) <= limit:
+        return value
+    return {
+        "schema": DLQ_BODY_SCHEMA,
+        "truncated": True,
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "head": raw[:limit].decode("utf-8", errors="ignore"),
+    }
+
+
 def _json_load(value: Any) -> Any:
     if value is None:
         return None
@@ -218,6 +244,8 @@ class RedisDataBusStream:
         message_retention_seconds: int = DATA_BUS_MESSAGE_RETENTION_SECONDS,
         result_stream_maxlen: int = DATA_BUS_RESULT_STREAM_MAXLEN,
         dlq_stream_maxlen: int = DATA_BUS_DLQ_STREAM_MAXLEN,
+        dlq_inline_bytes: int = DATA_BUS_DLQ_INLINE_BYTES,
+        dlq_retention_seconds: int = DATA_BUS_DLQ_RETENTION_SECONDS,
         trim_limit: int = DATA_BUS_TRIM_LIMIT,
         trim_interval_seconds: float = DATA_BUS_TRIM_INTERVAL_SECONDS,
         consumer_idle_prune_seconds: int = DATA_BUS_CONSUMER_IDLE_PRUNE_SECONDS,
@@ -237,6 +265,8 @@ class RedisDataBusStream:
         self.result_stream_maxlen = max(0, int(result_stream_maxlen or 0))
         self.result_inline_bytes = max(1, int(result_inline_bytes))
         self.dlq_stream_maxlen = max(0, int(dlq_stream_maxlen or 0))
+        self.dlq_inline_bytes = max(1, int(dlq_inline_bytes))
+        self.dlq_retention_ms = max(1, int(dlq_retention_seconds)) * 1000
         self.trim_limit = max(1, int(trim_limit))
         self.trim_interval_seconds = max(0.0, float(trim_interval_seconds))
         self.consumer_idle_prune_ms = max(1, int(consumer_idle_prune_seconds)) * 1000
@@ -432,13 +462,16 @@ class RedisDataBusStream:
         reason: str,
         details: Mapping[str, Any] | None = None,
     ) -> str:
+        envelope = message.to_dict()
+        # W888: the envelope stays whole; the failed body and the details (an error text can be long) are bounded.
+        envelope["payload"] = _bounded_body(envelope.get("payload"), self.dlq_inline_bytes)
         payload = {
             "schema": "kdcube.data_bus.dlq.v1",
             "reason": str(reason or "failed"),
-            "details": dict(details or {}),
-            "message": message.to_dict(),
+            "details": _bounded_body(dict(details or {}), self.dlq_inline_bytes),
+            "message": envelope,
         }
-        return await self._xadd(self.dlq_key, {"json": _json_dump(payload)}, maxlen=self.dlq_stream_maxlen)
+        return await self._write_dlq_entry(payload)
 
     async def write_dlq_raw(
         self,
@@ -447,14 +480,44 @@ class RedisDataBusStream:
         fields: Mapping[Any, Any],
         reason: str,
     ) -> str:
-        safe_fields = {_decode(k): _decode(v) for k, v in dict(fields or {}).items()}
+        # W888: an unreadable record is kept per field, each bounded the same way.
+        safe_fields = {_decode(k): _bounded_body(_decode(v), self.dlq_inline_bytes)
+                       for k, v in dict(fields or {}).items()}
         payload = {
             "schema": "kdcube.data_bus.dlq.v1",
             "reason": str(reason or "failed"),
             "stream_id": stream_id,
             "fields": safe_fields,
         }
-        return await self._xadd(self.dlq_key, {"json": _json_dump(payload)}, maxlen=self.dlq_stream_maxlen)
+        return await self._write_dlq_entry(payload)
+
+    async def _write_dlq_entry(self, payload: Mapping[str, Any]) -> str:
+        entry_id = await self._xadd(self.dlq_key, {"json": _json_dump(payload)}, maxlen=self.dlq_stream_maxlen)
+        await self.trim_dlq()
+        return entry_id
+
+    async def trim_dlq(self, *, force: bool = False) -> int | None:
+        """Remove DLQ entries older than the DLQ retention window (W888).
+
+        The DLQ has no consumer group, so age is the only rule: XTRIM MINID ~ <server now - window> LIMIT n.
+        Throttled like trim(); returns the number removed, or None when skipped or refused. Never fails the caller.
+        """
+        clock = time.monotonic()
+        marker = (id(self.redis), self.dlq_key)
+        if not force and clock - _LAST_TRIM.get(marker, float("-inf")) < self.trim_interval_seconds:
+            return None
+        _LAST_TRIM[marker] = clock
+        try:
+            seconds, micros = await self.redis.time()
+            boundary_ms = int(seconds) * 1000 + int(micros) // 1000 - self.dlq_retention_ms
+            if boundary_ms <= 0:
+                return 0
+            removed = await self.redis.xtrim(self.dlq_key, minid=f"{boundary_ms}-0", approximate=True,
+                                             limit=self.trim_limit)
+        except Exception:
+            logger.warning("[data_bus.retention] DLQ trim refused stream=%s", self.dlq_key, exc_info=True)
+            return None
+        return int(removed or 0)
 
     async def ack(self, claim: DataBusClaim) -> None:
         await self.ack_stream_id(stream_id=claim.stream_id)
