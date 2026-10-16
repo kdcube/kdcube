@@ -277,9 +277,11 @@ must be handled as complete administrator credentials.
 
 ## Complete Configuration Export And Import
 
-`config export` keeps the private pair beside the ordinary descriptors. In
-`secrets-file` mode it copies the current files. With Host Vault or another
-provider it starts the browser-confirmed whole export automatically:
+`config export --include-platform-descriptors` is a configuration bootstrap
+and gives the same output from every store. In `secrets-file` mode it reads
+the files and the runtime secrets folder; with Host Vault or another provider
+it starts one browser-confirmed `bootstrap` export automatically, which the
+server filters before it reads any value:
 
 ```bash
 kdcube config export \
@@ -288,10 +290,18 @@ kdcube config export \
   --include-platform-descriptors
 ```
 
-The output directory contains the ordinary descriptor set plus the literal
-`secrets.yaml` and `bundles.secrets.yaml`. Whole means all current platform,
-bundle, user, and user-bundle values. On POSIX, the directory is owner-only and
-both secret files are `0600`.
+The output directory contains the ordinary descriptor set plus `secrets.yaml`
+(platform values), `secrets/` (app secrets in the folder layout the file
+backend reads, `secrets/<bundle>/<key>.json`) and `bundles.secrets.yaml`, which
+repeats the app secrets as `secrets:` blocks so a provider-backed import can
+write them. With `--include-user-data` it adds the per-user secrets
+(`secrets/<bundle>/users/<user>/<key>.json`) and the user props
+(`user-data/user_bundle_props.json`); the browser approval page states whether
+user props are included. Tokens Connection Hub acquires at runtime are never
+exported, and a user secret that belongs to no app refuses the export. An
+existing descriptor pair is replaced only with `--replace-descriptor-files`,
+checked before anything is disclosed. Folders are `0700` and files `0600`. See
+the `config export` section of the [CLI README](../cicd/cli-README.md).
 
 A Host Vault identity and endpoint belong to one machine. Therefore a portable
 full export writes `assembly.yaml` with a `secrets-file`/ephemeral bootstrap
