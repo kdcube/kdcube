@@ -31,17 +31,22 @@ ACQUIRED = {("person-1", "demo.bundle", "connections.accounts.gmail.tokens"): "a
             ("Person.Two@example.test", "other.bundle", "remote_mcp.ref"): "acquired-canary-3",
             ("person-1", "other.bundle", "linkedin.accounts.acct.tokens"): "acquired-canary-4"}
 RECORD = "record-canary"
+LEGACY_YAML_USERS = {"person-1": {"secrets": {"connections": {"accounts": {"gmail": {"tokens": "legacy-acquired-canary"}}}},
+                                  "bundles": {"demo.bundle": {"secrets": {"api": {"key": "legacy-user-canary"}}}}}}
 PROPS = [{"user_id": "person-1", "bundle_id": "demo.bundle", "key": "theme", "subsystem": "bundle",
           "value_json": '{"dark": true, "size": 0, "tags": ["a"], "note": null}'},
          {"user_id": "person-1", "bundle_id": "demo.bundle", "key": "looks.like.json", "subsystem": "bundle",
           "value_json": '"{\\"not\\": \\"an object\\"}"'}]
-NEVER = [*ACQUIRED.values(), RECORD]
+NEVER = [*ACQUIRED.values(), RECORD, "legacy-acquired-canary", "legacy-user-canary"]
 SHOWN = [*APP.values(), *USERS.values()]
 
 
 def _runtime(tmp_path: Path) -> tuple[Path, Path, Path]:
     workdir = tmp_path / "demo__project"
     config_dir = _write_initialized_runtime_config(workdir)
+    # A legacy secrets.yaml still holding users (a supported descriptor shape): never part of the bootstrap.
+    (config_dir / "secrets.yaml").write_text(yaml.safe_dump(
+        {"platform": {"services": {"marker": "kept"}}, "users": LEGACY_YAML_USERS}), encoding="utf-8")
     root = config_dir / "secrets"
     root.mkdir(mode=0o700)
     files = UserSecretFileStore(root=root)
@@ -107,9 +112,41 @@ def test_app_secrets_are_also_in_bundles_secrets_yaml_for_a_provider_backed_impo
     output = tmp_path / "export"
     _export(monkeypatch, workdir, config_dir, output)
     items = {item["id"]: item for item in yaml.safe_load((output / "bundles.secrets.yaml").read_text())["bundles"]["items"]}
-    assert items["demo.bundle"]["secrets"]["provider"]["token"] == "app-canary-1"
-    assert items["other.bundle"]["secrets"]["api"]["key"] == "app-canary-2"
+    assert items["demo.bundle"]["secrets"]["provider.token"] == "app-canary-1"
+    assert items["other.bundle"]["secrets"]["api.key"] == "app-canary-2"
     assert "users" not in json.dumps(items), "user secrets never go into the descriptor"
+    platform = yaml.safe_load((output / "secrets.yaml").read_text())
+    assert platform == {"platform": {"services": {"marker": "kept"}}}, "the legacy users root is left out"
+
+
+@pytest.mark.parametrize("flag", [(), ("--include-user-data",)])
+def test_legacy_yaml_user_secrets_are_in_no_exported_file_with_or_without_the_flag(monkeypatch, tmp_path, capsys, flag):
+    workdir, config_dir, _root = _runtime(tmp_path)
+    output = tmp_path / "export"
+    _export(monkeypatch, workdir, config_dir, output, *flag)
+    everything = _all_bytes(output)
+    for value in NEVER:
+        assert value.encode() not in everything
+    assert "user entries of the legacy secrets.yaml left out: 1" in capsys.readouterr().out
+
+
+def test_a_key_and_a_key_below_it_both_survive_the_yaml_mirror_and_its_importer():
+    from kdcube_cli.management.secret_descriptors import _flatten_values
+    from kdcube_cli.runtime_secrets_export import merge_app_secrets
+
+    merged = merge_app_secrets({}, {"demo.bundle": {"token": "canary-parent", "token.child": "canary-child"}})
+    flattened: dict[str, str] = {}
+    _flatten_values("", merged["bundles"]["items"][0]["secrets"], flattened)
+    assert flattened == {"token": "canary-parent", "token.child": "canary-child"}
+
+
+def test_an_older_yaml_value_is_flattened_and_the_folder_value_wins():
+    from kdcube_cli.runtime_secrets_export import merge_app_secrets
+
+    merged = merge_app_secrets({"bundles": {"version": "1", "items": [
+        {"id": "demo.bundle", "secrets": {"provider": {"token": "old", "region": "eu"}}}]}},
+        {"demo.bundle": {"provider.token": "new"}})
+    assert merged["bundles"]["items"][0]["secrets"] == {"provider.region": "eu", "provider.token": "new"}
 
 
 def test_without_the_flag_no_user_secret_and_no_props_are_written(monkeypatch, tmp_path, capsys):

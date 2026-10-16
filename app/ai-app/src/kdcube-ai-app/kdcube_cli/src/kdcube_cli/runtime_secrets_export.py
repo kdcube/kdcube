@@ -164,9 +164,19 @@ def _write_record(target: Path, data: bytes) -> None:
     os.chmod(target, _FILE_MODE)
 
 
+def _flatten(prefix: str, node: object, output: dict[str, object]) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _flatten(f"{prefix}.{key}" if prefix else str(key), value, output)
+    else:
+        output[prefix] = node
+
+
 def merge_app_secrets(bundles_secrets: dict, app_secrets: dict[str, dict[str, str]]) -> dict:
-    """``bundles.secrets.yaml`` with each app secret as a nested ``secrets:`` value of its bundle item, so a
-    provider-backed ``config import`` can write them into its store. A dotted key is a nested path."""
+    """``bundles.secrets.yaml`` with each app secret in its bundle item's ``secrets:``, so a provider-backed
+    ``config import`` can write them into its store. Keys are written flat and dotted, exactly as the folder
+    holds them: the importer flattens a mapping to the same dotted keys, and flat keys keep both ``token``
+    and ``token.child`` (nesting would have to drop one). The folder value wins over an older YAML one."""
     document = dict(bundles_secrets or {})
     bundles = dict(document.get("bundles") or {"version": "1", "items": []})
     items = [dict(item) for item in (bundles.get("items") or []) if isinstance(item, dict)]
@@ -177,17 +187,30 @@ def merge_app_secrets(bundles_secrets: dict, app_secrets: dict[str, dict[str, st
             item = {"id": bundle_id}
             items.append(item)
             by_id[bundle_id] = item
-        secrets = item.get("secrets") if isinstance(item.get("secrets"), dict) else {}
-        for key in sorted(app_secrets[bundle_id]):
-            node = secrets
-            parts = key.split(".")
-            for part in parts[:-1]:
-                child = node.get(part)
-                node[part] = child = child if isinstance(child, dict) else {}
-                node = child
-            node[parts[-1]] = app_secrets[bundle_id][key]
-        item["secrets"] = secrets
+        flat: dict[str, object] = {}
+        if isinstance(item.get("secrets"), dict):
+            _flatten("", item["secrets"], flat)
+        flat.update(app_secrets[bundle_id])
+        item["secrets"] = {key: flat[key] for key in sorted(flat)}
     bundles["items"] = items
     bundles.setdefault("version", "1")
     document["bundles"] = bundles
     return document
+
+
+def strip_user_secrets(global_secrets: dict) -> tuple[dict, int]:
+    """``secrets.yaml`` without its ``users`` root: a configuration bootstrap never takes user secrets from
+    the legacy YAML (they would bypass include_user_data and the acquired-token exclusion). Returns the
+    document and the number of user entries left out."""
+    document = dict(global_secrets or {})
+    root = document.get("secrets") if isinstance(document.get("secrets"), dict) else document
+    users = root.get("users") if isinstance(root, dict) else None
+    if users is None:
+        return document, 0
+    root = dict(root)
+    root.pop("users")
+    count = len(users) if isinstance(users, dict) else 1
+    if isinstance(document.get("secrets"), dict):
+        document["secrets"] = root
+        return document, count
+    return root, count

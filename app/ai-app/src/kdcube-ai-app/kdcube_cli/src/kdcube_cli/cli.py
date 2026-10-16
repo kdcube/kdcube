@@ -63,7 +63,11 @@ from kdcube_cli.deployment_provenance import (
 )
 from kdcube_cli.docker_storage import build_storage_maintenance_commands
 from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
-from kdcube_cli.runtime_secrets_export import export_runtime_secrets_folder, merge_app_secrets
+from kdcube_cli.runtime_secrets_export import (
+    export_runtime_secrets_folder,
+    merge_app_secrets,
+    strip_user_secrets,
+)
 from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
     runtime_compose_environment as host_runtime_compose_environment,
@@ -2708,6 +2712,13 @@ def _export_runtime_secrets(
             "include_user_data": include_user_data,
         }
     ]
+    legacy_user_entries = 0
+    secrets_path = out_dir / "secrets.yaml"
+    if secrets_path.exists():
+        stripped, legacy_user_entries = strip_user_secrets(yaml.safe_load(secrets_path.read_text(encoding="utf-8")) or {})
+        if legacy_user_entries:
+            write_descriptor_text(secrets_path, yaml.safe_dump(stripped, sort_keys=False, allow_unicode=True))
+    files[0]["legacy_yaml_user_entries_left_out"] = legacy_user_entries
     if exported.app_secrets:
         bundles_secrets_path = out_dir / "bundles.secrets.yaml"
         current = yaml.safe_load(bundles_secrets_path.read_text(encoding="utf-8")) if bundles_secrets_path.exists() else {}
@@ -2734,6 +2745,8 @@ def _export_runtime_secrets(
                 f"[dim]  per-user secrets left out: {exported.user_records_left_out} "
                 "(add --include-user-data to export them)[/dim]"
             )
+        if legacy_user_entries:
+            console.print(f"[dim]  user entries of the legacy secrets.yaml left out: {legacy_user_entries}[/dim]")
         if exported.acquired_tokens_left_out:
             console.print(
                 f"[dim]  Connection Hub acquired tokens never exported: {exported.acquired_tokens_left_out}[/dim]"
@@ -5550,7 +5563,7 @@ def main() -> None:
         help=(
             "Include assembly.yaml, secrets.yaml, and gateway.yaml in addition to bundle descriptors. "
             "With `config export` of a secrets-file runtime, also writes the runtime secrets folder "
-            "(app secrets and runtime records) as secrets/ in the layout the services read."
+            "(app secrets) as secrets/ in the layout the services read."
         ),
     )
     _sp.add_argument(
