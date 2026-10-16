@@ -2528,20 +2528,35 @@ def _denormalize_exported_assembly_descriptor(data: dict[str, object]) -> bool:
     return changed
 
 
-def _export_platform_descriptor_file(source: Path, target: Path) -> None:
+def _export_platform_descriptor_file(
+    source: Path, target: Path, *, user_data_gate: bool | None = None
+) -> tuple[int, int]:
+    """Copy one platform descriptor. With ``user_data_gate`` set (a secrets-file bootstrap export, W885),
+    ``secrets.yaml`` is written already filtered, so its users root never reaches the output unless the gate
+    is open. Returns (user entries left out, acquired tokens left out)."""
+    if source.name == "secrets.yaml" and user_data_gate is not None:
+        filtered, left_out, acquired = filter_user_secrets(
+            yaml.safe_load(source.read_text(encoding="utf-8")) or {}, include_user_data=user_data_gate
+        )
+        if left_out or acquired:
+            write_descriptor_text(target, yaml.safe_dump(filtered, sort_keys=False, allow_unicode=True))
+        else:
+            copy_descriptor_file(source, target)
+        return left_out, acquired
     if source.name != "assembly.yaml":
         copy_descriptor_file(source, target)
-        return
+        return 0, 0
 
     data = installer_mod.load_release_descriptor_soft(source)
     if not data or not _denormalize_exported_assembly_descriptor(data):
         shutil.copyfile(source, target)
-        return
+        return 0, 0
 
     target.write_text(
         yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
     )
+    return 0, 0
 
 
 def _apply_platform_descriptor_file(
@@ -2592,6 +2607,7 @@ def _export_platform_descriptors(
     out_dir: Path,
     quiet: bool = False,
     include_secret_descriptor: bool = True,
+    user_data_gate: bool | None = None,
 ) -> list[dict[str, object]]:
     files: list[dict[str, object]] = []
     for name in PLATFORM_DESCRIPTOR_FILENAMES:
@@ -2602,15 +2618,17 @@ def _export_platform_descriptors(
         if not source.exists():
             raise SystemExit(f"{name} not found under runtime config directory: {config_dir}")
         out_dir.mkdir(parents=True, exist_ok=True)
-        _export_platform_descriptor_file(source, target)
-        files.append(
-            {
-                "name": name,
-                "source": str(source),
-                "target": str(target),
-                "size_bytes": target.stat().st_size,
-            }
-        )
+        left_out, acquired = _export_platform_descriptor_file(source, target, user_data_gate=user_data_gate)
+        entry: dict[str, object] = {
+            "name": name,
+            "source": str(source),
+            "target": str(target),
+            "size_bytes": target.stat().st_size,
+        }
+        if name == "secrets.yaml" and user_data_gate is not None:
+            entry["user_entries_left_out"] = left_out
+            entry["acquired_tokens_left_out"] = acquired
+        files.append(entry)
     if not quiet:
         console.print("[green]Exported platform descriptors.[/green]")
         for item in files:
@@ -2692,6 +2710,7 @@ def _export_runtime_secrets(
     quiet: bool = False,
     repo_root: Path | None = None,
     workdir: Path | None = None,
+    legacy_yaml: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """W885: the runtime secrets folder as ``out_dir/secrets``, its app secrets also as ``secrets:`` blocks
     in ``bundles.secrets.yaml``, and with ``include_user_data`` the user props. Counts only, never a name or
@@ -2712,14 +2731,8 @@ def _export_runtime_secrets(
             "include_user_data": include_user_data,
         }
     ]
-    legacy_user_entries = legacy_acquired = 0
-    secrets_path = out_dir / "secrets.yaml"
-    if secrets_path.exists():
-        filtered, legacy_user_entries, legacy_acquired = filter_user_secrets(
-            yaml.safe_load(secrets_path.read_text(encoding="utf-8")) or {}, include_user_data=include_user_data
-        )
-        if legacy_user_entries or legacy_acquired:
-            write_descriptor_text(secrets_path, yaml.safe_dump(filtered, sort_keys=False, allow_unicode=True))
+    legacy_user_entries = int((legacy_yaml or {}).get("user_entries_left_out") or 0)
+    legacy_acquired = int((legacy_yaml or {}).get("acquired_tokens_left_out") or 0)
     files[0]["legacy_yaml_user_entries_left_out"] = legacy_user_entries
     files[0]["acquired_tokens_left_out"] += legacy_acquired
     if exported.app_secrets:
@@ -6841,6 +6854,8 @@ def main() -> None:
                         out_dir=_out_dir,
                         quiet=bool(args.quiet or args.json_output),
                         include_secret_descriptor=not _provider_backed_export,
+                        # W885: secrets.yaml is written already filtered, before anything else can fail.
+                        user_data_gate=None if _provider_backed_export else bool(args.include_user_data),
                     )
                 if args.include_platform_descriptors and not _provider_backed_export:
                     # W885: app secrets, per-user secrets and runtime records live only in the runtime
@@ -6852,6 +6867,9 @@ def main() -> None:
                             out_dir=_out_dir,
                             include_user_data=bool(args.include_user_data),
                             quiet=bool(args.quiet or args.json_output),
+                            legacy_yaml=next(
+                                (item for item in _platform_files if item.get("name") == "secrets.yaml"), {}
+                            ),
                             repo_root=_resolve_subcommand_repo(
                                 args.path, workdir=_resolved, path_provided=_arg_provided("--path")
                             )

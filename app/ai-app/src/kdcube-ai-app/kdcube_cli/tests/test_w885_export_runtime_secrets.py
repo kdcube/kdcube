@@ -230,3 +230,14 @@ def test_the_flag_is_refused_outside_a_secrets_file_platform_export(monkeypatch,
                                       str(tmp_path / "export"), "--include-user-data"])
     with pytest.raises(SystemExit, match="--include-user-data applies to"):
         cli_mod.main()
+
+
+def test_a_refused_folder_export_leaves_no_unflagged_legacy_user_secret_behind(monkeypatch, tmp_path):
+    """Review on #380: secrets.yaml is filtered while it is written, before the folder export can refuse."""
+    workdir, config_dir, _root = _runtime(tmp_path)
+    output = tmp_path / "export"
+    (output / "secrets").mkdir(parents=True)
+    with pytest.raises(SystemExit):
+        _export(monkeypatch, workdir, config_dir, output)
+    left = _all_bytes(output)
+    assert b"legacy-user-canary" not in left and b"legacy-acquired-canary" not in left
