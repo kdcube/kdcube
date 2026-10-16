@@ -441,6 +441,40 @@ async def test_topic_management_transport_failure_does_not_expose_exception_text
     assert secret_marker not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_bot_topic_settings_read_the_two_getme_flags(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def _post(*, bot_token, method, data):
+        calls.append(method)
+        return {
+            "ok": True,
+            "result": {
+                "id": 42,
+                "is_bot": True,
+                "username": "problem_board_bot",
+                "has_topics_enabled": True,
+                "allows_users_to_create_topics": True,
+            },
+        }
+
+    monkeypatch.setattr(bot, "_post_telegram_form", _post)
+    assert await topics.telegram_bot_topic_settings(bot_token="token") == {
+        "ok": True,
+        "username": "problem_board_bot",
+        "has_topics_enabled": True,
+        "allows_users_to_create_topics": True,
+    }
+    assert calls == ["getMe"]
+
+    # A bot from before Bot API 9.3 or 9.4 reports neither flag.
+    monkeypatch.setattr(bot, "_post_telegram_form", lambda **_: {"ok": True, "result": {"username": "old_bot"}})
+    older = await topics.telegram_bot_topic_settings(bot_token="token")
+    assert (older["has_topics_enabled"], older["allows_users_to_create_topics"]) == (False, False)
+
+    assert (await topics.telegram_bot_topic_settings(bot_token=""))["ok"] is False
+
+
 def test_ingress_config_retains_message_thread_id() -> None:
     ingress = telegram_ingress_config(
         chat_id="1001",

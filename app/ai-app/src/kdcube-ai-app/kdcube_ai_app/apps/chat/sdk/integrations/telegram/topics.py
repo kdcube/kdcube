@@ -172,10 +172,31 @@ async def delete_telegram_topic(
     )
 
 
+async def telegram_bot_topic_settings(*, bot_token: str) -> dict[str, Any]:
+    """How the bot's private-chat topics are set, from getMe (Bot API 9.3, 9.4).
+
+    ``has_topics_enabled``: the bot has forum topic mode in private chats.
+    ``allows_users_to_create_topics``: people may create and delete topics in
+    their chat with the bot; when False, only the bot opens topics
+    (createForumTopic). Both are set in BotFather, not through the Bot API.
+    """
+    result = await _topic_api_call(bot_token=bot_token, method="getMe", data={})
+    if not result.get("ok"):
+        return result
+    me = result.get("result") if isinstance(result.get("result"), dict) else {}
+    return {
+        "ok": True,
+        "username": str(me.get("username") or ""),
+        "has_topics_enabled": bool(me.get("has_topics_enabled")),
+        "allows_users_to_create_topics": bool(me.get("allows_users_to_create_topics")),
+    }
+
+
 __all__ = [
     "create_telegram_topic",
     "delete_telegram_topic",
     "edit_telegram_topic",
     "normalize_message_thread_id",
+    "telegram_bot_topic_settings",
     "telegram_topic_conversation_id",
 ]
