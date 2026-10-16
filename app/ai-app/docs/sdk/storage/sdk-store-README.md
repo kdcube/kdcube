@@ -113,6 +113,14 @@ Attachments are stored in the **same turn directory** as artifacts. Example:
 Notes:
 - Both **user uploads** and **assistant‑produced files** are stored here.
 - To distinguish source, use the turn log for the turn where the file appeared.
+- A user upload is stored as `<UTC timestamp with microseconds>-<basename>`. The prefix is all
+  digits, which is what the upload resolver matches. The write is **create-only**: if the name
+  is already taken, the store refuses it (`FileExistsError`) and the upload draws a fresh name,
+  so two uploads never replace each other. Assistant-written files keep their plain basename, and
+  a same-name write in one turn replaces the earlier file.
+- Every backend has `create_bytes_a(path, data, meta)`, a write that refuses an existing key
+  atomically. The local file system opens with `O_EXCL`, S3 sends `If-None-Match: *`, and the
+  in-memory store checks under its lock.
 
 ## 3) Execution snapshots (reactive agent workdir)
 
