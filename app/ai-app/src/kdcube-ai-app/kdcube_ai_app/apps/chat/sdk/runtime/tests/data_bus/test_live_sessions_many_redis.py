@@ -395,31 +395,144 @@ async def test_a_repeated_caller_cancel_still_drains_every_worker(redis_db, monk
     registry = DataBusLiveSessionRegistry(redis)
     tenant = _tenant(tags)
     principals = await _three_routes(registry, tenant, tags[0])
-    started = asyncio.Event()
+    started, in_cleanup = [], []
+    all_started, all_in_cleanup, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
     finished = []
 
     async def live(self, *, socket_id, raw_record=None):
-        started.set()
+        started.append(socket_id)
+        if len(started) == 3:
+            all_started.set()
         try:
             await asyncio.sleep(30)
-        finally:
-            await asyncio.sleep(0.05)  # cleanup still running when the second cancel arrives
+        except asyncio.CancelledError:
+            in_cleanup.append(socket_id)
+            if len(in_cleanup) == 3:
+                all_in_cleanup.set()
+            await release.wait()  # cleanup barrier: a re-cancel here would skip the append below
             finished.append(socket_id)
+            raise
         return True
 
     monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
     before = asyncio.all_tasks()
     task = asyncio.create_task(registry.sessions_many(tenant=tenant, project=PROJECT, bundle_id=BUNDLE,
                                                       principals=principals, concurrency=3))
-    await started.wait()
+    await all_started.wait()
     task.cancel()
-    await asyncio.sleep(0.01)
-    task.cancel()
+    await all_in_cleanup.wait()
+    task.cancel()  # the second cancel arrives while every worker's cleanup is still held
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert not task.done(), "the call waits for its workers' cleanup"
+    release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert sorted(finished) == sorted(f"{tags[0]}-{n}" for n in range(3)), "every worker's cleanup finished"
+    assert sorted(finished) == sorted(f"{tags[0]}-{n}" for n in range(3)), "no cleanup was cut short"
     await asyncio.sleep(0)
     assert asyncio.all_tasks() - before - {asyncio.current_task()} == set()
+
+
+class _CountedRecord(bytes):
+    """A socket record whose lifetime is counted (bytes objects take no weak references)."""
+
+    live = 0
+
+    def __new__(cls, value):
+        record = super().__new__(cls, value)
+        type(record).live += 1
+        return record
+
+    def __del__(self):
+        type(self).live -= 1
+
+
+class _RecordTrackingRedis:
+    """Delegates to the real client; at each GET pipeline, asserts no earlier record is alive."""
+
+    def __init__(self, redis, *, retain: bool = False):
+        self._redis, self._retain, self.kept, self.get_batches = redis, retain, [], []
+
+    def __getattr__(self, name):
+        return getattr(self._redis, name)
+
+    def pipeline(self, **kwargs):
+        outer, real = self, self._redis.pipeline(**kwargs)
+        names = []
+
+        class _Pipe:
+            def __getattr__(self, name):
+                attribute = getattr(real, name)
+                if not callable(attribute):
+                    return attribute
+
+                def record(*args, **kw):
+                    names.append(name)
+                    return attribute(*args, **kw)
+                return record
+
+            async def execute(self, **kw):
+                if names and all(name == "get" for name in names):
+                    import gc
+                    gc.collect()
+                    assert _CountedRecord.live == 0, "a previous chunk's raw records are still alive"
+                    outer.get_batches.append(len(names))
+                    values = [(_CountedRecord(v) if isinstance(v, bytes) else v) for v in await real.execute(**kw)]
+                    if outer._retain:
+                        outer.kept.extend(values)
+                    return values
+                return await real.execute(**kw)
+        return _Pipe()
+
+
+async def _five_routes(registry, tenant, tag):
+    future = int(time.time()) + 20000
+    principals = [f"p{n}" for n in range(5)]
+    for n, principal in enumerate(principals):
+        await registry.register(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principal=principal,
+                                session_id=f"s{n}", socket_id=f"{tag}-{n}", expires_at=future)
+    return principals
+
+
+@pytest.mark.asyncio
+async def test_no_raw_record_outlives_its_chunk(redis_db, monkeypatch):
+    redis, tags = redis_db
+    tenant = _tenant(tags)
+    principals = await _five_routes(DataBusLiveSessionRegistry(redis), tenant, tags[0])
+
+    async def live(self, *, socket_id, raw_record=None):
+        return True
+
+    monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
+    tracking = _RecordTrackingRedis(redis)
+    result = await DataBusLiveSessionRegistry(tracking).sessions_many(
+        tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principals=principals, chunk=2)
+    assert result == {principal: (f"s{n}",) for n, principal in enumerate(principals)}
+    assert tracking.get_batches == [2, 2, 1], "S > C: three GET chunks of at most C"
+    import gc
+    gc.collect()
+    assert _CountedRecord.live == 0
+
+
+@pytest.mark.asyncio
+async def test_the_lifetime_check_catches_a_retained_chunk(redis_db, monkeypatch):
+    # Negative control: the same check fails when earlier records are kept alive.
+    redis, tags = redis_db
+    tenant = _tenant(tags)
+    principals = await _five_routes(DataBusLiveSessionRegistry(redis), tenant, tags[0])
+
+    async def live(self, *, socket_id, raw_record=None):
+        return True
+
+    monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
+    tracking = _RecordTrackingRedis(redis, retain=True)
+    with pytest.raises(AssertionError, match="still alive"):
+        await DataBusLiveSessionRegistry(tracking).sessions_many(
+            tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principals=principals, chunk=2)
+    tracking.kept.clear()
+    import gc
+    gc.collect()
+    assert _CountedRecord.live == 0
 
 
 @pytest.mark.asyncio

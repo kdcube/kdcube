@@ -387,10 +387,12 @@ single-principal contract and only takes fewer sequential round trips:
 - Duplicate principals are de-duplicated; every requested principal has an
   entry; an empty input sends no command. A client without pipelines takes the
   serial path at the same `now`.
-- Routing and record read errors propagate as they arise. Among authority and
-  cleanup failures, including a worker's own cancellation, the earliest by
-  (principal, socket) order is raised as it is, never an exception group and
-  never a partial result. Cancelling the call cancels and drains its workers.
+- Routing reads, record reads and the record-validation cleanup that runs
+  before the authority pool propagate their errors as they arise; no order is
+  promised across these phases. Within the authority worker phase, the earliest
+  failure by (principal, socket) order, including a worker's own cancellation,
+  is raised as it is: never an exception group and never a partial result.
+  Cancelling the call cancels and drains its workers.
 - Nothing is kept after the call. Publishing and action admission still call
   `sessions()` and read authority fresh.
 
