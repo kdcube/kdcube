@@ -595,7 +595,10 @@ class ConnectionHubAuthenticationSurface:
         identity_authority = dict(projection.get("identity_authority") or {})
         card_principal = _str(projection.get("card_principal"))
         roles_selected = bool(projection.get("delegated_roles_selected"))
-        if card_principal and not roles_selected and REGISTERED_ROLE not in roles:
+        if (
+            card_principal and not roles_selected and REGISTERED_ROLE not in roles
+            and "required_authority_cast" not in identity_authority
+        ):
             # Compatibility for Cards written before explicit runtime-role
             # selection. A current Card role set is authoritative and must not
             # be widened from either the grantor or this historical baseline.

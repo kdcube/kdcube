@@ -158,6 +158,12 @@ named-service search as the approving platform user while still logging that the
 call came from Claude. The projection is created by the managed MCP guard before
 the bundle MCP handler runs.
 
+Delegated admission obtains target roles from the native authority rather than
+the latest derived session. The typed cast, provider support, freshness and
+failure contract are defined in [Delegation Edges](../delegated-credentials/delegation-edges-README.md#runtime-use).
+The pure projection helpers normalize trusted facts; their mapping arguments
+are not credential or role-source verification.
+
 ## SDK Helpers
 
 The platform SDK exposes helpers for normalizing/applying this envelope:

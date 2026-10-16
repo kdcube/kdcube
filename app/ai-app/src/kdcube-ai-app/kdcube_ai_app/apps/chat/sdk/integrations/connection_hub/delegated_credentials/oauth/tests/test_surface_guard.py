@@ -358,6 +358,23 @@ def test_managed_mcp_transport_rejects_json_rpc_batches(monkeypatch):
     }
 
 
+def _native_grantor(monkeypatch, roles):
+    """Explicit current authority fixture, independent of captured grant facts."""
+    if roles is None:
+        return
+    from kdcube_ai_app.apps.chat.sdk.identity_authority import NativePlatformIdentity
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import current_grantor
+
+    async def resolve(**kwargs):
+        return NativePlatformIdentity(
+            authority_id="kdcube.platform", user_id=kwargs["platform_user_id"],
+            roles=tuple(roles), permissions=("records:read",),
+            source="bundle_session_native_user", updated_at=100,
+        )
+
+    monkeypatch.setattr(current_grantor, "resolve_native_platform_identity", resolve)
+
+
 def _client(
     monkeypatch,
     *,
@@ -371,7 +388,9 @@ def _client(
     catalog_unavailable="",
     cards=None,
     authority_backend="",
+    native_roles=("kdcube:role:registered", "kdcube:role:super-admin"),
 ):
+    _native_grantor(monkeypatch, native_roles)
     async def fake_authenticate(token: str):
         if token != "reader":
             return None
@@ -442,7 +461,9 @@ def _rest_client(
     connections=None,
     catalog_unavailable="",
     cards=None,
+    native_roles=("kdcube:role:registered", "kdcube:role:super-admin"),
 ):
+    _native_grantor(monkeypatch, native_roles)
     async def fake_authenticate(token: str):
         if token != "reader":
             return None
@@ -493,6 +514,7 @@ def _rest_client(
 
 
 def _proxy_client(monkeypatch, *, grant_record, auth=None):
+    _native_grantor(monkeypatch, ("kdcube:role:registered", "kdcube:role:super-admin"))
     async def fake_authenticate(token: str):
         if token != "reader":
             return None

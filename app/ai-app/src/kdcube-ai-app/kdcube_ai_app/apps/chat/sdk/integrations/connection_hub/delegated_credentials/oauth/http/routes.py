@@ -949,30 +949,20 @@ def _grantor_authority(
     scopes: Iterable[str],
     inventory: AuthorityGrantInventory,
 ) -> dict[str, object]:
-    """Authority facts captured at consent time for later token exchange.
+    """Carry the selected identity and grants across the OAuth handoff.
 
-    The OAuth code is exchanged outside the browser consent request, so the
-    grantor's role/permission facts must be carried through the code/refresh
-    record rather than re-read from a browser session at /oauth/token.
+    Target entitlements are read at each managed admission. Consent-time roles,
+    permissions and budget bypass never become access/refresh authority.
     """
-
-    roles = sorted(_as_set(user.get("roles") if isinstance(user, Mapping) else ()))
     edge = selected_delegation_edge(
         inventory,
         scopes,
-        economics_budget_bypass=bool(is_admin(set(roles))),
     )
     edges = [edge.to_dict()] if edge is not None else []
-    permissions = sorted(set(edge.permissions if edge is not None else ()))
     out: dict[str, object] = {}
     out["schema"] = "connection_hub.grantor_authority.v1"
-    if roles:
-        out["grantor_roles"] = roles
-    if permissions:
-        out["grantor_permissions"] = permissions
     if edges:
         out["delegation_edges"] = edges
-    out["economics_budget_bypass"] = bool(is_admin(set(roles)))
     return out
 
 

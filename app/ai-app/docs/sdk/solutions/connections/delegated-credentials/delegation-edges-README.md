@@ -4,7 +4,8 @@ title: "Delegation Edges"
 summary: "Connection Hub model for external clients that act for a grantor without becoming the same identity as the grantor."
 status: active
 tags: ["sdk", "solutions", "connections", "delegated-credentials", "identity-family", "mcp", "memory"]
-updated_at: 2026-06-29
+updated_at: 2026-10-16
+keywords: [delegation edge, native authority cast, current roles, grantor, economics, provenance]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-delegated-credential-protocol-adapter-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-family-resolver/identity-family-resolver-README.md
@@ -74,10 +75,7 @@ code, access-grant record, and refresh-token record store a server-side
     "authority_id": "platform",
     "identity_ref": "platform:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
     "user_id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-    "grants": ["memories:read"],
-    "roles": ["kdcube:role:registered"],
-    "permissions": ["memories:read"],
-    "economics_budget_bypass": false
+    "grants": ["memories:read"]
   }
 ]
 ```
@@ -132,7 +130,7 @@ identity scope are envelope attributes:
 ```
 
 The credential envelope identifies the delegated client and target resource.
-The delegation edge, grantor authority facts, and resource-specific catalogs
+The delegation edge, target identity mapping, and resource-specific catalogs
 such as nested named-service namespace/tool boundaries live in the grant store, not in
 the token body.
 
@@ -145,11 +143,44 @@ delegated credential envelope
   -> memory_user_ids / identities allowed by this delegation
 ```
 
-The same resolver also returns an economics projection. Grantor roles,
-permissions, and budget-bypass facts come from server-side grant metadata
-captured at consent time, not from the token body or the minimal credential
-envelope. The delegate remains the actor; the grantor is the platform economics
-subject:
+Identity-scope resolution supplies data-owner ids and charging provenance. Its
+response carries no entitlement proof, and caller-supplied role/bypass fields
+are ignored. Managed admission establishes economics separately through a
+typed, request-local **required-authority cast**:
+
+1. Verify the delegated credential and restore its current Card/Control edge.
+2. Map the edge's exact target identity into the platform authority required by
+   the KDCube boundary. The Card is the edge; no second connection-edge record
+   is created for it.
+3. Read that authority's native user record once for the invocation. With a
+   bundle-session authority this is `BundleSessionAuthority.get_user`, whose
+   roles reflect the last native sign-in or trusted admin write. Integration
+   user records and derived platform sessions cannot provide these facts.
+4. Bound the Card-selected default/operation role by the resolved native roles,
+   using the platform hierarchy; custom roles remain exact capabilities. An
+   excessive selection is refused with `grantor_role_changed`. Existing
+   resource, operation, Control and account constraints still apply.
+5. Pass the admitted effective roles, permissions and budget bypass to runtime
+   and billing consumers, retaining actor, target, Card revision and native
+   source/freshness provenance. Legacy Cards with no selected role retain only
+   the target's non-privileged roles; an empty result creates no baseline role.
+
+A missing target or an unwired native provider returns 403
+`target_authority_identity_unresolved`; direct Cognito deployments use this
+result until a native IdP lookup is wired. A disabled target is denied, and a
+native-store outage returns 503 `target_authority_unavailable`. There is no
+fallback to consent metadata or a fabricated registered identity. A native
+record is not a live upstream IdP lookup or an immutable writer-audit ledger:
+trusted sign-in/admin paths and integration-subject separation own its writes.
+
+New codes, access/refresh bindings and selected edges serialize identity,
+grants and provenance, without role/permission/bypass snapshots. Refreshing an
+old record strips those entitlement fields from the successor; old records
+remain readable but their captured entitlements are ignored. No data migration
+or silent role backfill is performed.
+
+The following is an admitted billing projection, not the data-scope operation's
+output. The delegate remains the actor; the grantor is the economics subject:
 
 ```json
 {
@@ -159,9 +190,9 @@ subject:
     "user_id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
     "charge_to": "grantor",
     "actor_identity": "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
-    "roles": ["kdcube:role:super-admin"],
+    "roles": ["kdcube:role:registered"],
     "permissions": ["memories:read"],
-    "budget_bypass": true,
+    "budget_bypass": false,
     "provenance": {
       "schema": "connection_hub.delegated_actor_provenance.v1",
       "delegate_identity": "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
@@ -223,10 +254,13 @@ connections:
   itself (`named_services:use`), while the nested namespace catalog decides
   whether a call to `namespace="mem"` also has `memories:read` or
   `memories:write`.
-- Cross-authority projection is explicit and future-scoped. A delegated token
-  should not silently borrow platform roles at a different authority boundary.
+- Each KDCube boundary requires an explicit cast to its platform authority.
+  Captured roles and a derived session never prove that target's authority.
 - Economics projection is explicit. Product code should charge the projected
-  platform grantor while preserving delegate provenance in accounting metadata.
+  platform grantor using the admitted cast while preserving delegate provenance.
+  User-memories MCP consumes that admission result, never scope-operation
+  economics. Without it, embedding is not charged and search remains lexical;
+  a failed delegated scope lookup cannot widen into native family aggregation.
 
 ## Connector UX Metadata Is Not The Edge
 
@@ -241,6 +275,6 @@ server instructions
 
 Those fields do not grant authority. The durable edge remains the server-side
 grant record: resource, selected tools, selected grants, identity scope, grantor
-authority facts, and any nested namespace catalogs. Clients may use metadata to
+identity mapping, and any nested namespace catalogs. Clients may use metadata to
 group tools visually, but the managed guard must enforce the stored edge on
 every `tools/call`.

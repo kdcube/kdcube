@@ -91,6 +91,13 @@ grantor_identity_family`, reads can include memories written under linked
 runtime identities such as Telegram. Writes are intentionally not exposed over
 this MCP endpoint.
 
+Embedding billing uses the managed guard's admitted native-authority cast,
+not economics fields returned by identity-scope resolution. Missing admission
+facts leave search lexical without a paid embedding call. A failed delegated
+scope lookup retains the exact grantor scope instead of widening to native
+identity-family aggregation. See the SDK
+[delegation contract](https://github.com/kdcube/kdcube/blob/main/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/delegation-edges-README.md#runtime-use).
+
 ## Storages
 
 | Store | Backend | Owner | Contents |

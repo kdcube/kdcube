@@ -107,6 +107,12 @@ from kdcube_ai_app.apps.chat.sdk.application_operations import (
 from kdcube_ai_app.auth.session_authority_runtime import (
     SessionAuthorityUnavailable,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.current_grantor import (
+    GrantorAuthorityFailure,
+    current_grantor_authority,
+    resolve_current_grantor_authority,
+)
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_roles import platform_role_grants
 
 
 MANAGED_MCP_AUTH_MODE = MANAGED_AUTH_MODE
@@ -759,8 +765,12 @@ def _delegated_runtime_projection(
 
     grant_record = delegated.get("grant_record")
     grant_record = grant_record if isinstance(grant_record, Mapping) else {}
-    grantor_authority = grant_record.get("grantor_authority")
-    grantor_authority = grantor_authority if isinstance(grantor_authority, Mapping) else {}
+    current_grantor = current_grantor_authority(request)
+    if current_grantor is None:
+        # Synchronous readers consume admission facts; they cannot promote a
+        # captured grant record into current platform authority.
+        return {}
+    grantor_authority = current_grantor.projection_input()
     projection = resolve_delegated_authority_projection(
         credential=envelope,
         grantor_authority=grantor_authority,
@@ -856,6 +866,10 @@ def _delegated_runtime_projection(
                 "application_operation_not_granted"
             )
         operation_role = role_policy.role_for(resolved_application_operation)
+        try:
+            current_grantor.require_roles((operation_role,))
+        except GrantorAuthorityFailure as exc:
+            raise ApplicationOperationPolicyError(exc.reason) from exc
         identity_authority["card_resource_grants"] = {
             resource: list(values)
             for resource, values in resource_grants.items()
@@ -878,16 +892,8 @@ def _delegated_runtime_projection(
                 "resource_operations": resource_operations,
             }
         )
-    # The grantor's consent-time roles/permissions, as the economics projection
-    # carries them (resolver: from grantor_authority) or directly.
-    consent_roles = (
-        _as_list(identity_authority.get("roles"))
-        or _as_list(grantor_authority.get("grantor_roles"))
-    )
-    consent_permissions = (
-        _as_list(identity_authority.get("permissions"))
-        or _as_list(grantor_authority.get("grantor_permissions"))
-    )
+    current_roles = current_grantor.roles
+    current_permissions = current_grantor.permissions
     def _unprivileged(values):
         return tuple(
             value for value in values
@@ -895,23 +901,16 @@ def _delegated_runtime_projection(
         )
 
     live_record = bool(str(grant_record.get("registry_access_id") or "").strip())
-    privileged_consent = len(_unprivileged(consent_roles)) != len(consent_roles)
+    privileged_grantor = len(_unprivileged(current_roles)) != len(current_roles)
     if live_record:
-        # A live Card is the authority (W653). A Card that selects no role keeps
-        # the grantor's non-privileged consent tier and ambient permissions
-        # (legacy), but privilege is projected only when the Card as it is now
-        # selects it: a privileged consent carries neither its roles nor its admin
-        # edge's permissions.
-        consent_roles = _unprivileged(consent_roles)
-        if privileged_consent:
-            consent_permissions = ()
-    fallback_roles = consent_roles or _as_list(user.get("roles"))
-    if live_record:
-        # The issuance-time token's roles are not tied to the consent either.
-        fallback_roles = _unprivileged(fallback_roles)
+        # Current platform authority is the ceiling. Live Cards still require
+        # an explicit privilege selection (W653), independent of that ceiling.
+        current_roles = _unprivileged(current_roles)
+        if privileged_grantor:
+            current_permissions = ()
     role_projection = delegated_role_projection(
         grants,
-        fallback_roles=fallback_roles,
+        fallback_roles=current_roles,
     )
     roles = role_projection.roles
     if role_projection.selected_on_card:
@@ -920,17 +919,17 @@ def _delegated_runtime_projection(
         # readers, while never copying an unselected grantor role into either.
         permissions = tuple(grants)
     else:
-        permissions = (
-            # For a live record the issuance-time token's permissions are no
-            # fallback: the consent's ambient permissions, else the Card's grants.
-            consent_permissions or tuple(grants) if live_record
-            else consent_permissions or _as_list(user.get("permissions")) or tuple(grants)
-        )
+        permissions = current_permissions or tuple(grants)
     identity_authority.update(
         {
             "roles": list(roles),
             "permissions": list(permissions),
             "delegated_roles_selected": role_projection.selected_on_card,
+            "budget_bypass": authority_has_platform_privilege(
+                roles, privileged_roles=PRIVILEGED_ROLES,
+            ),
+            "grantor_authority_source": current_grantor.source,
+            "required_authority_cast": current_grantor.provenance(),
         }
     )
     identity_authority = {
@@ -956,6 +955,17 @@ def _delegated_runtime_projection(
     if delegated_resource:
         runtime["delegated_resource"] = delegated_resource
     return runtime
+
+
+def delegated_economics_authority(request: Request) -> dict[str, Any]:
+    """Trusted effective economics for a request admitted by a managed guard."""
+    if current_grantor_authority(request) is None:
+        return {}
+    runtime = getattr(request.state, "_delegated_admitted_runtime", None)
+    if not isinstance(runtime, Mapping):
+        return {}
+    authority = runtime.get("identity_authority")
+    return dict(authority) if isinstance(authority, Mapping) else {}
 
 
 def delegated_mcp_runtime_projection(request: Request) -> dict[str, Any]:
@@ -1060,12 +1070,19 @@ async def delegated_platform_admin_runtime_projection(
     if required_grants and not required_grants.issubset(credential_grants):
         return {}
 
-    grantor_authority = grant_record.get("grantor_authority")
-    grantor_authority = (
-        grantor_authority if isinstance(grantor_authority, Mapping) else {}
-    )
+    try:
+        tenant, project = oauth_tenant_project(request)
+        grantor = await resolve_current_grantor_authority(
+            request, tenant=tenant, project=project,
+            credential=envelope, grant_record=grant_record or {},
+        )
+        grantor.require_roles(platform_role_grants(credential_grants))
+    except GrantorAuthorityFailure as exc:
+        if exc.status_code == 503:
+            raise SessionAuthorityUnavailable(exc.reason) from exc
+        return {}
     if not authority_has_platform_privilege(
-        _as_list(grantor_authority.get("grantor_roles"))
+        grantor.roles, privileged_roles=PRIVILEGED_ROLES,
     ):
         # A Card-selected role is delegated authority, not evidence that the
         # grantor held that role. The all-resource administrator entrance must
@@ -1082,8 +1099,11 @@ async def delegated_platform_admin_runtime_projection(
         pass
 
     runtime = delegated_rest_runtime_projection(request)
-    if not authority_has_platform_privilege(runtime.get("roles") or ()):
+    if not authority_has_platform_privilege(
+        runtime.get("roles") or (), privileged_roles=PRIVILEGED_ROLES,
+    ):
         return {}
+    request.state._delegated_admitted_runtime = runtime
 
     REST_LOGGER.info(
         "[connection-hub.oauth.rest_guard] accepted all-resource admin token resource=%s subject=%s grantor=%s delegate=%s authority=%s scopes=%s",
@@ -1265,6 +1285,25 @@ async def _authorize_delegated_managed_request(
             grant_record or {},
         )
 
+    try:
+        tenant, project = oauth_tenant_project(request)
+        grantor = await resolve_current_grantor_authority(
+            request, tenant=tenant, project=project,
+            credential=envelope, grant_record=grant_record or {},
+        )
+        grantor.require_roles(platform_role_grants(
+            _credential_grants_for_resource(envelope, effective_resource)
+        ))
+    except GrantorAuthorityFailure as exc:
+        return (
+            _json_response(
+                exc.status_code,
+                "temporarily_unavailable" if exc.status_code == 503 else "insufficient_scope",
+                "Current grantor authority does not admit this request",
+                reason=exc.reason,
+            ),
+            user, envelope, grant_record or {},
+        )
     return None, user, envelope, grant_record or {}
 
 
@@ -1309,6 +1348,7 @@ async def resolve_delegated_card_session_projection(
     runtime = _delegated_runtime_projection(request, surface="gateway")
     if not runtime:
         return {}
+    request.state._delegated_admitted_runtime = runtime
 
     card_principal = f"card:{view.registry_access_id}"
     identity_authority = dict(runtime.get("identity_authority") or {})
@@ -1481,6 +1521,7 @@ async def authorize_delegated_mcp_request(
         )
 
     runtime = delegated_mcp_runtime_projection(request)
+    request.state._delegated_admitted_runtime = runtime
     # An accepted request is the normal case and it repeats constantly, so it
     # logs what identifies this call and what it actually did. The full grant
     # and operation lists are a property of the card, not of the call: they are
@@ -1640,6 +1681,7 @@ async def evaluate_delegated_rest_admission(
                 403,
                 "insufficient_scope",
                 f"delegated application operation policy denied this request: {exc.reason}",
+                reason=exc.reason,
             ),
             user=user,
             envelope=envelope,
@@ -1650,6 +1692,7 @@ async def evaluate_delegated_rest_admission(
             request_resource=effective_resource,
             operation=operation_name,
         )
+    request.state._delegated_admitted_runtime = runtime
     if log_identity_details:
         REST_LOGGER.info(
             "[connection-hub.oauth.rest_guard] accepted resource=%s method=%s operation=%s "
