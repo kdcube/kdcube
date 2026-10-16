@@ -44,6 +44,13 @@ back to host paths and keeps git-backed bundles as repo/ref/subdir. The full
 export includes `secrets.yaml` and `bundles.secrets.yaml` with real values —
 treat the directory as sensitive: never commit it, never paste from it.
 
+With the `secrets-file` provider the full export also holds `secrets/`, the
+runtime secrets folder in the layout the services read (`<bundle>/<key>.json`,
+`<bundle>/users/<user>/<key>.json`), and repeats the app secrets as `secrets:`
+blocks in `bundles.secrets.yaml`. Per-user secrets and the user props
+(`user-data/user_bundle_props.json`) are included only with
+`--include-user-data`; tokens Connection Hub acquires are never exported.
+
 ## 2. Align the set to the target machine
 
 The exported files describe the ORIGIN machine. Before init on the target:
@@ -95,8 +102,15 @@ The exported files describe the ORIGIN machine. Before init on the target:
 kdcube init --path "$REPO" --descriptors-location "$OUT_DIR" \
   --tenant "$TENANT" --project "$PROJECT" --build
 kdcube defaults --default-tenant "$TENANT" --default-project "$PROJECT"
+# secrets-file export: place the runtime secrets folder before the first start
+# (WORKDIR is the target runtime's workdir, the folder that holds config/)
+[ -d "$OUT_DIR/secrets" ] && cp -Rp "$OUT_DIR/secrets/." "$WORKDIR/config/secrets/"
 kdcube start
 ```
+
+Neither `init` nor `config import` places `secrets/` yet, so copy it by hand
+as above (modes kept, owned by the user the runtime runs as). With a declared
+`secrets.runtime.root`, copy it into that root's host folder instead.
 
 `init` refuses an already-initialized workdir: to reseed descriptors into
 an EXISTING runtime use `kdcube config import --descriptors-location …
