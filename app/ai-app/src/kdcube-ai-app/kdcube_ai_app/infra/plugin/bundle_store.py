@@ -128,8 +128,14 @@ def _admin_bundle_entry() -> "BundleEntry":
         description="Built-in admin-only bundle",
     )
 
+# W389: the image's examples folder, from this module's own location and a fixed relative path.
+# Computed once at import: resolving it on every call cost about 900 lstat calls per registry load
+# (22 calls), on every peer bundle operation.
+_EXAMPLES_ROOT = (Path(__file__).resolve().parents[2] / _EXAMPLES_REL_PATH).resolve()
+
+
 def _examples_root() -> Path:
-    return (Path(__file__).resolve().parents[2] / _EXAMPLES_REL_PATH).resolve()
+    return _EXAMPLES_ROOT
 
 def _shared_bundles_root() -> Path:
     try:
