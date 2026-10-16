@@ -528,7 +528,17 @@ class RenderingTools:
             "• For Mermaid text clarity, use mermaid_font_size_px (e.g. 16–22) and/or mermaid_scale (1.1–1.6)\n"
             "• You can pass mermaid_theme_variables or mermaid_config to control Mermaid rendering\n"
             "• Use render_delay_ms=1000–2000 for Mermaid/JS layout to settle\n"
-            "• Use base_dir for relative assets; avoid base64 data URIs in HTML/Markdown\n"
+            "• Use base_dir for relative assets; avoid base64 data URIs in HTML/Markdown\n\n"
+            "=== LIVE-URL MODE (url/eval_js/ready_js) — TRUST BOUNDARY ===\n"
+            "• Set `url` to snapshot a live page instead of rendering `content`.\n"
+            "• SECURITY: `url` is fetched by a SERVER-SIDE headless browser and\n"
+            "  `eval_js` runs ARBITRARY JavaScript in that page. Any scheme is\n"
+            "  accepted — including `file://` (local disk) and internal\n"
+            "  `http://` hosts unreachable from the public internet (SSRF).\n"
+            "• The url is NOT sanitized/allowlisted here; treat it as a\n"
+            "  privileged, server-trusted operation. Only pass URLs the bundle\n"
+            "  itself controls, never raw untrusted end-user input. A future\n"
+            "  KDCUBE_PNG_URL_ALLOWLIST-style knob may restrict schemes/hosts.\n"
         )
     )
     async def write_png(
@@ -558,6 +568,9 @@ class RenderingTools:
         mermaid_font_size_px: Annotated[Optional[int], "Force Mermaid font size in px (improves readability)."] = None,
         mermaid_font_family: Annotated[Optional[str], "Force Mermaid font family (CSS font-family)."] = None,
         mermaid_scale: Annotated[Optional[float], "Scale Mermaid SVG (e.g., 1.1–1.6) before screenshot."] = None,
+        url: Annotated[Optional[str], "Live URL to navigate to instead of writing a temp HTML file. When set, content/format are ignored for navigation. SECURITY: fetched by a server-side headless browser; any scheme (incl. file:// and internal http://) is accepted and NOT allowlisted — pass only bundle-controlled URLs, never raw untrusted input (SSRF)."] = None,
+        eval_js: Annotated[Optional[str], "JavaScript expression to evaluate after page load (e.g. inject a token or trigger a render). Runs ARBITRARY JS in the fetched page — server-trusted, url-mode only."] = None,
+        ready_js: Annotated[Optional[str], "JS expression that must evaluate to true before screenshotting (polled by wait_for_function). None falls back to the default predicate."] = "window.__RENDER_READY__ === true",
     ) -> Annotated[dict, "Result envelope: {ok: bool, error: null|{code,message,where,managed}}."]:
         import html as html_lib
         import urllib.parse
@@ -641,7 +654,7 @@ class RenderingTools:
 
             mermaid_css = "\n            ".join(mermaid_css_bits)
 
-            if format == "mermaid":
+            if url is None and format == "mermaid":
                 canvas_pad = max(int(padding_px or 0), 0) if fit == "content" else 0
                 if isinstance(background, str) and background.strip().lower() in {"transparent", "none"}:
                     canvas_bg = "transparent"
@@ -732,18 +745,24 @@ class RenderingTools:
     </body>
     </html>"""
 
-            elif format == "html":
+            elif url is None and format == "html":
                 html_content = _ensure_html_wrapper(content, title=title)
 
-            else:
+            elif url is None:
                 base_href = conv._base_href_for(pathlib.Path(base_dir) if base_dir else None)
                 html_content = conv.markdown_to_html(content, base_href, title or "Document")
 
-            import time
-            html_filename = f"_render_{int(time.time() * 1000000)}.html"
-            html_path = outdir / html_filename
-            html_path.write_text(html_content, encoding="utf-8")
+            if url is None:
+                import time
+                html_filename = f"_render_{int(time.time() * 1000000)}.html"
+                html_path = outdir / html_filename
+                html_path.write_text(html_content, encoding="utf-8")
 
+            # ``context`` is created against the long-lived shared browser; it
+            # MUST be closed on every exit path (goto errors, a ready_js 30s
+            # timeout, mermaid early-returns) or Chromium contexts leak in the
+            # shared process. The outer finally guarantees that.
+            context = None
             try:
                 context = await conv._browser.new_context(
                     viewport={"width": width or 1200, "height": height or 800},
@@ -885,7 +904,30 @@ class RenderingTools:
                     finally:
                         await png_context.close()
 
-                if format == "mermaid":
+                if url is not None:
+                    # SSRF/trust note: `url` is navigated by a server-side
+                    # headless browser and `eval_js` runs arbitrary JS in that
+                    # page. Any scheme is accepted (file://, internal http://).
+                    # This is intentional and gated by convention, not
+                    # sanitized here; see the kernel_function description. A
+                    # future allowlist knob could restrict schemes/hosts.
+                    await page.goto(url, wait_until="networkidle")
+                    if eval_js:
+                        await page.evaluate(eval_js)
+                    # Tolerate ready_js=None (explicit override) by falling back
+                    # to the default readiness predicate.
+                    ready_js = ready_js or "window.__RENDER_READY__ === true"
+                    await page.wait_for_function(ready_js, timeout=30000)
+                    await page.wait_for_timeout(max(int(render_delay_ms or 0), 0))
+                    await _apply_background()
+                    await _apply_zoom()
+                    if fit == "content":
+                        box = await _compute_bbox(content_selector)
+                        if box:
+                            screenshot_opts["clip"] = _clip_from_box(box)
+                            screenshot_opts["full_page"] = False
+                    await page.screenshot(**screenshot_opts)
+                elif format == "mermaid":
                     try:
                         await page.goto(f"file://{html_path}", wait_until="networkidle")
                         await page.wait_for_function("window.__RENDER_READY__ === true", timeout=30000)
@@ -932,7 +974,7 @@ class RenderingTools:
                         else:
                             svg_content = await svg_element.evaluate("(el) => el.outerHTML")
                             await _screenshot_serialized_svg(svg_content)
-                        
+
                     except Exception as e:
                         print(f"⚠️ Mermaid SVG extraction failed: {e}")
                         return _error_result(
@@ -956,8 +998,12 @@ class RenderingTools:
                             screenshot_opts["full_page"] = False
                     await page.screenshot(**screenshot_opts)
 
-                await context.close()
             finally:
+                if context is not None:
+                    try:
+                        await context.close()
+                    except Exception:
+                        pass
                 if html_path is not None:
                     try:
                         html_path.unlink(missing_ok=True)
