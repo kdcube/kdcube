@@ -292,16 +292,17 @@ class DataBusLiveSessionRegistry:
         unique = list(dict.fromkeys(str(principal) for principal in principals))
         if not unique:
             return {}
+        # One observation of now for every principal and socket of this call.
+        current = int(time.time() if now is None else now)
         if not callable(getattr(self.redis, "pipeline", None)):
-            # A client without pipelines takes the serial path, unchanged.
+            # A client without pipelines takes the serial path, at the same now.
             return {
                 principal: await self.sessions(
                     tenant=tenant, project=project, bundle_id=bundle_id,
-                    principal=principal, now=now,
+                    principal=principal, now=current,
                 )
                 for principal in unique
             }
-        current = int(time.time() if now is None else now)
         found: dict[str, set[str]] = {principal: set() for principal in unique}
         for start in range(0, len(unique), chunk):
             group = unique[start:start + chunk]
@@ -330,48 +331,71 @@ class DataBusLiveSessionRegistry:
                         continue
                     routes.append((principal, index_keys[position], raw, dict(member), socket_id))
             for record_start in range(0, len(routes), chunk):
-                part = routes[record_start:record_start + chunk]
-                pipe = self.redis.pipeline(transaction=False)
-                for _principal, _index_key, _raw, _member, socket_id in part:
-                    pipe.get(self._socket_key(socket_id))
-                records = await pipe.execute(raise_on_error=True)
-                qualifying = []
-                for (principal, index_key, raw, member, socket_id), raw_record in zip(part, records):
-                    socket_key = self._socket_key(socket_id)
-                    if not raw_record:
-                        await prune_missing_member(self.redis, socket_key=socket_key,
-                                                   index_key=index_key, member=raw)
-                        continue
-                    try:
-                        record = json.loads(raw_record)
-                    except (TypeError, ValueError):
-                        record = None
-                    expected = {"tenant": str(tenant), "project": str(project),
-                                "bundle_id": str(bundle_id), "principal": str(principal),
-                                "session_id": str(member["session_id"]), "socket_id": socket_id}
-                    if not isinstance(record, Mapping) or any(record.get(k) != v for k, v in expected.items()):
-                        await prune_mismatched_member(self.redis, socket_key=socket_key,
-                                                     index_key=index_key, member=raw,
-                                                     raw_record=raw_record)
-                        continue
-                    lease_expiry = record.get("lease_expires_at")
-                    credential_expiry = record.get("expires_at")
-                    if (record.get("schema") != LIVE_SESSION_SCHEMA
-                            or not record.get("registration_id")
-                            or type(lease_expiry) is not int
-                            or type(credential_expiry) is not int
-                            or lease_expiry <= current
-                            or lease_expiry > credential_expiry):
-                        await release_lease(self.redis, socket_key=socket_key, index_key=index_key,
-                                            member=raw, raw_record=raw_record)
-                        continue
-                    qualifying.append((principal, index_key, raw, str(member["session_id"]),
-                                       socket_id, raw_record))
-                await self._authorize_routes(qualifying, found, concurrency=concurrency)
+                # Each chunk is read, checked and authorized inside its own
+                # call, so no raw or parsed record of it outlives the chunk.
+                await self._process_record_chunk(
+                    routes[record_start:record_start + chunk], found,
+                    tenant=tenant, project=project, bundle_id=bundle_id,
+                    current=current, concurrency=concurrency,
+                )
         return {principal: tuple(sorted(found[principal])) for principal in unique}
 
+    async def _process_record_chunk(
+        self, part: list, found: dict[str, set[str]], *, tenant: str, project: str,
+        bundle_id: str, current: int, concurrency: int,
+    ) -> None:
+        """One chunk of routing members: GET their records, today's branches, then authority."""
+
+        pipe = self.redis.pipeline(transaction=False)
+        for _principal, _index_key, _raw, _member, socket_id in part:
+            pipe.get(self._socket_key(socket_id))
+        records = await pipe.execute(raise_on_error=True)
+        qualifying = []
+        for (principal, index_key, raw, member, socket_id), raw_record in zip(part, records):
+            socket_key = self._socket_key(socket_id)
+            if not raw_record:
+                await prune_missing_member(self.redis, socket_key=socket_key,
+                                           index_key=index_key, member=raw)
+                continue
+            try:
+                record = json.loads(raw_record)
+            except (TypeError, ValueError):
+                record = None
+            expected = {"tenant": str(tenant), "project": str(project),
+                        "bundle_id": str(bundle_id), "principal": str(principal),
+                        "session_id": str(member["session_id"]), "socket_id": socket_id}
+            if not isinstance(record, Mapping) or any(record.get(k) != v for k, v in expected.items()):
+                await prune_mismatched_member(self.redis, socket_key=socket_key,
+                                             index_key=index_key, member=raw,
+                                             raw_record=raw_record)
+                continue
+            lease_expiry = record.get("lease_expires_at")
+            credential_expiry = record.get("expires_at")
+            if (record.get("schema") != LIVE_SESSION_SCHEMA
+                    or not record.get("registration_id")
+                    or type(lease_expiry) is not int
+                    or type(credential_expiry) is not int
+                    or lease_expiry <= current
+                    or lease_expiry > credential_expiry):
+                await release_lease(self.redis, socket_key=socket_key, index_key=index_key,
+                                    member=raw, raw_record=raw_record)
+                continue
+            qualifying.append((principal, index_key, raw, str(member["session_id"]),
+                               socket_id, raw_record))
+        await self._authorize_routes(qualifying, found, concurrency=concurrency)
+
     async def _authorize_routes(self, routes: list, found: dict[str, set[str]], *, concurrency: int) -> None:
-        """Each route's own live authority, at most ``concurrency`` at once, owned and drained."""
+        """Each route's own live authority, at most ``concurrency`` at once, owned and drained.
+
+        A worker whose own await is cancelled while this call is not records
+        that cancellation as its failure: the TaskGroup treats a cancelled
+        child as finished, so without the record the call would return a
+        partial map in which the lost routes read as offline. After every
+        worker has finished, the earliest recorded failure is raised as it
+        is (an Exception or that CancelledError), never an ExceptionGroup and
+        never a partial result. A cancellation of this call itself is the
+        TaskGroup's: it cancels and drains the workers and propagates.
+        """
 
         if not routes:
             return
@@ -393,6 +417,11 @@ class DataBusLiveSessionRegistry:
                     found[principal].add(session_id)
                 except Exception as exc:  # noqa: BLE001 - re-raised below, unwrapped
                     failures.append((position, exc))
+                except asyncio.CancelledError as exc:
+                    # Recorded, then re-raised so this child ends cancelled and
+                    # stops; the remaining workers stop dispatching.
+                    failures.append((position, exc))
+                    raise
 
         async with asyncio.TaskGroup() as group:
             for _ in range(min(concurrency, len(routes))):

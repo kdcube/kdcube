@@ -367,6 +367,33 @@ and references, and retain a periodic or reconnect reconciliation path for a
 missed wake. `connected(principal)` reports an authorized live route; it does not
 prove that a human or model consumed the referenced state.
 
+A display that needs the connectivity of several principals at once, such as a
+team view, can read them in one call: `connected_many(principals)` returns
+`{principal: bool}`, and the registry's `sessions_many(...)` returns the same
+session tuples `sessions()` would for each principal. The batch read keeps the
+single-principal contract and only takes fewer sequential round trips:
+
+- One `now` is observed per call and used for every principal and socket. No
+  atomic snapshot across principals or Cards is implied.
+- The prune and range reads of up to `chunk` principals (default 64) share one
+  non-transactional pipeline; socket records are read `chunk` at a time with
+  pipelined `GET`s, so a wrong-type key raises as it does in `sessions()`. Each
+  chunk is processed and released before the next is read.
+- Every record goes through the same scope, schema, lease and credential checks
+  and the same exact-value cleanup helpers. Each surviving socket resolves its
+  own current Card authority for its own resource; nothing is shared across
+  sockets or calls. At most `concurrency` (default 16) authority checks run at
+  once, in a task group that the call owns and drains.
+- Duplicate principals are de-duplicated; every requested principal has an
+  entry; an empty input sends no command. A client without pipelines takes the
+  serial path at the same `now`.
+- Routing and record read errors propagate as they arise. Among authority and
+  cleanup failures, including a worker's own cancellation, the earliest by
+  (principal, socket) order is raised as it is, never an exception group and
+  never a partial result. Cancelling the call cancels and drains its workers.
+- Nothing is kept after the call. Publishing and action admission still call
+  `sessions()` and read authority fresh.
+
 The client-side `app_foundation.data_bus.FederatedDataBusClient` uses the same
 socket for worker requests, correlated handler results, and unmatched
 application events. An ingress acknowledgement proves only that a package

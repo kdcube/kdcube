@@ -21,7 +21,11 @@ import pytest_asyncio
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
-from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_sessions import DataBusLiveSessionRegistry
+import kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_sessions as live_sessions
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.live_sessions import (
+    DataBusLiveSessionPublisher,
+    DataBusLiveSessionRegistry,
+)
 
 PROJECT = "project"
 BUNDLE = "bundle@1-0"
@@ -76,12 +80,22 @@ async def _layout(registry: DataBusLiveSessionRegistry, tenant: str, tag: str) -
     record = json.loads(await registry.redis.get(registry._socket_key(expired)))
     record["lease_expires_at"] = int(time.time()) - 5
     await registry.redis.set(registry._socket_key(expired), json.dumps(record))
+    legacy = await add("f", "f1")
+    record = json.loads(await registry.redis.get(registry._socket_key(legacy)))
+    record.pop("schema", None)
+    await registry.redis.set(registry._socket_key(legacy), json.dumps(record))
+    beyond = await add("g", "g1")
+    record = json.loads(await registry.redis.get(registry._socket_key(beyond)))
+    record["lease_expires_at"] = record["expires_at"] + 10
+    await registry.redis.set(registry._socket_key(beyond), json.dumps(record))
+    malformed = await add("h", "h1")
+    await registry.redis.set(registry._socket_key(malformed), "{not json")
     return sockets
 
 
 async def _index_state(registry, tenant):
     state = {}
-    for principal in "abcde":
+    for principal in "abcdefgh":
         key = registry._index_key(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principal=principal)
         state[principal] = sorted(json.loads(m)["session_id"] for m in await registry.redis.zrange(key, 0, -1))
     return state
@@ -102,12 +116,13 @@ async def test_batch_equals_serial_results_and_cleanup(redis_db, monkeypatch):
 
     monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
     now = int(time.time())
-    principals = ["a", "b", "c", "d", "e", "a", "nobody"]
+    principals = ["a", "b", "c", "d", "e", "f", "g", "h", "a", "nobody"]
     serial = {p: await registry.sessions(tenant=serial_tenant, project=PROJECT, bundle_id=BUNDLE,
                                          principal=p, now=now) for p in dict.fromkeys(principals)}
     batch = await registry.sessions_many(tenant=batch_tenant, project=PROJECT, bundle_id=BUNDLE,
                                          principals=principals, now=now, concurrency=2, chunk=2)
-    assert batch == serial == {"a": ("s-a1",), "b": (), "c": (), "d": (), "e": (), "nobody": ()}
+    assert batch == serial == {"a": ("s-a1",), "b": (), "c": (), "d": (), "e": (), "f": (), "g": (),
+                               "h": (), "nobody": ()}
     # The same cleanup: revoked a2, missing c1 and expired e1 are pruned; the
     # unavailable b1 keeps its route; the rebound d1 member is pruned from d's index.
     assert await _index_state(registry, batch_tenant) == await _index_state(registry, serial_tenant)
@@ -246,3 +261,181 @@ async def test_a_client_without_pipelines_takes_the_serial_path(monkeypatch):
     assert await registry.sessions_many(tenant="t", project=PROJECT, bundle_id=BUNDLE,
                                         principals=["a", "b", "a"]) == {"a": ("s",), "b": ()}
     assert calls == ["a", "b"]
+
+
+async def _three_routes(registry, tenant, tag):
+    future = int(time.time()) + 20000
+    for n in range(3):
+        await registry.register(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principal=f"p{n}",
+                                session_id=f"s{n}", socket_id=f"{tag}-{n}", expires_at=future)
+    return [f"p{n}" for n in range(3)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("where", ["authority", "cleanup"])
+async def test_an_independently_cancelled_worker_is_never_a_partial_result(redis_db, monkeypatch, where):
+    redis, tags = redis_db
+    registry = DataBusLiveSessionRegistry(redis)
+    tenant = _tenant(tags)
+    principals = await _three_routes(registry, tenant, tags[0])
+    seen = []
+
+    async def live(self, *, socket_id, raw_record=None):
+        seen.append(socket_id)
+        if socket_id.endswith("-0"):
+            if where == "authority":
+                raise asyncio.CancelledError()  # the worker's own await, not the caller's
+            return False
+        return True
+
+    async def release(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
+    if where == "cleanup":
+        monkeypatch.setattr(live_sessions, "release_lease", release)
+    for call in ("sessions_many", "connected_many"):
+        if call == "sessions_many":
+            run = registry.sessions_many(tenant=tenant, project=PROJECT, bundle_id=BUNDLE,
+                                         principals=principals, concurrency=1)
+        else:
+            publisher = DataBusLiveSessionPublisher(redis=redis, tenant=tenant, project=PROJECT,
+                                                    bundle_id=BUNDLE, relay=object())
+            run = publisher.connected_many(principals)
+        task = asyncio.create_task(run)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not task.cancelling(), "the caller was never cancelled"
+
+
+@pytest.mark.asyncio
+async def test_a_real_cleanup_helper_failure_is_raised_unwrapped(redis_db, monkeypatch):
+    redis, tags = redis_db
+    registry = DataBusLiveSessionRegistry(redis)
+    tenant = _tenant(tags)
+    principals = await _three_routes(registry, tenant, tags[0])
+
+    async def live(self, *, socket_id, raw_record=None):
+        return not socket_id.endswith("-1")
+
+    real_release = live_sessions.release_lease
+
+    async def release(redis_client, **kwargs):
+        if kwargs["socket_key"].endswith("-1"):
+            raise ConnectionError("cleanup write failed")
+        return await real_release(redis_client, **kwargs)
+
+    monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
+    monkeypatch.setattr(live_sessions, "release_lease", release)
+    with pytest.raises(ConnectionError, match="cleanup write failed") as error:
+        await registry.sessions_many(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principals=principals)
+    assert not isinstance(error.value, BaseExceptionGroup)
+
+
+@pytest.mark.asyncio
+async def test_a_renewal_during_cleanup_survives_as_in_the_serial_path(redis_db, monkeypatch):
+    redis, tags = redis_db
+    registry = DataBusLiveSessionRegistry(redis)
+    states = {}
+    for path in ("serial", "batch"):
+        tenant = _tenant(tags)
+        socket_id = f"{tags[-1]}-r"
+        future = int(time.time()) + 20000
+        await registry.register(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principal="r",
+                                session_id="s-r", socket_id=socket_id, expires_at=future)
+
+        async def live(self, *, socket_id, raw_record=None, _tenant=tenant, _future=future):
+            # A reconnect re-registers the same socket between the read and the cleanup.
+            await registry.register(tenant=_tenant, project=PROJECT, bundle_id=BUNDLE, principal="r",
+                                    session_id="s-r", socket_id=socket_id, expires_at=_future)
+            return False
+
+        monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
+        if path == "serial":
+            await registry.sessions(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principal="r")
+        else:
+            await registry.sessions_many(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principals=["r"])
+        index = registry._index_key(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principal="r")
+        states[path] = (await redis.zcard(index), await redis.exists(registry._socket_key(socket_id)))
+    assert states["batch"] == states["serial"] == (1, 1), "exact-value cleanup keeps the renewed route"
+
+
+@pytest.mark.asyncio
+async def test_record_chunks_are_processed_one_at_a_time(redis_db, monkeypatch):
+    redis, tags = redis_db
+    registry = DataBusLiveSessionRegistry(redis)
+    tenant = _tenant(tags)
+    future = int(time.time()) + 20000
+    principals = [f"p{n}" for n in range(5)]
+    for n, principal in enumerate(principals):
+        await registry.register(tenant=tenant, project=PROJECT, bundle_id=BUNDLE, principal=principal,
+                                session_id=f"s{n}", socket_id=f"{tags[0]}-{n}", expires_at=future)
+    events = []
+    original = DataBusLiveSessionRegistry._process_record_chunk
+
+    async def chunk(self, part, found, **kwargs):
+        events.append(("enter", len(part)))
+        await original(self, part, found, **kwargs)
+        events.append(("exit", len(part)))
+
+    async def live(self, *, socket_id, raw_record=None):
+        return True
+
+    monkeypatch.setattr(DataBusLiveSessionRegistry, "_process_record_chunk", chunk)
+    monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
+    result = await registry.sessions_many(tenant=tenant, project=PROJECT, bundle_id=BUNDLE,
+                                          principals=principals, chunk=2)
+    assert result == {principal: (f"s{n}",) for n, principal in enumerate(principals)}
+    assert events == [("enter", 2), ("exit", 2), ("enter", 2), ("exit", 2), ("enter", 1), ("exit", 1)]
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_caller_cancel_still_drains_every_worker(redis_db, monkeypatch):
+    redis, tags = redis_db
+    registry = DataBusLiveSessionRegistry(redis)
+    tenant = _tenant(tags)
+    principals = await _three_routes(registry, tenant, tags[0])
+    started = asyncio.Event()
+    finished = []
+
+    async def live(self, *, socket_id, raw_record=None):
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        finally:
+            await asyncio.sleep(0.05)  # cleanup still running when the second cancel arrives
+            finished.append(socket_id)
+        return True
+
+    monkeypatch.setattr(DataBusLiveSessionRegistry, "_live_authority", live)
+    before = asyncio.all_tasks()
+    task = asyncio.create_task(registry.sessions_many(tenant=tenant, project=PROJECT, bundle_id=BUNDLE,
+                                                      principals=principals, concurrency=3))
+    await started.wait()
+    task.cancel()
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sorted(finished) == sorted(f"{tags[0]}-{n}" for n in range(3)), "every worker's cleanup finished"
+    await asyncio.sleep(0)
+    assert asyncio.all_tasks() - before - {asyncio.current_task()} == set()
+
+
+@pytest.mark.asyncio
+async def test_the_serial_fallback_uses_one_now(monkeypatch):
+    class _NoPipeline:
+        pass
+
+    registry = DataBusLiveSessionRegistry(_NoPipeline())
+    clock = iter(range(1000, 2000, 7))
+    monkeypatch.setattr(live_sessions.time, "time", lambda: next(clock))
+    seen = []
+
+    async def sessions(self, **scope):
+        seen.append(scope["now"])
+        return ()
+
+    monkeypatch.setattr(DataBusLiveSessionRegistry, "sessions", sessions)
+    await registry.sessions_many(tenant="t", project=PROJECT, bundle_id=BUNDLE, principals=["a", "b", "c"])
+    assert len(set(seen)) == 1 and seen[0] is not None
