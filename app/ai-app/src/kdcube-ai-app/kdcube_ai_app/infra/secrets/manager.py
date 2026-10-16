@@ -1155,6 +1155,41 @@ class SecretsFileSecretsManager(ISecretsManager):
         except (SecretsManagerError, UserSecretFileError, ValueError):
             return None
 
+    def secret_miss_signal(self, key: str) -> tuple | None:
+        """W883: the content signal under which a not-set platform secret may be remembered.
+
+        Operator, W883: "yes, content hash" ... "only when the secrets are in file". Only a platform key read
+        from the local secrets yaml files has one: the sha256 of the bytes of GLOBAL_SECRETS_YAML and of
+        BUNDLE_SECRETS_YAML (both feed _load_current_data), "absent" for a file that does not exist. A key
+        kept in a per-secret record file has none (its miss is decided by the file's existence on each
+        lookup), nor does an inventory or a remote yaml.
+        """
+        import hashlib
+
+        try:
+            key = validate_secret_provider_key(key)
+        except (SecretsManagerError, ValueError):
+            return None
+        if (_secret_inventory_prefix(key) is not None or key in (USER_SECRET_INVENTORY_KEY, BUNDLE_SECRET_INVENTORY_KEY)
+                or _is_user_secret_key(key)):
+            return None
+        digests = []
+        for uri in (self._global_uri, self._bundle_uri):
+            if not uri:
+                digests.append("unset")
+                continue
+            parsed = urlparse(uri)
+            if parsed.scheme not in {"", "file"}:
+                return None
+            path = Path(local_file_uri_path(uri) if parsed.scheme == "file" else uri).expanduser()
+            try:
+                digests.append(hashlib.sha256(path.read_bytes()).hexdigest())
+            except FileNotFoundError:
+                digests.append("absent")
+            except OSError:
+                return None
+        return ("sha256", *digests)
+
     def _read_user_secret(self, key: str) -> Optional[str]:
         result = self._user_secret_call("get", key)
         if isinstance(result, list):

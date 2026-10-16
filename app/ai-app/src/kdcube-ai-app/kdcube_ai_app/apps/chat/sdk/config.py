@@ -94,7 +94,13 @@ async def _file_validated_secret(manager: Any, cache_key: tuple[str, ...], provi
     path = source(provider_key) if callable(source) else None
     if path is None:
         return False, None
-    before = file_fingerprint(path)
+    # W883: a platform key read from the local secrets yaml also carries their content hash, so a value or
+    # a miss is kept exactly until either file's bytes change. Per-secret record files have no such signal:
+    # their miss is decided by the file's existence on each lookup, as before.
+    signal_of = getattr(manager, "secret_miss_signal", None)
+    signal = signal_of(provider_key) if callable(signal_of) else None
+    stat = file_fingerprint(path)
+    before = (stat, signal) if signal is not None and stat is not None else stat
     if before is not None:
         hit, value = get_secret_cache(cache_key, fingerprint=before)
         if hit:
@@ -103,10 +109,12 @@ async def _file_validated_secret(manager: Any, cache_key: tuple[str, ...], provi
         value = await read()
     except Exception:
         value = None
-    if before is None or value is None or file_fingerprint(path) != before:
-        drop_secret_cache(cache_key)  # absent, a miss, or changed while reading: never cached
+    after_stat = file_fingerprint(path)
+    after = (after_stat, signal_of(provider_key)) if signal is not None and after_stat is not None else after_stat
+    if before is None or after != before or (value is None and signal is None):
+        drop_secret_cache(cache_key)  # absent, changed while reading, or a miss without a content signal
         return True, value or None
-    return True, set_secret_cache(cache_key, value, fingerprint=before)
+    return True, set_secret_cache(cache_key, value, fingerprint=before, content_signal_miss=signal is not None)
 
 
 async def _get_provider_secret_cached(settings: Any, provider_key: str) -> str | None:
