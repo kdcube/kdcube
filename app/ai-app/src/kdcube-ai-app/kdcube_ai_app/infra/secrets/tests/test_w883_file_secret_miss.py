@@ -108,3 +108,15 @@ async def test_a_per_secret_record_miss_is_still_decided_by_existence_each_looku
 def test_only_a_local_platform_key_has_a_content_signal(rig):
     assert rig.manager.secret_miss_signal(UNSET)[0] == "sha256"
     assert rig.manager.secret_miss_signal(f"bundles.{HUB}.secrets.google.client_secret") is None
+
+
+@pytest.mark.asyncio
+async def test_the_content_hash_alone_ends_the_miss_when_file_attributes_look_unchanged(rig, monkeypatch):
+    """claude-ops: pin the hash's own job, stale attributes (EFS can serve old ones), by freezing the fingerprint."""
+    frozen = ("frozen", 1, 2, 3, ())
+    monkeypatch.setattr(sdk_config, "file_fingerprint", lambda path: frozen)
+    assert await _get(UNSET) is None
+    assert await _get(UNSET) is None
+    assert rig.reads == [UNSET]
+    _write(rig.config / "secrets.yaml", {"key": "synthetic-platform", "openai": {"api_key": "z"}})
+    assert await _get(UNSET) == "z"
