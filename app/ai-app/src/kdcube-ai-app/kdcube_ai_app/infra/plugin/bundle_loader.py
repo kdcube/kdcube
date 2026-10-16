@@ -106,6 +106,9 @@ class APIEndpointSpec:
     roles: tuple[str, ...] = ()
     roles_config: str | None = None
     csrf: bool = False
+    # W372: bundle ids allowed to call this operation as a platform peer call; empty means any caller
+    # as before. Set by the decorator only; descriptor props cannot widen it.
+    peer_callers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -879,8 +882,13 @@ def api(
         user_types_config: str | None = None,
         roles: List[str] | Tuple[str, ...] | None = None,
         roles_config: str | None = None,
+        peer_callers: List[str] | Tuple[str, ...] | None = None,
 ):
     """
+    ``peer_callers`` (W372) names the bundles that may call this operation through a platform
+    peer call. When set, any other caller, and every direct HTTP or MCP request, is refused 403
+    ``bundle_operation_caller_not_allowed``. It is a decorator-only declaration.
+
     ``user_types`` / ``roles`` / ``csrf`` are decorator defaults. The matching
     ``surfaces.as_provider.api`` descriptor node overrides them at request
     time. ``user_types_config`` / ``roles_config`` retain compatibility with
@@ -897,6 +905,9 @@ def api(
     )
     resolved_user_types_config = str(user_types_config).strip() if user_types_config else None
     resolved_roles_config = str(roles_config).strip() if roles_config else None
+    if isinstance(peer_callers, str):
+        raise ValueError("peer_callers is a list of bundle ids, not one string")
+    resolved_peer_callers = tuple(sorted({str(item).strip() for item in (peer_callers or ()) if str(item).strip()}))
 
     def _wrap(fn):
         method_name = getattr(fn, "__name__", "api_method")
@@ -922,6 +933,7 @@ def api(
                 user_types_config=resolved_user_types_config,
                 roles=resolved_roles,
                 roles_config=resolved_roles_config,
+                peer_callers=resolved_peer_callers,
             ),
         )
         return fn
@@ -2728,6 +2740,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 user_types_config=getattr(api_spec, "user_types_config", None),
                 roles=tuple(getattr(api_spec, "roles", ()) or ()),
                 roles_config=getattr(api_spec, "roles_config", None),
+                peer_callers=tuple(getattr(api_spec, "peer_callers", ()) or ()),
             )
             api_key = (resolved.alias, resolved.http_method, resolved.route)
             if api_key in seen_api:

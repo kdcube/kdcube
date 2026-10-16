@@ -209,6 +209,45 @@ target's responsibility and run normally inside its method.
 Use `call_bundle_operation_stream(...)` for a target operation that returns
 bytes or a streamed result. The same identity and target-context rules apply.
 
+#### Peer Caller Identity And `peer_callers`
+
+On every platform peer call the target can read which app called it:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import current_peer_caller_bundle_id
+
+caller = current_peer_caller_bundle_id()  # "connection-hub@1-0", or "" for a direct request
+```
+
+The platform sets this for one invocation, around the target method, and
+resets it afterwards. It comes from the calling app's own platform-built
+context: the local bridge uses the source context's app id, and the REST and
+MCP peer callers pass their own app id. It is never read from the payload,
+headers or any request field. A direct HTTP or MCP request sees an empty
+value. For A → B → C, C sees B: each call names its immediate caller,
+including a call B makes from a task it spawned.
+
+An operation that only some apps may call declares them:
+
+```python
+@api(alias="project_authorize_decide", peer_callers=("connection-hub@1-0",))
+async def project_authorize_decide(self, **kwargs): ...
+```
+
+When `peer_callers` is set, any other caller, and every direct HTTP or MCP
+request, is refused before the method runs: HTTP 403 with detail
+`{"code": "bundle_operation_caller_not_allowed", "caller": "<caller app id>"}`
+(the caller is `""` for a direct request), or
+`BundleOperationCallerNotAllowed` on the local bridge. An operation that does
+not declare `peer_callers` behaves as before. `peer_callers` is a decorator
+declaration only; descriptor props cannot widen it.
+
+Threat model: this stops external and direct-HTTP callers, spoofed payload or
+header values, and accidental calls from other apps through platform paths. It
+does not protect against malicious code running in the same process, which can
+build its own local caller. Shared-secret checks between apps (for example an
+HMAC) remain until the operator decides to retire them for a runtime.
+
 ### 2. Named Services
 
 Named services are the semantic app-to-app contract. The consumer asks for a
@@ -439,7 +478,7 @@ refresh, and revocation flow.
 
 | Path | How target context is established | Where authority is enforced |
 | --- | --- | --- |
-| Local app operation | Runtime derives target context from the bound caller and target app id | Target endpoint visibility plus target domain/guard checks |
+| Local app operation | Runtime derives target context from the bound caller and target app id; the caller app id is bound for `current_peer_caller_bundle_id()` | Target endpoint visibility, optional `peer_callers`, plus target domain/guard checks |
 | Named service | `AuthContext` comes from current request, Data Bus context, job context, or explicit service context | Consumer policy ceiling, provider schema/operation checks, Connection Hub claims where declared |
 | Data Bus | Ingress/publisher writes actor and auth metadata; worker binds `DataBusContext` | Target handler and guarded services |
 | Background job | Producer stores headless or explicit on-behalf-of metadata; proc rebuilds request context | Target job/domain code and guarded services |
