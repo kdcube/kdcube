@@ -1047,6 +1047,17 @@ async def resolve_bundle_spec_from_store(
     entry = (reg.bundles or {}).get(bid)
     if entry is None:
         return None
+    # W333: a descriptor-pinned app loads its prepared snapshot, never the mounted folder;
+    # an unprepared or non-sha pin raises BundleSnapshotError, which the caller refuses.
+    from kdcube_ai_app.infra.plugin.bundle_snapshot import pinned_snapshot_path
+
+    t, p = tenant, project
+    if not t or not p:
+        t2, p2 = _tp_from_env()
+        t, p = t or t2, p or p2
+    snapshot_path = pinned_snapshot_path(entry, tenant=t, project=p)
+    if snapshot_path is not None:
+        entry = entry.model_copy(update={"path": snapshot_path, "mounted_path": entry.path})
     return bundle_entry_to_spec(entry)
 
 

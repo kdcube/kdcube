@@ -1721,12 +1721,19 @@ async def _resolve_bundle_spec_from_runtime(
         project: str,
         bundle_id: Optional[str],
 ):
-    return await resolve_bundle_spec_from_store(
-        _get_app_redis(request),
-        tenant=tenant,
-        project=project,
-        bundle_id=bundle_id,
-    )
+    from kdcube_ai_app.infra.plugin.bundle_snapshot import BundleSnapshotError
+
+    try:
+        return await resolve_bundle_spec_from_store(
+            _get_app_redis(request),
+            tenant=tenant,
+            project=project,
+            bundle_id=bundle_id,
+        )
+    except BundleSnapshotError as exc:
+        # W333: a pinned app whose snapshot is not prepared refuses; it never runs the mounted folder.
+        logger.warning("Pinned application source unavailable: bundle=%s code=%s reason=%s", bundle_id, exc.code, exc)
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
 async def _load_bundle_props_defaults(
@@ -2871,6 +2878,27 @@ async def internal_bundle_status(payload: BundleStatusRequest, request: Request)
             "widgets": sorted(widget_manifest.widgets),
         }
 
+    # W333: what this process's request path, peer calls and Data Bus load for the app (this
+    # process only; another proc process answers for itself).
+    from kdcube_ai_app.infra.plugin.app_readiness import application_readiness_registry
+    from kdcube_ai_app.infra.plugin.bundle_snapshot import pinned_snapshot_path
+
+    prepared = application_readiness_registry.snapshot(tenant=tenant_id, project=project_id, application_id=bundle_id)
+    consumers: Dict[str, Any] = {
+        "scope": "this process",
+        "pid": os.getpid(),
+        "prepared_commit": getattr(prepared, "prepared_source_commit", None),
+        "path": None,
+        "refused": None,
+    }
+    if entry is not None:
+        try:
+            consumers["path"] = (
+                pinned_snapshot_path(entry, tenant=tenant_id, project=project_id) or str(entry.path or "")
+            )
+        except Exception as exc:
+            consumers["refused"] = str(getattr(exc, "code", "") or type(exc).__name__)
+
     return {
         "status": "ok",
         "tenant": tenant_id,
@@ -2878,6 +2906,7 @@ async def internal_bundle_status(payload: BundleStatusRequest, request: Request)
         "bundle_id": bundle_id,
         "declared": entry is not None,
         "loaded": loaded_diagnostic is not None,
+        "consumers": consumers,
         "entry": entry_dict,
         "process_entry": process_entry,
         "source": (loaded_diagnostic or {}).get("source"),

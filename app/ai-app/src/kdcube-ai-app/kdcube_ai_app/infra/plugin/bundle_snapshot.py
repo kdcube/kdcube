@@ -458,6 +458,49 @@ async def resolve_activation_entry(entry: Dict[str, Any], *, logger: Optional[Ag
     return out
 
 
+def _entry_field(entry: Any, name: str) -> Any:
+    if isinstance(entry, Mapping):
+        return entry.get(name)
+    return getattr(entry, name, None)
+
+
+def pinned_snapshot_path(entry: Any, *, tenant: str, project: str, readiness: Any = None) -> Optional[str]:
+    """W333: the snapshot a pinned app runs in this process, from this process's own preparation.
+
+    ``None`` means the app runs its declared path: a Git (``repo``) entry, an entry the
+    lifecycle already resolved (``mounted_path`` set), or an app this process prepared
+    from its mounted folder with no pin. When this process's lifecycle prepared a pinned
+    snapshot (from the descriptor's ``activation.commit`` or a reload's ``--commit``), the
+    answer is that snapshot: what this process imported. That keeps the request path, peer
+    calls and the Data Bus on the same code as the lifecycle, and needs no shared store.
+
+    A pinned app (``activation.commit`` or ``require_commit``) that this process has not
+    prepared as a snapshot raises ``BundleSnapshotError("bundle_snapshot_not_prepared")``:
+    a new or restarted process prepares it first, or refuses. It never falls back to the
+    mounted folder.
+    """
+
+    if _entry_field(entry, "repo") or _entry_field(entry, "mounted_path"):
+        return None
+    from kdcube_ai_app.infra.plugin.app_readiness import application_readiness_registry
+
+    bundle_id = str(_entry_field(entry, "id") or "")
+    registry = readiness if readiness is not None else application_readiness_registry
+    prepared = registry.snapshot(tenant=tenant, project=project, application_id=bundle_id)
+    if prepared is not None and prepared.ready and prepared.prepared_source_commit and prepared.prepared_source_path:
+        return str(prepared.prepared_source_path)
+    block = activation_block(entry if isinstance(entry, Mapping) else {"activation": _entry_field(entry, "activation")})
+    declared = str(block.get("commit") or "").strip()
+    if declared or block.get("require_commit"):
+        raise BundleSnapshotError(
+            "bundle_snapshot_not_prepared",
+            f"Bundle '{bundle_id}' is pinned and this process has not prepared its snapshot.",
+            bundle_id=bundle_id,
+            commit=declared,
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class PinnedCommit:
     repository: pathlib.Path

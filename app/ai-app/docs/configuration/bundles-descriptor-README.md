@@ -973,6 +973,31 @@ the read. `kdcube bundle reload` prints the block as `Loaded:` lines and
 exits nonzero when the receipt's commit is not the pinned one. A git-backed
 entry (`repo`/`ref`) refuses `--commit`: its version is its `ref`.
 
+### Every consumer of a pinned app runs the snapshot
+
+In each proc process, the request path (REST and MCP operations, peer calls,
+widgets) and the Data Bus consumers run the snapshot that this process's app
+lifecycle prepared and imported, never the mounted folder. The lifecycle
+records what it imported on the app's readiness record in that process; each
+consumer reads it there. No shared store and no git run on a request.
+
+- **A descriptor pin** (`activation.commit`, any ref) runs in every process,
+  because each process prepares it from the descriptor at startup and
+  reconcile.
+- **A `--commit` reload pin** runs in the process that prepared it, on every
+  consumer of that process. It is not durable: the descriptor does not hold
+  it, so a restarted or another process runs the descriptor's pin, or the
+  mounted folder for an unpinned app, as described above.
+- **A pinned app this process has not prepared as a snapshot** refuses with
+  `bundle_snapshot_not_prepared`. That covers a new or restarting process, a
+  preparation in progress, and `require_commit: true` with no commit. A REST
+  call answers `503`; the Data Bus leaves that app's handlers inactive, with a
+  log line. Neither ever falls back to the mounted folder.
+
+`kdcube bundle status` shows, for the proc process that answered, the path
+both consumers load and the prepared snapshot's commit (`consumers`, scoped
+to that process; another proc process answers for itself).
+
 ## `bundles.yaml` by run mode
 
 ### CLI local compose

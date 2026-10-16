@@ -72,6 +72,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     coerce_data_bus_result,
     now_ms,
 )
+from kdcube_ai_app.infra.plugin.bundle_snapshot import pinned_snapshot_path
 from kdcube_ai_app.infra.plugin.bundle_loader import (
     BundleSpec,
     apply_bundle_overrides,
@@ -1066,6 +1067,21 @@ class DataBusRuntimeManager:
                 )
                 continue
             path = entry.path if hasattr(entry, "path") else entry.get("path", "")
+            # W333: a pinned app's consumers run its prepared snapshot; when it is not
+            # ready they stay inactive with a log line, never on the mounted folder.
+            try:
+                snapshot_path = pinned_snapshot_path(entry, tenant=self._tenant, project=self._project)
+            except Exception as exc:
+                _log.warning(
+                    "[data_bus] Pinned application source unavailable; handlers remain inactive: "
+                    "bundle=%s code=%s reason=%s",
+                    bundle_id,
+                    getattr(exc, "code", type(exc).__name__),
+                    exc,
+                )
+                continue
+            if snapshot_path is not None:
+                path = snapshot_path
             module = entry.module if hasattr(entry, "module") else entry.get("module")
             singleton = entry.singleton if hasattr(entry, "singleton") else entry.get("singleton", False)
             if not path:

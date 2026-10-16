@@ -554,6 +554,16 @@ class ProcApplicationLifecycle:
             "application_generation": preparation.generation,
             "path": resolved_entry.path,
         }
+        # W333: this process's request path, peer calls and Data Bus run what it imported here.
+        pinned = bool(source_identity.get("mounted_path") and source_identity.get("commit"))
+        self.registry.record_prepared_source(
+            tenant=self.tenant,
+            project=self.project,
+            application_id=resolved_entry.id,
+            generation=preparation.generation,
+            path=resolved_entry.path if pinned else None,
+            commit=str(source_identity.get("commit")) if pinned else None,
+        )
 
     async def wait_for_current(self) -> None:
         await self.supervisor.wait_for_current()

@@ -59,6 +59,9 @@ class ApplicationReadinessSnapshot:
     started_at: str | None
     finished_at: str | None
     updated_at: str
+    # W333: the pinned snapshot this process prepared and imported for the app, if any.
+    prepared_source_path: str | None = None
+    prepared_source_commit: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -132,6 +135,8 @@ class _ApplicationReadinessRecord:
     started_at: str | None
     finished_at: str | None
     updated_at: str
+    prepared_source_path: str | None = None
+    prepared_source_commit: str | None = None
 
     def snapshot(self) -> ApplicationReadinessSnapshot:
         return ApplicationReadinessSnapshot(**vars(self))
@@ -258,6 +263,10 @@ class ApplicationReadinessRegistry:
                 current.attempt = max(0, int(attempt))
             current.retry_at = retry_at
             current.updated_at = now
+            if state in (ApplicationLifecycleState.PREPARING, ApplicationLifecycleState.DEPROVISIONING):
+                # W333: a new preparation replaces what this process had imported.
+                current.prepared_source_path = None
+                current.prepared_source_commit = None
             if state is ApplicationLifecycleState.PREPARING:
                 current.started_at = now
                 current.finished_at = None
@@ -297,6 +306,25 @@ class ApplicationReadinessRegistry:
                 )
                 current.error_code = type(error).__name__ if isinstance(error, BaseException) else None
                 current.error_message = _bounded_error(error)
+            return True
+
+    def record_prepared_source(
+        self,
+        *,
+        tenant: str,
+        project: str,
+        application_id: str,
+        generation: str,
+        path: str | None,
+        commit: str | None,
+    ) -> bool:
+        """W333: what this process's preparation imported: a pinned snapshot's path and commit, or None."""
+        with self._lock:
+            current = self._records.get(self._key(tenant, project, application_id))
+            if current is None or current.desired_generation != generation:
+                return False
+            current.prepared_source_path = path or None
+            current.prepared_source_commit = commit or None
             return True
 
     def snapshot(
