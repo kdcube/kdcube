@@ -67,13 +67,26 @@ def require_writer(owner: int) -> None:
         raise RuntimeFileError("runtime_secret_storage_unavailable")
 
 
-def adopt(target, owner: int) -> None:
-    """Root hands what it just created to the owner before publishing it (path or open descriptor)."""
-    if os.geteuid() == 0 and owner != 0:
-        if isinstance(target, int):
-            os.fchown(target, owner, -1)
-        else:
-            os.chown(target, owner, -1, follow_symlinks=False)
+def adopt(target, owner: int, *, path=None) -> None:
+    """Root hands what it just created to the owner before publishing it (path or open descriptor).
+
+    W885: a Docker Desktop for macOS bind mount ignores fchown on the descriptor that created the file, without
+    an error (measured on dev-main 2026-10-16; a reopened descriptor or a change by name works). So with ``path`` (the descriptor's file) or a path target, the owner is read back by name and, when
+    it did not stick, set by name (no-follow); an entry still not owned by ``owner`` raises PermissionError,
+    so no root-owned record is ever published."""
+    if os.geteuid() != 0 or owner == 0:
+        return
+    if isinstance(target, int):
+        os.fchown(target, owner, -1)
+        if path is None:
+            return
+    else:
+        path = target
+        os.chown(path, owner, -1, follow_symlinks=False)
+    if os.lstat(path).st_uid != owner:
+        os.chown(path, owner, -1, follow_symlinks=False)
+        if os.lstat(path).st_uid != owner:
+            raise PermissionError("the secrets owner could not be set")
 
 
 class _Incomplete(ValueError):
@@ -234,7 +247,7 @@ class RuntimeFileStore:
             descriptor, temporary = tempfile.mkstemp(prefix=".tombstone-", dir=self._folder)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
-                    adopt(stream.fileno(), secrets_owner_uid())
+                    adopt(stream.fileno(), secrets_owner_uid(), path=temporary)
                     stream.write(encoded)
                     stream.flush()
                     os.fchmod(stream.fileno(), _TOMBSTONE_MODE)
@@ -271,7 +284,7 @@ class RuntimeFileStore:
             descriptor, temporary = tempfile.mkstemp(prefix=".record-", dir=self._folder)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
-                    adopt(stream.fileno(), secrets_owner_uid())
+                    adopt(stream.fileno(), secrets_owner_uid(), path=temporary)
                     self._private_file(stream.fileno())
                     stream.write(encoded)
                     stream.flush()

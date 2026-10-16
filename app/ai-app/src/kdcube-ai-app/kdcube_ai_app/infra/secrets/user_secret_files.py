@@ -230,7 +230,7 @@ class UserSecretFileStore:
             descriptor, temporary = tempfile.mkstemp(prefix=".write-", dir=folder)
             try:
                 with os.fdopen(descriptor, "wb") as stream:
-                    adopt(stream.fileno(), _owner_uid())
+                    adopt(stream.fileno(), _owner_uid(), path=temporary)
                     stream.write(encoded)
                     stream.flush()
                     os.fsync(stream.fileno())

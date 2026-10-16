@@ -17,7 +17,10 @@ Entries are adopted only when ALL of these hold, otherwise they are left untouch
   0600 (record) or 0400 (tombstone);
 - the walk never follows a symlink: each entry is opened relative to its parent's descriptor with
   O_NOFOLLOW, its inode and attributes are re-checked on the open descriptor, and ownership changes with
-  fchown on that descriptor.
+  fchown on that descriptor. Every change is read back by name; where a sharing layer kept the old owner
+  without an error (Docker Desktop for macOS does, for fchown on the creating descriptor), it is set by name with
+  fchownat and no-follow on the same inode, and an entry still not owned by the owner is deferred, never
+  counted as adopted (W885).
 
 Modes are never changed and nothing is removed, with one exception. A file-sharing layer may refuse to re-own
 a read-only file: Docker Desktop on macOS keeps container ownership as an extended attribute of the host file.
@@ -74,6 +77,22 @@ def _trusted_dir(info: os.stat_result, owner: int, device: int) -> bool:
 
 def _same(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_ino, left.st_dev) == (right.st_ino, right.st_dev)
+
+
+def _settled(fd: int, name: str, opened: os.stat_result, owner: int) -> bool:
+    """True once ``name`` in ``fd`` is still the entry that was opened and is owned by ``owner``.
+
+    W885: a Docker Desktop for macOS bind mount ignores fchown on the descriptor that created the file (no
+    error; the owner stays 0), as in the tombstone copy below, while a change by name takes effect. So the owner is read back by name (no-follow, same inode) and,
+    when the descriptor change did not stick, set by name the same way. Only a verified change counts."""
+    current = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    if not _same(current, opened):
+        return False
+    if current.st_uid == owner:
+        return True
+    os.chown(name, owner, -1, dir_fd=fd, follow_symlinks=False)
+    after = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    return _same(after, opened) and after.st_uid == owner
 
 
 class _Tally:
@@ -151,6 +170,8 @@ def _replace_tombstone(fd: int, name: str, handle: int, info: os.stat_result, ow
     try:
         try:
             os.fchown(out, owner, -1)
+            if not _settled(fd, temporary, os.fstat(out), owner):  # while still 0600, before the 0400
+                raise _Deferred("tombstone-replace", "owner-unverified")
             view = memoryview(raw)
             while view:
                 view = view[os.write(out, view):]
@@ -211,7 +232,10 @@ def _visit(fd: int, owner: int, device: int, tally: _Tally, chain: tuple[str, ..
                     continue
                 if opened.st_uid == 0:
                     os.fchown(child, owner, -1)
-                    tally.adopted += 1
+                    if _settled(fd, name, opened, owner):
+                        tally.adopted += 1
+                    else:
+                        tally.defer("dir-chown", "owner-unverified")
                 _visit(child, owner, device, tally, chain + (name,))
             except OSError as exc:
                 tally.defer("dir-chown", exc)
@@ -239,6 +263,9 @@ def _visit(fd: int, owner: int, device: int, tally: _Tally, chain: tuple[str, ..
                                 or _RECORD_NAME.fullmatch(name) is None):
                             raise
                         _replace_tombstone(fd, name, handle, opened, owner)
+                    else:
+                        if not _settled(fd, name, opened, owner):
+                            raise _Deferred("file-chown", "owner-unverified")
                     tally.adopted += 1
                 elif not _same(entry, opened):
                     tally.defer("file-open")  # the name now points elsewhere: look again next pass
@@ -263,7 +290,14 @@ def _one_pass(root: str, owner_uid: int) -> _Tally:
             return tally
         if top.st_uid == 0:
             os.fchown(fd, owner_uid, -1)
-            tally.adopted += 1
+            current = os.stat(root, follow_symlinks=False)
+            if _same(current, top) and current.st_uid != owner_uid:
+                os.chown(root, owner_uid, -1, follow_symlinks=False)  # W885: see _settled
+                current = os.stat(root, follow_symlinks=False)
+            if _same(current, top) and current.st_uid == owner_uid:
+                tally.adopted += 1
+            else:
+                tally.defer("root-chown", "owner-unverified")
         _visit(fd, owner_uid, top.st_dev, tally)
         return tally
     finally:
