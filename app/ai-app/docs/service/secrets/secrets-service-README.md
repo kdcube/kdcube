@@ -735,8 +735,17 @@ Read behavior:
 - app and per-user secrets: read the one record file; no YAML fallback
 - the SDK secret cache keeps a file-backed value together with its source
   file's fingerprint (inode, size, mtime, ctime) and re-reads on any change,
-  so a write by another process is visible on the next read; a missing
-  file-backed secret is never cached
+  so a write by another process is visible on the next read
+- a `platform.*` lookup also carries the sha256 of the bytes of
+  `secrets.yaml` and `bundles.secrets.yaml` (both feed platform keys), so its
+  value, or its absence when the key is not set, is kept exactly until either
+  file's content changes, a same-size rewrite included (W883)
+- a missing app or per-user record is never cached: its absence is checked on
+  every lookup, so a record added by another process or task is read at once
+  (a folder fingerprint is not trusted for this; EFS can serve a stale one)
+- other providers (`secrets-service`, `aws-sm`, `in-memory`) keep values and
+  misses for at most 120 s, cleared at once in every process by the
+  `kdcube:config:bundles:secrets:update:{tenant}:{project}` broadcast
 
 Write behavior:
 

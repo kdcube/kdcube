@@ -99,9 +99,12 @@ def get_secret_cache(cache_key: tuple[str, ...], *, fingerprint: tuple | None = 
 
 def set_secret_cache(
     cache_key: tuple[str, ...], value: str | None, *, fingerprint: tuple | None = None,
+    content_signal_miss: bool = False,
 ) -> str | None:
     resolved = value or None
-    if fingerprint is not None and resolved is None:
+    # W883 (operator: "yes, content hash" for a secret "only when the secrets are in file"): a file-backed
+    # miss may be kept only under a fingerprint that carries the secrets files' content hash.
+    if fingerprint is not None and resolved is None and not content_signal_miss:
         # A file-backed miss is never cached (W670). Other backends may cache a miss: the
         # bundles.secrets.update invalidation clears it, with the TTL as the safety net (operator: "i think if
         # we have cache invalidation then not found can be cached").
