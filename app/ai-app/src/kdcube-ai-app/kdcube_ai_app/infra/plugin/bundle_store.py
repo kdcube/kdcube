@@ -6,6 +6,8 @@ from __future__ import annotations
 import ast
 import asyncio
 import copy
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import inspect
 import json, os, time, uuid, threading
@@ -555,7 +557,35 @@ def _load_example_bundles() -> Dict[str, "BundleEntry"]:
         )
     return bundles
 
+# W389: one descriptor read asks "is this an example id?" once per bundle item. Inside one read
+# the examples folder does not change, so it is scanned once for that read. The memo lives only
+# for the read that binds it (a ContextVar reset in finally), never across reads or processes.
+_EXAMPLE_IDS_FOR_READ: ContextVar[Optional[Dict[bool, Set[str]]]] = ContextVar(
+    "kdcube_example_ids_for_read", default=None
+)
+
+
+@contextmanager
+def _one_example_scan_per_read():
+    token = _EXAMPLE_IDS_FOR_READ.set({}) if _EXAMPLE_IDS_FOR_READ.get() is None else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            _EXAMPLE_IDS_FOR_READ.reset(token)
+
+
 def _discover_example_bundle_ids(*, respect_enabled: bool = True) -> Set[str]:
+    memo = _EXAMPLE_IDS_FOR_READ.get()
+    if memo is not None and respect_enabled in memo:
+        return set(memo[respect_enabled])
+    ids = _scan_example_bundle_ids(respect_enabled=respect_enabled)
+    if memo is not None:
+        memo[respect_enabled] = set(ids)
+    return ids
+
+
+def _scan_example_bundle_ids(*, respect_enabled: bool = True) -> Set[str]:
     if respect_enabled and not _examples_enabled():
         return set()
     root = _examples_root()
@@ -710,6 +740,17 @@ def _resolve_props_node(node: Any) -> Any:
             return _resolve_secret_ref(s)
         return node
     return node
+
+
+def _read_only_bundle_item(payload: Any, bundle_id: str) -> Optional[Dict[str, Any]]:
+    """The descriptor item for ``bundle_id`` without changing ``payload`` (the last one wins, as in a build)."""
+    bundles_root = payload.get("bundles") if isinstance(payload, dict) else None
+    items = bundles_root.get("items") if isinstance(bundles_root, dict) else None
+    found = None
+    for item in items if isinstance(items, list) else ():
+        if isinstance(item, dict) and str(item.get("id") or "").strip() == bundle_id:
+            found = item
+    return found
 
 
 def _split_bundles_and_props(
@@ -1495,7 +1536,7 @@ class _FileBundleDescriptorStore:
             return None
         return (st.st_mtime_ns, st.st_size)
 
-    def _load_mapping(self) -> Dict[str, Any]:
+    def _load_mapping(self, *, copy_result: bool = True) -> Dict[str, Any]:
         """
         Load the raw descriptor mapping, reusing the per-process parse cache
         when the file is unchanged.
@@ -1512,7 +1553,8 @@ class _FileBundleDescriptorStore:
             with _DESCRIPTOR_MAPPING_CACHE_LOCK:
                 entry = _DESCRIPTOR_MAPPING_CACHE.get(self._bundles_yaml_uri)
             if entry is not None and entry[0] == state_before:
-                return copy.deepcopy(entry[1])
+                # copy_result=False is for a read-only caller that copies only what it keeps (W389).
+                return copy.deepcopy(entry[1]) if copy_result else entry[1]
         payload = _load_yaml_mapping_from_storage(self._bundles_yaml_uri, missing_ok=True)
         if state_before is not None and self.descriptor_state_key() == state_before:
             with _DESCRIPTOR_MAPPING_CACHE_LOCK:
@@ -1552,6 +1594,10 @@ class _FileBundleDescriptorStore:
         return payload
 
     def _registry_from_payload(self, payload: Dict[str, Any]) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
+        with _one_example_scan_per_read():
+            return self._registry_from_payload_items(payload)
+
+    def _registry_from_payload_items(self, payload: Dict[str, Any]) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
         items = self._bundle_items(payload)
         bundles: Dict[str, BundleEntry] = {}
         props_map: Dict[str, Dict[str, Any]] = {}
@@ -1651,11 +1697,28 @@ class _FileBundleDescriptorStore:
         # atomically, so lock-free reads are consistent (see
         # load_registry_readonly); this keeps request-path reads off the
         # (potentially networked) lock file entirely.
-        loaded = self.load_registry_readonly()
-        if loaded is None:
+        # W389: read only this bundle's item (the same filters and parse as the registry build),
+        # not a full registry build of every bundle, and copy only that item.
+        bid = str(bundle_id or "").strip()
+        if not bid or not _bundle_allowed(bid):
             return {}
-        _reg, props_map = loaded
-        return dict(props_map.get(bundle_id) or {})
+        with self._lock, _one_example_scan_per_read():
+            try:
+                mapping = self._load_mapping(copy_result=False)
+            except Exception:
+                time.sleep(0.05)  # a parse error here is almost certainly transient, as in load_registry_readonly
+                mapping = self._load_mapping(copy_result=False)
+            item = _read_only_bundle_item(mapping, bid)
+            if item is None:
+                return {}
+            if not _examples_enabled() and _is_example_bundle_id(bid) and not item.get("repo"):
+                return {}
+            try:
+                _entry, props = self._bundle_item_entry_and_props(bid, copy.deepcopy(item))
+            except Exception:
+                _log.warning("Failed to parse file-backed bundle descriptor for %s", bid, exc_info=True)
+                return {}
+        return dict(props or {})
 
     def set_bundle_props(self, bundle_id: str, entry: "BundleEntry", props: Dict[str, Any]) -> None:
         with self._lock, self._acquire_file_lock():
