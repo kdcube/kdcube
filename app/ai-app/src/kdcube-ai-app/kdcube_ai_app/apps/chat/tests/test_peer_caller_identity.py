@@ -30,7 +30,104 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
 )
 from kdcube_ai_app.infra.plugin.bundle_loader import API_METHOD_ATTR, api
 
-from test_integrations_operations_auth import _patch_bundle_runtime, _request, _session
+from starlette.datastructures import Headers
+
+from kdcube_ai_app.apps.chat.proc.rest.integrations import operation_csrf
+
+
+# Local copies of the operations-auth harness, so this file runs under any pytest import mode.
+def _session(roles: list[str]) -> SimpleNamespace:
+    return SimpleNamespace(
+        session_id="session-1",
+        user_type=SimpleNamespace(value="registered"),
+        user_id="user-1",
+        username="user",
+        email=None,
+        fingerprint="fp-1",
+        roles=list(roles),
+        permissions=["chat.use"],
+        request_context=SimpleNamespace(user_timezone="UTC", user_utc_offset_min=0),
+    )
+
+
+class _Redis:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def setex(self, key: str, _ttl: int, value: str) -> bool:
+        self.values[key] = value
+        return True
+
+    async def eval(self, _script: str, _numkeys: int, key: str):
+        return self.values.pop(key, None)
+
+
+def _request(
+    *,
+    redis=None,
+    cookie: bool = False,
+    csrf_token: str = "",
+    authorization: str = "",
+) -> SimpleNamespace:
+    headers: dict[str, str] = {}
+    if csrf_token:
+        headers[operation_csrf.OPERATION_CSRF_HEADER] = csrf_token
+    if authorization:
+        headers["Authorization"] = authorization
+    return SimpleNamespace(
+        method="POST",
+        headers=Headers(headers),
+        cookies={"__Secure-LATC": "ambient-session"} if cookie else {},
+        state=SimpleNamespace(),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                redis_async=redis or _Redis(),
+                pg_pool=object(),
+            )
+        ),
+    )
+
+
+def _patch_bundle_runtime(monkeypatch):
+    async def _resolve_bundle_async(*args, **kwargs):
+        bundle_id = kwargs.get("bundle_id") or (args[0] if args else None)
+        return SimpleNamespace(id=bundle_id, path="/tmp/demo", module="entrypoint", singleton=False)
+
+    def _create_workflow_config(_cfg_req):
+        return SimpleNamespace(ai_bundle_spec=None)
+
+    async def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None, pg_pool=None):
+        del spec, wf_config, comm_context, redis, pg_pool
+        return _Workflow(), None
+
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(
+            OPENAI_API_KEY=None,
+            ANTHROPIC_API_KEY=None,
+            TENANT="tenant-a",
+            PROJECT="project-a",
+        ),
+    )
+    monkeypatch.setattr(
+        operation_csrf,
+        "get_settings",
+        lambda: SimpleNamespace(
+            AUTH=SimpleNamespace(
+                ID_TOKEN_HEADER_NAME="X-ID-Token",
+                AUTH_TOKEN_COOKIE_NAME="__Secure-LATC",
+                ID_TOKEN_COOKIE_NAME="__Secure-LITC",
+                MASQUERADED_TOKEN_COOKIE_NAME="__Secure-LMTC",
+            )
+        ),
+    )
+    monkeypatch.setattr(integrations, "_resolve_bundle_spec_from_runtime", _resolve_bundle_async)
+    monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
+    monkeypatch.setattr(integrations, "get_workflow_instance_async", _get_workflow_instance)
+    monkeypatch.setattr(
+        integrations, "store_get_bundle_props_from_authority", lambda **kwargs: {}
+    )
 
 HUB = "connection-hub@1-0"
 SEEN: list[tuple[str, str]] = []
