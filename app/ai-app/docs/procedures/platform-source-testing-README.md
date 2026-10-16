@@ -262,7 +262,22 @@ installed `mcp` distribution when pytest collects it below namespace-package
 parents. Preload the installed SDK with `-p mcp`, and collect the example and
 the MCP v2 conformance file in separate processes so each resolves the
 intended `mcp` package. Together, the commands below still cover the complete
-backend tree:
+backend tree.
+
+The first command collects with `--import-mode=importlib`. The tree has two
+regular packages named `integrations`, `apps/chat/sdk/integrations` and
+`apps/chat/proc/rest/integrations`, under directories without `__init__.py`.
+In pytest's default `prepend` mode both are imported as the top-level module
+`integrations`. The first one loaded owns that name, and every test module of
+the other fails to collect with `No module named 'integrations.<name>'`. The
+same happens to other shared names such as `tests`, `mcp` and `events`. Without
+the flag the run stops with about a hundred collection errors and runs nothing.
+`importlib` imports each test file under its own path, so all of them collect.
+A test that imports a sibling test module by bare name does not collect under
+`importlib`; import shared helpers by their package path instead. The other four
+commands keep their own processes: running the whole tree as one `importlib`
+process collects it, but tests that pass in the five separate runs then fail
+(on 2026-10-16, sixteen of them, mostly the REST auth context handoff tests).
 
 ```bash
 export REACT_V2_TOOLS="$KDCUBE_SRC/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/tests"
@@ -270,7 +285,7 @@ export REACT_V3_TOOLS="$KDCUBE_SRC/kdcube_ai_app/apps/chat/sdk/solutions/react/v
 export MCP_EXAMPLE_TESTS="$KDCUBE_SRC/kdcube_ai_app/apps/chat/sdk/examples/mcp"
 export MCP_V2_CONFORMANCE="$KDCUBE_SRC/kdcube_ai_app/apps/chat/sdk/runtime/mcp/test_mcp_v2_conformance.py"
 
-"$PY" -m pytest -q -rs -p mcp \
+"$PY" -m pytest -q -rs -p mcp --import-mode=importlib \
   "$KDCUBE_SRC/kdcube_ai_app" \
   --ignore="$REACT_V2_TOOLS" \
   --ignore="$REACT_V3_TOOLS" \
