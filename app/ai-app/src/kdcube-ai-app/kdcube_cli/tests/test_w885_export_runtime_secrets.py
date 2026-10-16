@@ -352,3 +352,59 @@ def test_the_cli_folder_encoding_is_the_file_store_encoding():
 
     for name in ["github.token", "Person.Two@example.test", ".hidden", "ünïcode key", "a/b\\c", "UPPER_case-1"]:
         assert encode_segment(name) == store_encoding(name)
+
+
+def _provider_export(monkeypatch, tmp_path, *extra, prepare=None):
+    """A provider-backed export whose exchange records whether it was called."""
+    from types import SimpleNamespace
+
+    calls = []
+
+    async def bootstrap(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(request_digest="a" * 64, assurance="session_confirmation",
+                               approval_method="browser_session", approval_verified_at=1, values=(), user_props=())
+
+    workdir = tmp_path / "vault__project"
+    config_dir = _write_initialized_runtime_config(workdir, secrets_provider="secrets-service")
+    output = tmp_path / "out"
+    output.mkdir()
+    if prepare:
+        prepare(output)
+    monkeypatch.setattr(cli_mod, "local_management_target", lambda _w: object())
+    monkeypatch.setattr(cli_mod, "export_bootstrap_values", bootstrap)
+    return calls, lambda: _export(monkeypatch, workdir, config_dir, output, *extra), output
+
+
+def test_an_existing_descriptor_pair_refuses_before_anything_is_disclosed(monkeypatch, tmp_path):
+    """codex-infra on #381: no overwrite without --replace-descriptor-files, checked before the exchange."""
+    calls, run, output = _provider_export(
+        monkeypatch, tmp_path, prepare=lambda out: (out / "secrets.yaml").write_text("old: pair\n"))
+    with pytest.raises(SystemExit):
+        run()
+    assert calls == [] and (output / "secrets.yaml").read_text() == "old: pair\n"
+
+
+def test_replace_descriptor_files_allows_replacing_the_pair(monkeypatch, tmp_path):
+    calls, run, output = _provider_export(
+        monkeypatch, tmp_path, "--replace-descriptor-files",
+        prepare=lambda out: (out / "secrets.yaml").write_text("old: pair\n"))
+    run()
+    assert len(calls) == 1 and (output / "secrets.yaml").read_text() != "old: pair\n"
+
+
+@pytest.mark.parametrize("conflict", ["link", "secrets", "props"])
+def test_a_linked_pair_or_existing_output_refuses_before_the_exchange(monkeypatch, tmp_path, conflict):
+    def prepare(out):
+        if conflict == "link":
+            (out / "bundles.secrets.yaml").symlink_to(tmp_path / "elsewhere.yaml")
+        elif conflict == "secrets":
+            (out / "secrets").mkdir()
+        else:
+            (out / "user-data").mkdir()
+            (out / "user-data" / "user_bundle_props.json").write_text("{}")
+    calls, run, _output = _provider_export(monkeypatch, tmp_path, "--include-user-data", "--replace-descriptor-files",
+                                           prepare=prepare)
+    with pytest.raises(SystemExit):
+        run()
+    assert calls == [], "nothing is disclosed when the destination is wrong"

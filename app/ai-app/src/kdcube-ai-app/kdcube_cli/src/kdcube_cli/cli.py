@@ -82,7 +82,10 @@ from kdcube_cli.local_python_packages import (
     stage_local_python_package_sources,
 )
 from kdcube_cli.management.errors import ManagementCliError
-from kdcube_cli.management.secret_descriptors import load_secret_descriptors
+from kdcube_cli.management.secret_descriptors import (
+    load_secret_descriptors,
+    validate_existing_secret_descriptor_directory,
+)
 from kdcube_cli.secrets_backend import backend_status
 from kdcube_cli.secrets_commands import (
     apply_secret_descriptor_import,
@@ -2701,6 +2704,21 @@ def _write_private_json(path: Path, payload: object) -> None:
         json.dump(payload, stream, ensure_ascii=True, indent=2, sort_keys=True)
         stream.write("\n")
     os.chmod(path, 0o600)
+
+
+def _validate_bootstrap_destination(out_dir: Path, *, replace: bool, include_user_data: bool) -> None:
+    """Before a provider export discloses anything: the descriptor pair is replaced only with
+    --replace-descriptor-files and is never a link, and secrets/ and the props file are new."""
+    try:
+        validate_existing_secret_descriptor_directory(out_dir, (), replace=replace)
+    except ManagementCliError as exc:
+        raise SystemExit(str(exc)) from exc
+    for path in [out_dir / "secrets", *([out_dir / "user-data" / "user_bundle_props.json"] if include_user_data else [])]:
+        if path.exists() or path.is_symlink():
+            raise SystemExit(
+                f"{path} already exists; remove it or choose another --out-dir, so the export holds only "
+                "the current configuration."
+            )
 
 
 def _nest_platform_values(values: dict[str, str]) -> dict[str, object]:
@@ -6950,7 +6968,13 @@ def main() -> None:
                 if _provider_backed_export:
                     _management_target = local_management_target(_resolved)
                     # W885: the same output as a secrets-file export, from one browser-approved
-                    # bootstrap exchange; the server filters before it reads any value.
+                    # bootstrap exchange; the server filters before it reads any value. The destination
+                    # is checked before anything is disclosed (codex-infra on #381).
+                    _validate_bootstrap_destination(
+                        _out_dir,
+                        replace=bool(args.replace_descriptor_files),
+                        include_user_data=bool(args.include_user_data),
+                    )
                     _export_result = asyncio.run(
                         export_bootstrap_values(
                             target=_management_target,
