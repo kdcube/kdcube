@@ -973,6 +973,35 @@ the read. `kdcube bundle reload` prints the block as `Loaded:` lines and
 exits nonzero when the receipt's commit is not the pinned one. A git-backed
 entry (`repo`/`ref`) refuses `--commit`: its version is its `ref`.
 
+### Every consumer of a pinned app runs the snapshot
+
+The request path (REST and MCP operations, widgets) and the Data Bus
+consumers run the same snapshot as the activation, never the mounted folder.
+When the proc prepares a pinned app (at startup, reconcile and reload), it
+writes an activation record for that app: the ref, the full sha and the
+snapshot path, under
+`kdcube:config:bundles:activation:{tenant}:{project}:{bundle_id}` (see
+[Runtime configuration and secrets store](runtime-configuration-and-secrets-store-README.md#redis-role-in-pinned-activations)).
+Each consumer reads that record. That is one Redis read, plus a check that
+the snapshot's marker names the same sha; no git runs on a request.
+
+A pin reaches every consumer through the record, including a `--commit` pin
+from a reload that the descriptor never sees. When an app is pinned
+(`activation.commit`, `require_commit: true`, or a reload pin) and there is
+no matching record, the consumer refuses with
+`bundle_snapshot_not_prepared`:
+
+- a REST call answers `503`;
+- the Data Bus leaves that app's handlers inactive, with a log line.
+
+Neither ever falls back to the mounted folder. A record matches when it
+names the descriptor's `activation.commit` as its ref or its sha, so a
+branch or short sha works as documented above. A later unpinned preparation
+of the app clears its record.
+
+`kdcube bundle status` shows the record and the path both consumers resolve
+under `consumers` (`activation_record`, `path`, or `refused` with the code).
+
 ## `bundles.yaml` by run mode
 
 ### CLI local compose

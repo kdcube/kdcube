@@ -90,6 +90,24 @@ Important:
   mounted writable `bundles.yaml`
 - set `BUNDLES_DESCRIPTOR_PROVIDER=file`
 
+## Redis Role In Pinned Activations
+
+For an app pinned to a commit
+([bundles descriptor](bundles-descriptor-README.md#every-consumer-of-a-pinned-app-runs-the-snapshot)),
+the proc's app lifecycle writes what it prepared:
+
+```text
+kdcube:config:bundles:activation:{tenant}:{project}:{bundle_id}
+  {"bundle_id", "ref", "commit", "path", "prepared_at"}
+```
+
+It is written when preparation of a pinned app succeeds and deleted when the
+app is prepared unpinned. The request path and the Data Bus read it to load
+the snapshot. A pinned app without a matching record is refused, not loaded
+from its mounted folder. The record holds no secret. It is runtime state
+shared by every proc process; the descriptor stays the authority for whether
+an app is pinned.
+
 ## Redis Role In Bundle Props
 
 Redis is the runtime cache for deployment-scoped descriptor/admin bundle props.
