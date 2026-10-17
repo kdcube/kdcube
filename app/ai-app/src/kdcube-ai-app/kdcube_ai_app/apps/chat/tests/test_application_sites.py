@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import HTTPException
@@ -151,9 +152,9 @@ async def test_site_root_and_index_hand_the_page_an_empty_site_path(monkeypatch)
 
     await integrations.application_site_root("docs", _request(path="/sites/docs"))
     await integrations.application_site_path("docs", "index.html", _request(path="/sites/docs/index.html"))
-    await integrations.application_site_path("docs", "quickstart-works/", _request(path="/sites/docs/quickstart-works/"))
+    await integrations.application_site_path("docs", "sample-site/", _request(path="/sites/docs/sample-site/"))
 
-    assert seen == ["", "", "quickstart-works"]
+    assert seen == ["", "", "sample-site"]
     assert integrations._application_site_path("/a/b/") == "a/b"
 
 
@@ -188,8 +189,9 @@ async def test_platform_session_site_redirects_signed_out_browser_before_serving
     response = await integrations.application_site_path(
         site_alias="problem-board",
         path="inbox",
+        # The proxy rewrites /sites/ to proc's /api/integrations mount.
         request=_request(
-            path="/sites/problem-board/inbox",
+            path="/api/integrations/sites/problem-board/inbox",
             query_string=b"worker=codex-ui&message=mail-9",
             headers=(
                 (b"accept", b"text/html,application/xhtml+xml"),
@@ -204,6 +206,176 @@ async def test_platform_session_site_redirects_signed_out_browser_before_serving
         "?next=%2Fsites%2Fproblem-board%2Finbox%3Fworker%3Dcodex-ui%26message%3Dmail-9"
     )
     assert response.headers["cache-control"] == "no-store"
+
+
+def _protected_site_catalog(*, alias: str = "problem-board", default: bool = False, hosts: tuple[str, ...] = ()):
+    return compile_application_site_catalog(
+        tenant="tenant-a",
+        project="project-a",
+        sites=[
+            ApplicationSite(
+                "board@1",
+                alias,
+                default,
+                hosts,
+                _SITE_TARGET,
+                SITE_AUTH_PLATFORM_SESSION,
+            )
+        ],
+    )
+
+
+_DOCUMENT_HEADERS = (
+    (b"accept", b"text/html,application/xhtml+xml"),
+    (b"sec-fetch-dest", b"document"),
+    (b"sec-fetch-mode", b"navigate"),
+)
+
+
+def _serve_protected(monkeypatch, catalog) -> None:
+    async def _catalog(_request):
+        return catalog
+
+    monkeypatch.setattr(integrations, "_application_site_catalog", _catalog)
+    monkeypatch.setattr(
+        integrations,
+        "serve_static_asset",
+        lambda **_kwargs: pytest.fail("signed-out site shell was served"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_platform_session_default_site_returns_to_the_public_root_path(monkeypatch) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog(default=True, hosts=("board.example.test",)))
+
+    response = await integrations.application_site_landing_path(
+        path="sample-site/",
+        request=_request(
+            host="board.example.test",
+            path="/api/integrations/site-root/sample-site/",
+            query_string=b"view=inbox",
+            headers=_DOCUMENT_HEADERS,
+        ),
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"].endswith("?next=%2Fsample-site%2F%3Fview%3Dinbox")
+
+
+@pytest.mark.asyncio
+async def test_platform_session_site_return_path_keeps_an_encoded_sub_path(monkeypatch) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog())
+
+    # The router hands the handler the decoded sub-path; the return path encodes
+    # it again, and `next` encodes that once more as a query value.
+    response = await integrations.application_site_path(
+        site_alias="problem-board",
+        path="my project/",
+        request=_request(
+            path="/api/integrations/sites/problem-board/my%20project/",
+            query_string=b"q=a%26b",
+            headers=_DOCUMENT_HEADERS,
+        ),
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"].endswith(
+        "?next=%2Fsites%2Fproblem-board%2Fmy%2520project%2F%3Fq%3Da%2526b"
+    )
+
+
+def _callback_target(location: str) -> str:
+    """The address the sign-in callback returns to, after its own guard."""
+    from connection_hub.server_side_login.next_url import safe_next_target
+
+    return safe_next_target(parse_qs(urlsplit(location).query)["next"][0])
+
+
+@pytest.mark.parametrize(
+    ("site_alias", "default", "handler_path", "proc_path", "expected"),
+    [
+        (
+            "problem-board",
+            False,
+            "report?draft/#x%y",
+            "/api/integrations/sites/problem-board/report%3Fdraft/%23x%25y",
+            "/sites/problem-board/report%3Fdraft/%23x%25y?q=1",
+        ),
+        (
+            "",
+            True,
+            "report?draft/#x%y",
+            "/api/integrations/site-root/report%3Fdraft/%23x%25y",
+            "/report%3Fdraft/%23x%25y?q=1",
+        ),
+        (
+            "problem-board",
+            False,
+            "caf\u00e9 board/",
+            "/api/integrations/sites/problem-board/caf%C3%A9%20board/",
+            "/sites/problem-board/caf%C3%A9%20board/?q=1",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_platform_session_site_return_path_keeps_reserved_characters_in_the_path(
+    monkeypatch, site_alias, default, handler_path, proc_path, expected
+) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog(default=default, hosts=("board.example.test",)))
+    request = _request(host="board.example.test", path=proc_path, query_string=b"q=1", headers=_DOCUMENT_HEADERS)
+
+    if site_alias:
+        response = await integrations.application_site_path(site_alias=site_alias, path=handler_path, request=request)
+    else:
+        response = await integrations.application_site_landing_path(path=handler_path, request=request)
+
+    assert response.status_code == 302
+    target = _callback_target(response.headers["location"])
+    assert target == expected
+    # The literal ?, # and % stay in the path; only the original query follows.
+    assert urlsplit(target).path == expected.split("?", 1)[0]
+
+
+@pytest.mark.asyncio
+async def test_platform_session_site_signed_out_page_links_to_the_public_path(monkeypatch) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog())
+
+    response = await integrations.application_site_root(
+        site_alias="problem-board",
+        request=_request(
+            path="/api/integrations/sites/problem-board",
+            query_string=b"signed_out=1",
+            headers=_DOCUMENT_HEADERS,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.body.decode("utf-8")
+    assert "You are signed out." in body
+    assert "next=%2Fsites%2Fproblem-board%2F\"" in body
+    assert "signed_out" not in body.split("kdcube-sign-in", 1)[1].split("</a>", 1)[0]
+
+
+@pytest.mark.asyncio
+async def test_platform_session_framed_site_prompt_links_to_the_public_path(monkeypatch) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog())
+
+    response = await integrations.application_site_path(
+        site_alias="problem-board",
+        path="sample-site",
+        request=_request(
+            path="/api/integrations/sites/problem-board/sample-site",
+            headers=(
+                (b"accept", b"text/html"),
+                (b"sec-fetch-dest", b"iframe"),
+                (b"sec-fetch-mode", b"navigate"),
+            ),
+        ),
+    )
+
+    assert response.status_code == 200
+    assert "Sign in to continue." in response.body.decode("utf-8")
+    assert "next=%2Fsites%2Fproblem-board%2Fsample-site\"" in response.body.decode("utf-8")
 
 
 @pytest.mark.asyncio
