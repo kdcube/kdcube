@@ -184,6 +184,12 @@ def test_the_cli_keeps_the_same_acquired_token_prefixes():
     assert tuple(EXCLUDED_USER_PREFIXES) == secret_export_routes.BOOTSTRAP_EXCLUDED_USER_PREFIXES
 
 
+def test_the_cli_and_the_runtime_leave_out_the_same_props():
+    from kdcube_cli.runtime_secrets_export import EXCLUDED_USER_PROP_PREFIXES
+
+    assert tuple(EXCLUDED_USER_PROP_PREFIXES) == secret_export_routes.BOOTSTRAP_EXCLUDED_USER_PROP_PREFIXES
+
+
 def test_the_approval_page_says_whether_user_props_are_included(monkeypatch):
     """codex-infra on #381: the person must see the props scope they approve, also for a props-only export."""
     _PAGES.clear()
@@ -284,3 +290,40 @@ def test_the_raw_key_rule_matches_the_parsed_bootstrap_filter():
         raw_kept = {t.provider_key for t in parsed
                     if not secret_export_routes.bootstrap_skips_provider_key(t.provider_key, user_data=user_data)}
         assert kept == raw_kept
+
+
+def test_the_runtime_never_returns_connection_hub_props(monkeypatch):
+    """Operator, 2026-10-17: "3. exclude". Connection Hub's delegated_to_kdcube.* props stay in the runtime."""
+    import asyncio
+
+    from kdcube_ai_app.infra.props import manager as props_manager
+
+    rows = [{**PROPS[0]}, {"user_id": "user-1", "bundle_id": "connection-hub@1-0",
+                           "key": "delegated_to_kdcube.consent_demands", "subsystem": "bundle",
+                           "value_json": '"hub-prop-canary"'}]
+
+    class _Con:
+        async def fetch(self, _sql):
+            return rows
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Con()
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    class _Manager:
+        _schema = "schema_a"
+
+        async def _pool(self):
+            return _Pool()
+
+    monkeypatch.setattr(props_manager, "get_props_manager", lambda: _Manager())
+    returned = asyncio.run(secret_export_routes.read_user_props())
+    assert returned == PROPS
+    assert "hub-prop-canary" not in json.dumps(returned)

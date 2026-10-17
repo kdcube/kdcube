@@ -70,6 +70,7 @@ from kdcube_cli.runtime_secrets_export import (
     merge_app_secrets,
     merge_user_secrets,
     filter_user_secrets,
+    exportable_user_props,
     write_provider_values,
 )
 from kdcube_cli.host_vault import (
@@ -2775,17 +2776,19 @@ def _write_bootstrap_export(
          "user_records_left_out": exported.user_records_left_out,
          "acquired_tokens_left_out": exported.acquired_tokens_left_out, "include_user_data": include_user_data},
     ]
+    props: list[dict[str, object]] = []
     if include_user_data:
+        # The runtime leaves the Connection Hub records out already; filtered again so no source can add them.
+        props, props_left_out = exportable_user_props([dict(row) for row in result.user_props])
         props_path = out_dir / "user-data" / "user_bundle_props.json"
-        _write_private_json(props_path, {"schema": "kdcube.export.user_bundle_props.v1",
-                                         "rows": [dict(row) for row in result.user_props]})
+        _write_private_json(props_path, {"schema": "kdcube.export.user_bundle_props.v1", "rows": props})
         files.append({"name": "user-data/user_bundle_props.json", "target": str(props_path),
-                      "row_count": len(result.user_props)})
+                      "row_count": len(props), "connection_hub_props_left_out": props_left_out})
     if not quiet:
         console.print("[green]Exported the configuration after one browser approval.[/green]")
         console.print(f"[dim]  secrets/:[/dim] {exported.target} ({exported.record_count} records)")
         if include_user_data:
-            console.print(f"[dim]  user props:[/dim] {len(result.user_props)} rows")
+            console.print(f"[dim]  user props:[/dim] {len(props)} rows")
     return files
 
 
@@ -2848,11 +2851,13 @@ def _export_runtime_secrets(
                               yaml.safe_dump(merged_bundles, sort_keys=False, allow_unicode=True))
     props_count = 0
     if include_user_data:
-        rows = _read_user_props(repo_root=repo_root, workdir=workdir, config_dir=config_dir)
+        rows, props_left_out = exportable_user_props(
+            _read_user_props(repo_root=repo_root, workdir=workdir, config_dir=config_dir))
         props_path = out_dir / "user-data" / "user_bundle_props.json"
         _write_private_json(props_path, {"schema": "kdcube.export.user_bundle_props.v1", "rows": rows})
         props_count = len(rows)
-        files.append({"name": "user-data/user_bundle_props.json", "target": str(props_path), "row_count": props_count})
+        files.append({"name": "user-data/user_bundle_props.json", "target": str(props_path), "row_count": props_count,
+                      "connection_hub_props_left_out": props_left_out})
     if not quiet:
         console.print("[green]Exported the runtime secrets folder.[/green]")
         console.print(f"[dim]  secrets/:[/dim] {exported.target} ({exported.record_count} records)")

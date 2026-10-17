@@ -615,6 +615,9 @@ async def exchange_secret_export(request: Request) -> JSONResponse:
 BOOTSTRAP_EXCLUDED_USER_PREFIXES = (
     "connections.accounts.", "delegated_to_kdcube.", "remote_mcp.", "linkedin.accounts.",
 )
+# User props Connection Hub keeps about those tokens (connected accounts, account index, consent demands):
+# never exported either (operator, 2026-10-17: "3. exclude").
+BOOTSTRAP_EXCLUDED_USER_PROP_PREFIXES = ("delegated_to_kdcube.",)
 MAX_BOOTSTRAP_USER_PROPS = 20000
 
 
@@ -653,7 +656,7 @@ async def read_user_props() -> list[dict[str, str]]:
     if len(rows) > MAX_BOOTSTRAP_USER_PROPS:
         raise SecretExportError("secret_export_result_too_large", status_code=413)
     return [{name: str(row[name]) for name in ("user_id", "bundle_id", "key", "subsystem", "value_json")}
-            for row in rows]
+            for row in rows if not str(row["key"]).startswith(BOOTSTRAP_EXCLUDED_USER_PROP_PREFIXES)]
 
 
 __all__ = ["SECRET_RESPONSE_HEADERS", "router"]
