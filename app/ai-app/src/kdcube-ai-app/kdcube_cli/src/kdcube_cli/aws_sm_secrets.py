@@ -46,6 +46,28 @@ STATUS_NEW = "new"
 STATUS_EQUAL = "equal"
 STATUS_DIFFERENT = "different"
 
+# Matched pairs: one value that two apps must both hold (Problem Board and Connection Hub sign and
+# verify each other's requests with it). An import that would leave the two sides different is refused.
+_PB = "bundles.problem-board@1-0.secrets."
+_CH = "bundles.connection-hub@1-0.secrets."
+MATCHED_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("peer proof", _PB + "connection_hub.peer_proof_secret", _CH + "project_membership.peer_proof_secret"),
+    (
+        "peer receipt",
+        _PB + "connection_hub.peer_receipt_secret",
+        _CH + "card_transactions.problem_board_receipt_secret",
+    ),
+    (
+        "identity lookup",
+        _PB + "connection_hub.identity_lookup_secret",
+        _CH + "connections.delegated_credentials.admission.services.problem-board.signing_secret",
+    ),
+)
+
+PAIR_MATCH = "match"
+PAIR_DIFFERS = "differs"
+PAIR_ONE_SIDE = "one-side"
+
 AGGREGATE_NONE = "none"
 AGGREGATE_ABSENT = "absent"
 AGGREGATE_EQUAL = "equal"
@@ -318,6 +340,21 @@ class AwsSecretsCli:
 
 
 @dataclass(frozen=True)
+class PairCheck:
+    name: str
+    status: str  # match | differs | one-side (only one of the two holds a value after the import)
+
+
+class AwsSecretsPairMismatch(AwsSecretsError):
+    def __init__(self, pairs: tuple[PairCheck, ...]):
+        names = ", ".join(pair.name for pair in pairs if pair.status == PAIR_DIFFERS)
+        super().__init__(
+            f"Matched pair(s) would differ after the import: {names}. Both apps must hold the same value; nothing was written."
+        )
+        self.pairs = pairs
+
+
+@dataclass(frozen=True)
 class KeyPlan:
     key: str
     document: str
@@ -339,6 +376,7 @@ class ImportResult:
     written_documents: tuple[str, ...] = field(default_factory=tuple)
     # <prefix>/bundles/secrets: none (no app keys), absent, equal, would-update (dry run) or updated
     aggregate: str = AGGREGATE_NONE
+    pairs: tuple[PairCheck, ...] = field(default_factory=tuple)
 
 
 def _status(document: Mapping[str, Any] | None, key: str, value: str) -> str:
@@ -369,6 +407,38 @@ def _group(prefix: str, values: Mapping[str, str]) -> dict[str, dict[str, str]]:
     return grouped
 
 
+def check_pairs(
+    cli: AwsSecretsCli, prefix: str, values: Mapping[str, str], *, write_rule: str
+) -> tuple[PairCheck, ...]:
+    """Each matched pair the folder touches, compared as both sides will be after the import. Never a value."""
+    documents: dict[str, dict[str, Any]] = {}
+
+    def stored(key: str) -> Any:
+        secret_id = document_id(prefix, key)
+        if secret_id not in documents:
+            raw = cli.get(secret_id)
+            documents[secret_id] = {} if raw is None else _parse_document(raw, secret_id=secret_id)
+        value = get_nested(documents[secret_id], key_tail(key))
+        return None if value is None or isinstance(value, (Mapping, list)) else str(value)
+
+    def after(key: str) -> Any:
+        current = stored(key)
+        if key in values and (current is None or write_rule == WRITE_RULE_OVERWRITE):
+            return values[key]
+        return current
+
+    checks: list[PairCheck] = []
+    for name, left, right in MATCHED_PAIRS:
+        if left not in values and right not in values:
+            continue
+        left_value, right_value = after(left), after(right)
+        if left_value is None or right_value is None:
+            checks.append(PairCheck(name=name, status=PAIR_ONE_SIDE))
+        else:
+            checks.append(PairCheck(name=name, status=PAIR_MATCH if left_value == right_value else PAIR_DIFFERS))
+    return tuple(checks)
+
+
 def plan_import(cli: AwsSecretsCli, prefix: str, values: Mapping[str, str]) -> tuple[KeyPlan, ...]:
     """Compare every key with the stored value in memory: new, equal or different. Writes nothing."""
     plans: list[KeyPlan] = []
@@ -390,12 +460,16 @@ def apply_import(
     """Write the selected keys: the inventory first, then each document re-read just before its write.
 
     ``overwrite`` writes new and different keys; ``write-new`` writes only keys that have no value yet.
+    A matched pair that would differ afterwards refuses the whole import first.
     Equal keys are not rewritten. Then ``<prefix>/bundles/secrets``, where it exists, gets each imported
     app's whole document. The first failed write stops the run and names the documents already
     written, so a rerun is safe; a rerun with nothing left to write still brings the aggregate up to date.
     """
     if write_rule not in WRITE_RULES:
         raise AwsSecretsError(f"--write-rule must be one of {', '.join(WRITE_RULES)}.")
+    pairs = check_pairs(cli, prefix, values, write_rule=write_rule)
+    if any(pair.status == PAIR_DIFFERS for pair in pairs):
+        raise AwsSecretsPairMismatch(pairs)
     plan = plan_import(cli, prefix, values)
     selected = {
         item.key for item in plan if item.action(write_rule) in {"write", "overwrite"}
@@ -451,6 +525,7 @@ def apply_import(
         written_keys=written_keys,
         written_documents=tuple(written),
         aggregate=aggregate_status,
+        pairs=pairs,
     )
 
 
@@ -579,7 +654,12 @@ def plan_label(item: KeyPlan, write_rule: str) -> str:
 __all__ = [
     "AwsSecretsCli",
     "AwsSecretsError",
+    "AwsSecretsPairMismatch",
     "AwsSecretsPartialWrite",
+    "MATCHED_PAIRS",
+    "PAIR_DIFFERS",
+    "PairCheck",
+    "check_pairs",
     "ImportResult",
     "KeyPlan",
     "WRITE_RULES",

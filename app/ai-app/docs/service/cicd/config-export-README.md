@@ -308,6 +308,18 @@ kdcube config import --aws-sm-prefix kdcube/<tenant>/<project> --aws-region <reg
   `--write-rule overwrite` (the default) writes new and changed keys;
   `--write-rule write-new` writes only keys that have no value yet. Keys not in
   the folder are left as they are; deletion is always explicit.
+- **Matched pairs.** Problem Board and Connection Hub hold three values in
+  common: peer proof (`problem-board@1-0` `connection_hub.peer_proof_secret` /
+  `connection-hub@1-0` `project_membership.peer_proof_secret`), peer receipt
+  (`connection_hub.peer_receipt_secret` /
+  `card_transactions.problem_board_receipt_secret`) and identity lookup
+  (`connection_hub.identity_lookup_secret` /
+  `connections.delegated_credentials.admission.services.problem-board.signing_secret`).
+  For each pair the folder touches, the dry run and the import compare both
+  sides as they will be after the import (the folder value under the write
+  rule, else the stored one): `match`, `one-side`, or `differs`. A pair that
+  differs refuses the import before any write and is named, never its value;
+  the dry run reports it and exits with an error.
 - **`--dry-run`** reads and compares in memory and writes nothing. Each key is
   printed with its document and `new`, `equal`, and `would-overwrite`
   (overwrite) or `skipped` (write-new); never a value, length or hash.

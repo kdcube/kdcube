@@ -5131,6 +5131,7 @@ def _aws_sm_config_import(
             result = aws_sm.ImportResult(
                 plan=aws_sm.plan_import(cli, prefix, values),
                 aggregate=aws_sm.plan_aggregate(cli, prefix, values, write_rule=write_rule),
+                pairs=aws_sm.check_pairs(cli, prefix, values, write_rule=write_rule),
             )
         else:
             result = aws_sm.apply_import(cli, prefix, values, write_rule=write_rule)
@@ -5153,20 +5154,30 @@ def _aws_sm_config_import(
                 "written_keys": result.written_keys,
                 "written_documents": list(result.written_documents),
                 "aggregate": {"document": aws_sm.aggregate_id(prefix), "status": result.aggregate},
+                "pairs": [{"name": pair.name, "status": pair.status} for pair in result.pairs],
             }
         )
+        _refuse_differing_pairs(result)
         return
     out.print(f"[dim]AWS SM prefix:[/dim] {prefix}  [dim]write rule:[/dim] {write_rule}")
     for row in rows:
         out.print(f"  {row['status']:<16} {row['key']}  [dim]{row['document']}[/dim]")
     if result.aggregate != aws_sm.AGGREGATE_NONE:
         out.print(f"  {result.aggregate:<16} [dim]{aws_sm.aggregate_id(prefix)} (all apps, one document)[/dim]")
+    for pair in result.pairs:
+        out.print(f"  {pair.status:<16} [dim]matched pair: {pair.name}[/dim]")
+    _refuse_differing_pairs(result)
     if args.dry_run:
         out.print(f"[yellow]Dry run: {len(rows)} key(s) compared, nothing written.[/yellow]")
     else:
         out.print(
             f"[green]Wrote {result.written_keys} key(s) in {len(result.written_documents)} document(s).[/green]"
         )
+
+
+def _refuse_differing_pairs(result: "aws_sm.ImportResult") -> None:
+    if any(pair.status == aws_sm.PAIR_DIFFERS for pair in result.pairs):
+        raise SystemExit(str(aws_sm.AwsSecretsPairMismatch(result.pairs)))
 
 
 def _aws_sm_config_export(

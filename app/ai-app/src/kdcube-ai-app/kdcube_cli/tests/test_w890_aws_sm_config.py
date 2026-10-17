@@ -333,6 +333,69 @@ def test_a_failed_aggregate_write_is_finished_by_a_rerun():
     assert json.loads(store.data[AGGREGATE]) == _app_documents(store.data)
 
 
+PB_PROOF = "bundles.problem-board@1-0.secrets.connection_hub.peer_proof_secret"
+CH_PROOF = "bundles.connection-hub@1-0.secrets.project_membership.peer_proof_secret"
+PB_LOOKUP = "bundles.problem-board@1-0.secrets.connection_hub.identity_lookup_secret"
+CH_LOOKUP = (
+    "bundles.connection-hub@1-0.secrets.connections.delegated_credentials.admission.services.problem-board.signing_secret"
+)
+
+
+def test_a_pair_that_would_differ_refuses_before_any_write_and_names_only_the_pair():
+    store = FakeAwsCli()
+    aws_sm.apply_import(_cli(store), PREFIX, {PB_PROOF: "proof-old", CH_PROOF: "proof-old"}, write_rule="overwrite")
+    before = dict(store.data)
+    store.written.clear()
+    with pytest.raises(aws_sm.AwsSecretsPairMismatch) as caught:
+        aws_sm.apply_import(_cli(store), PREFIX, {CH_PROOF: "proof-new", APP: "a"}, write_rule="overwrite")
+    assert str(caught.value).startswith("Matched pair(s) would differ after the import: peer proof.")
+    assert "proof-new" not in str(caught.value) and "proof-old" not in str(caught.value)
+    assert store.data == before and store.puts() == []
+
+
+@pytest.mark.parametrize(
+    "stored, incoming, rule, expected",
+    [
+        # both sides rotated together
+        ({PB_PROOF: "p", CH_PROOF: "p"}, {PB_PROOF: "q", CH_PROOF: "q"}, "overwrite", "match"),
+        # write-new keeps the stored value, so the pair stays equal
+        ({PB_PROOF: "p", CH_PROOF: "p"}, {CH_PROOF: "q"}, "write-new", "match"),
+        # a fresh pair from the folder
+        ({}, {PB_LOOKUP: "l", CH_LOOKUP: "l"}, "overwrite", "match"),
+        ({}, {PB_LOOKUP: "l"}, "overwrite", "one-side"),
+        ({PB_LOOKUP: "l"}, {CH_LOOKUP: "other"}, "write-new", "differs"),
+    ],
+)
+def test_pairs_are_compared_as_they_will_be(stored, incoming, rule, expected):
+    store = FakeAwsCli()
+    if stored:
+        aws_sm.apply_import(_cli(store), PREFIX, stored, write_rule="overwrite")
+    checks = aws_sm.check_pairs(_cli(store), PREFIX, incoming, write_rule=rule)
+    assert [check.status for check in checks] == [expected]
+    if expected != "differs":
+        assert aws_sm.apply_import(_cli(store), PREFIX, incoming, write_rule=rule).pairs == checks
+
+
+def test_pairs_the_folder_does_not_touch_are_not_checked():
+    store = FakeAwsCli()
+    aws_sm.apply_import(_cli(store), PREFIX, {PB_PROOF: "p"}, write_rule="overwrite")
+    assert aws_sm.check_pairs(_cli(store), PREFIX, VALUES, write_rule="overwrite") == ()
+
+
+def test_the_dry_run_shows_a_differing_pair_and_fails(monkeypatch, tmp_path, capsys):
+    store = FakeAwsCli()
+    aws_sm.apply_import(_cli(store), PREFIX, {PB_PROOF: "proof-old"}, write_rule="overwrite")
+    store.written.clear()
+    folder = tmp_path / "in"
+    folder.mkdir(mode=0o700)
+    aws_sm.write_values_to_descriptors(folder, {CH_PROOF: "proof-new"}, replace=False)
+    with pytest.raises(SystemExit, match="peer proof"):
+        _main(monkeypatch, store, tmp_path, "import", "--descriptors-location", str(folder), "--dry-run", "--json")
+    report = json.loads(capsys.readouterr().out)
+    assert report["pairs"] == [{"name": "peer proof", "status": "differs"}]
+    assert "proof-new" not in json.dumps(report) and store.puts() == []
+
+
 def test_values_never_travel_in_arguments():
     store = FakeAwsCli()
     aws_sm.apply_import(_cli(store), PREFIX, {**VALUES, PLATFORM: "platform-value"}, write_rule="overwrite")
