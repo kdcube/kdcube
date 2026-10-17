@@ -29,6 +29,17 @@ USERS_FOLDER = "users"
 # Per-user keys holding tokens acquired at runtime. Operator, 2026-10-16, on email account tokens:
 # "--include-user-data << consider \"add that\"", so email.accounts.* is exported with the flag.
 EXCLUDED_USER_PREFIXES = ("connections.accounts.", "delegated_to_kdcube.", "remote_mcp.", "linkedin.accounts.")
+# User props Connection Hub keeps about those tokens (connected accounts, account index, consent demands): never
+# exported either (operator, 2026-10-17: "3. exclude").
+EXCLUDED_USER_PROP_PREFIXES = ("delegated_to_kdcube.",)
+
+
+def exportable_user_props(rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], int]:
+    """The user props a bootstrap export carries, and how many Connection Hub records were left out."""
+    kept = [row for row in rows if not str(row.get("key") or "").startswith(EXCLUDED_USER_PROP_PREFIXES)]
+    return kept, len(rows) - len(kept)
+
+
 _RECORD_SUFFIX = ".json"
 _FOLDER_MODE, _FILE_MODE = 0o700, 0o600
 

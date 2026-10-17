@@ -527,7 +527,7 @@ def test_the_provider_export_pair_passes_the_intake_and_keeps_bundle_less_user_s
     async def bootstrap(**kwargs):
         return SimpleNamespace(request_digest="a" * 64, assurance="session_confirmation",
                                approval_method="browser_session", approval_verified_at=1,
-                               values=values, user_props=())
+                               values=values, user_props=(*PROPS, HUB_PROP))
 
     workdir = tmp_path / "vault__project"
     config_dir = _write_initialized_runtime_config(workdir, secrets_provider="secrets-service")
@@ -542,7 +542,9 @@ def test_the_provider_export_pair_passes_the_intake_and_keeps_bundle_less_user_s
     assert _resolves(bundles_doc["bundles"]["items"][0]["secrets"], "provider.token") == "app-canary"
     everything = _all_bytes(output)
     assert b"acquired-canary" not in everything
+    assert b"hub-prop-canary" not in everything, "Connection Hub props never leave, whatever the runtime returns"
     if flag:
+        assert json.loads((output / "user-data" / "user_bundle_props.json").read_text())["rows"] == PROPS
         person = secrets_doc["users"]["person-1"]
         assert _resolves(person["secrets"], "provider.token") == "user-bundle-less-canary"
         assert _resolves(person["bundles"]["demo.bundle"]["secrets"], "github.token") == "user-app-canary"
@@ -566,3 +568,49 @@ def test_a_refused_nesting_names_both_keys_and_leaves_no_secrets_folder(monkeypa
     assert "'provider.token'" in message and "provider.token.child" in message
     assert "canary" not in message
     assert not (output / "secrets").exists()
+
+
+# --- Connection Hub's own user props are never exported (operator, 2026-10-17: "3. exclude") --------------
+
+HUB_PROP = {"user_id": "person-1", "bundle_id": "connection-hub@1-0", "key": "delegated_to_kdcube.account_index",
+            "subsystem": "bundle", "value_json": '"hub-prop-canary"'}
+
+
+def test_the_file_export_leaves_connection_hub_props_out(monkeypatch, tmp_path):
+    workdir, config_dir, _root = _runtime(tmp_path)
+    (config_dir / "secrets.yaml").write_text(yaml.safe_dump({"platform": {"services": {"marker": "kept"}}}))
+    output = tmp_path / "export"
+    plain = [dict(row) for row in PROPS]
+    monkeypatch.setitem(globals(), "PROPS", [*plain, dict(HUB_PROP)])  # what _export's props reader returns
+    _export(monkeypatch, workdir, config_dir, output, "--include-user-data")
+    document = json.loads((output / "user-data" / "user_bundle_props.json").read_text())
+    assert document["rows"] == plain
+    assert b"hub-prop-canary" not in _all_bytes(output)
+
+
+def test_the_helper_counts_what_it_leaves_out():
+    from kdcube_cli.runtime_secrets_export import exportable_user_props
+
+    kept, left_out = exportable_user_props([*PROPS, HUB_PROP])
+    assert kept == PROPS and left_out == 1
+
+
+
+def test_the_props_script_filters_in_the_database_and_gets_the_prefixes(monkeypatch, tmp_path):
+    """claude-ops on #388: the Hub rows never reach the host; the processor's SELECT leaves them out."""
+    from types import SimpleNamespace
+
+    seen = {}
+
+    def run(command, **_kwargs):
+        seen["command"] = command
+        return SimpleNamespace(returncode=0, stdout="[]\n", stderr="")
+
+    monkeypatch.setattr(cli_mod.subprocess, "run", run)
+    monkeypatch.setattr(cli_mod, "_build_paths_for_repo", lambda *_a: SimpleNamespace(docker_dir=tmp_path))
+    monkeypatch.setattr(cli_mod.installer_mod, "compose_env", lambda _e: {})
+    assert cli_mod._read_user_props(repo_root=tmp_path, workdir=tmp_path, config_dir=tmp_path) == []
+    script, argument = seen["command"][-2], seen["command"][-1]
+    assert script == cli_mod._USER_PROPS_EXPORT_SCRIPT
+    assert "starts_with(key, prefix)" in script and "excluded," in script
+    assert json.loads(argument) == ["delegated_to_kdcube."]

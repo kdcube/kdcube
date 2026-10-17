@@ -70,6 +70,8 @@ from kdcube_cli.runtime_secrets_export import (
     merge_app_secrets,
     merge_user_secrets,
     filter_user_secrets,
+    EXCLUDED_USER_PROP_PREFIXES,
+    exportable_user_props,
     write_provider_values,
 )
 from kdcube_cli.host_vault import (
@@ -2662,12 +2664,16 @@ import asyncio, json, sys
 from kdcube_ai_app.infra.props.manager import get_props_manager
 
 async def main():
+    excluded = json.loads(sys.argv[1])  # Connection Hub's prop prefixes: those rows never leave the database
     manager = get_props_manager()
     pool = await manager._pool()
     async with pool.acquire() as con:
         rows = await con.fetch(
             "SELECT user_id, bundle_id, key, subsystem, value_json::text AS value_json "
-            f"FROM {manager._schema}.user_bundle_props ORDER BY user_id, bundle_id, key"
+            f"FROM {manager._schema}.user_bundle_props "
+            "WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[]) AS prefix WHERE starts_with(key, prefix)) "
+            "ORDER BY user_id, bundle_id, key",
+            excluded,
         )
     sys.stdout.write(json.dumps([dict(row) for row in rows], ensure_ascii=True) + "\\n")
 
@@ -2681,7 +2687,7 @@ def _read_user_props(*, repo_root: Path, workdir: Path, config_dir: Path) -> lis
     env_file = config_dir / ".env"
     ctx = _build_paths_for_repo(repo_root, workdir)
     command = ["docker", "compose", "--env-file", str(env_file), "exec", "-T", "chat-proc",
-               "python", "-c", _USER_PROPS_EXPORT_SCRIPT]
+               "python", "-c", _USER_PROPS_EXPORT_SCRIPT, json.dumps(list(EXCLUDED_USER_PROP_PREFIXES))]
     try:
         result = subprocess.run(command, cwd=ctx.docker_dir, env=installer_mod.compose_env(env_file),
                                 text=True, capture_output=True, timeout=120, check=False)
@@ -2775,17 +2781,19 @@ def _write_bootstrap_export(
          "user_records_left_out": exported.user_records_left_out,
          "acquired_tokens_left_out": exported.acquired_tokens_left_out, "include_user_data": include_user_data},
     ]
+    props: list[dict[str, object]] = []
     if include_user_data:
+        # The runtime leaves the Connection Hub records out already; filtered again so no source can add them.
+        props, props_left_out = exportable_user_props([dict(row) for row in result.user_props])
         props_path = out_dir / "user-data" / "user_bundle_props.json"
-        _write_private_json(props_path, {"schema": "kdcube.export.user_bundle_props.v1",
-                                         "rows": [dict(row) for row in result.user_props]})
+        _write_private_json(props_path, {"schema": "kdcube.export.user_bundle_props.v1", "rows": props})
         files.append({"name": "user-data/user_bundle_props.json", "target": str(props_path),
-                      "row_count": len(result.user_props)})
+                      "row_count": len(props), "connection_hub_props_left_out": props_left_out})
     if not quiet:
         console.print("[green]Exported the configuration after one browser approval.[/green]")
         console.print(f"[dim]  secrets/:[/dim] {exported.target} ({exported.record_count} records)")
         if include_user_data:
-            console.print(f"[dim]  user props:[/dim] {len(result.user_props)} rows")
+            console.print(f"[dim]  user props:[/dim] {len(props)} rows")
     return files
 
 
@@ -2848,11 +2856,13 @@ def _export_runtime_secrets(
                               yaml.safe_dump(merged_bundles, sort_keys=False, allow_unicode=True))
     props_count = 0
     if include_user_data:
-        rows = _read_user_props(repo_root=repo_root, workdir=workdir, config_dir=config_dir)
+        rows, props_left_out = exportable_user_props(
+            _read_user_props(repo_root=repo_root, workdir=workdir, config_dir=config_dir))
         props_path = out_dir / "user-data" / "user_bundle_props.json"
         _write_private_json(props_path, {"schema": "kdcube.export.user_bundle_props.v1", "rows": rows})
         props_count = len(rows)
-        files.append({"name": "user-data/user_bundle_props.json", "target": str(props_path), "row_count": props_count})
+        files.append({"name": "user-data/user_bundle_props.json", "target": str(props_path), "row_count": props_count,
+                      "connection_hub_props_left_out": props_left_out})
     if not quiet:
         console.print("[green]Exported the runtime secrets folder.[/green]")
         console.print(f"[dim]  secrets/:[/dim] {exported.target} ({exported.record_count} records)")

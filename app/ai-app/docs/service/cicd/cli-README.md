@@ -8,6 +8,7 @@ updated_at: 2026-09-24
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/release-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube/app/ai-app/docs/service/cicd/config-export-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/deployment-target-control-api-README.md
   - repo:kdcube/app/ai-app/docs/configuration/assembly-descriptor-README.md
@@ -869,53 +870,17 @@ preserving the target's current provider values and backend identity.
 
 With `--include-platform-descriptors`, export writes `assembly.yaml`,
 `secrets.yaml`, `gateway.yaml`, `economics.yaml`, `bundles.yaml`, and
-`bundles.secrets.yaml`. For what `economics.yaml` owns, see
+`bundles.secrets.yaml`, plus the `secrets/` folder; `--include-user-data` adds
+the users' own secrets and props. For what `economics.yaml` owns, see
 [economics-descriptor-README.md](../../economics/economics-descriptor-README.md).
-When the selected provider is not `secrets-file` (secrets-service, host-vault,
-aws-sm), export performs one browser-confirmed `bootstrap` transaction and writes
-exactly the same output as a `secrets-file` export (below): `platform.*` in
-`secrets.yaml`, app secrets in `secrets/` and as `secrets:` blocks in
-`bundles.secrets.yaml`, and with `--include-user-data` the per-user secrets and
-user props. The server filters before it reads any value: no user secret
-without `--include-user-data`, never a token Connection Hub acquires. The
-deployment needs `management.secret_export.enabled: true`; a user secret that
-belongs to no app has no folder home and refuses the export.
 
-With the `secrets-file` provider (and, through the same writer, every other
-provider), app and per-user secrets live only in the
-runtime secrets folder (`<workdir>/config/secrets`, or the host folder of a
-declared `secrets.runtime.root`), not in the two YAML files. Since the export is
-a configuration bootstrap, `--include-platform-descriptors` also writes:
-
-```text
-secrets/<bundle>/<key>.json                  app secrets, byte for byte
-secrets/<bundle>/users/<user>/<key>.json     per-user secrets (only with --include-user-data)
-bundles.secrets.yaml                         the app secrets again, as secrets: blocks per bundle
-user-data/user_bundle_props.json             user props from PostgreSQL (only with --include-user-data)
-```
-
-The `secrets:` blocks let a provider-backed `kdcube config import` write the
-app secrets into its store. Both YAML files are written nested, the shape the
-secrets readers resolve (`a.b` is read as `a: {b: …}`), so the pair is also the
-cloud secrets bootstrap (`SECRETS_YAML` and `BUNDLES_SECRETS_YAML`, written into
-AWS Secrets Manager by the ECS secrets intake). With `--include-user-data`,
-`secrets.yaml` also carries the `users` root built from the same values as
-`secrets/`: `users.<user>.bundles.<bundle>.secrets`, and `users.<user>.secrets`
-for a user secret that belongs to no app (it has no folder home). Two keys where
-one is below the other (`token` and `token.child`) cannot both be nested; the
-export refuses rather than drop one. User props have no cloud intake yet. User props are read inside the running processor
-with its own database connection (`docker compose exec chat-proc`), so the
-runtime must be started; each row keeps `user_id`, `bundle_id`, `key`,
-`subsystem` and its JSON value as text.
-
-Never exported: runtime-record folders (`login-attempts`, `card-credentials`,
-`oauth-refresh-tokens`) and the tokens Connection Hub acquires at runtime
-(per-user keys under `connections.accounts.`, `delegated_to_kdcube.`,
-`remote_mcp.`, `linkedin.accounts.`; see
-[connection-hub-token-storage-README.md](../../sdk/solutions/connections/connection-hub-token-storage-README.md)).
-Folders are `0700` and files `0600`, a symbolic link refuses the export, dot
-files are left out, and an existing `secrets/` in the out dir is refused rather
-than merged. The CLI prints counts only, never a secret name or value.
+**[config-export-README.md](config-export-README.md)** is the full reference:
+what each flag adds, where each part is read from for every secrets provider
+(the folder for `secrets-file`; one browser-approved `bootstrap` transaction for
+`secrets-service`, `host-vault` and `aws-sm`), what is never exported and why
+(acquired tokens, Connection Hub's records about them, runtime records), the
+output layout, and how `kdcube config import` and the cloud secrets intake
+consume it, with diagrams.
 
 `kdcube config import` does not place `secrets/` or the props. On a
 `secrets-file` target, copy `secrets/` into the target's secrets folder with its
