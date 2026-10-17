@@ -3,7 +3,7 @@ id: repo:kdcube/app/ai-app/docs/service/cicd/config-export-README.md
 title: "Configuration export and import"
 summary: "What kdcube config export writes, what each flag adds, where each part is read from for every secrets provider, what is never exported and why, the output layout, and how kdcube config import and the cloud secrets intake consume it."
 tags: ["service", "cicd", "cli", "secrets", "export", "import", "bootstrap"]
-keywords: ["kdcube config export", "kdcube config import", "configuration bootstrap", "include-platform-descriptors", "include-user-data", "secrets folder export", "bundles.secrets.yaml", "secrets.yaml users root", "user_bundle_props", "user props export", "browser-approved secret export", "bootstrap selection", "acquired tokens excluded", "connection hub records excluded", "runtime records excluded", "SECRETS_YAML", "BUNDLES_SECRETS_YAML", "aws secrets manager bootstrap", "secrets-file", "secrets-service", "host-vault", "aws-sm"]
+keywords: ["kdcube config export", "kdcube config import", "configuration bootstrap", "include-platform-descriptors", "include-user-data", "secrets folder export", "bundles.secrets.yaml", "secrets.yaml users root", "user_bundle_props", "user props export", "browser-approved secret export", "bootstrap selection", "acquired tokens excluded", "connection hub records excluded", "runtime records excluded", "SECRETS_YAML", "BUNDLES_SECRETS_YAML", "aws secrets manager bootstrap", "secrets-file", "secrets-service", "host-vault", "aws-sm", "aws-sm-prefix", "write-rule", "write-new", "no-runtime-writers"]
 updated_at: 2026-10-17
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
@@ -170,9 +170,9 @@ one. An existing `secrets/` in the out dir, a symbolic link in the source
 folder, or an existing descriptor pair (unless `--replace-descriptor-files`)
 also refuses (`--replace-descriptor-files` applies to a provider-backed export only).
 
-`kdcube config export --aws-region ... --aws-sm-prefix ...` without an
-initialized workdir is a separate, older path: it reads only the live bundle
-descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
+`kdcube config export --aws-region ... --aws-sm-prefix ...` needs no
+initialized workdir and no running runtime: it reads AWS Secrets Manager
+directly with the caller's AWS access (section 5b).
 
 ## 5) How the export is consumed
 
@@ -213,9 +213,12 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
   `secrets.yaml` with only the `platform` and `users` roots, a user entry with
   only `secrets` and `bundles`, and `bundles.secrets.yaml` items with a unique
   `id` and a `secrets` mapping; the export writes exactly that shape.
-- **User props** have no cloud intake: they reach a cloud deployment by
-  `kdcube config import --include-user-data --yes` against its running runtime
-  after the deploy (section 5a). No CI secret is involved.
+- **App and per-person secrets of an AWS deployment** go straight into AWS
+  Secrets Manager with `kdcube config import --aws-sm-prefix ...` (section 5b),
+  without a CI secret and without a running runtime.
+- **User props** have no cloud intake and no remote import: `kdcube config
+  import --include-user-data` reaches the runtime of the local workdir only
+  (section 5a). No CI secret is involved.
 
 ### 5a) User props import
 
@@ -262,6 +265,80 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
 - **The runtime must be up**, with delegated management enabled. The
   descriptors are applied first; a refused props import is simply run again.
 
+### 5b) AWS Secrets Manager, directly
+
+For a deployment whose secrets provider is `aws-sm`, the CLI reads and writes
+the provider's own documents with the `aws` CLI and the caller's AWS access
+(`--aws-region`, `--aws-profile`). Any of `--aws-sm-prefix`, `--aws-region` or
+`--aws-profile` selects this mode; the prefix is `--aws-sm-prefix`, or
+`kdcube/<tenant>/<project>` from `--tenant`/`--project` or the CLI defaults.
+No workdir, runtime, Card or bearer is involved.
+
+```text
+ <prefix>/inventory                            every key (schema kdcube.aws_secret_inventory.v1)
+ <prefix>/bundles/<app>/secrets                bundles.<app>.secrets.<tail>
+ <prefix>/users/<user>/secrets                 users.<user>.secrets.<tail>
+ <prefix>/users/<user>/bundles/<app>/secrets   users.<user>.bundles.<app>.secrets.<tail>
+ <prefix>/platform/secrets                     platform.<tail>  (only with --include-platform-descriptors)
+ <prefix>/bundles/secrets                      {<app>: that app's whole document}; ECS injects it as KDCUBE_BUNDLES_SECRETS_JSON
+ each document is one JSON object, nested by <tail> (a.b.c → {"a": {"b": {"c": ...}}})
+```
+
+```bash
+# Export: bundles.yaml (from <prefix>/bundles-meta), secrets.yaml (users root) and bundles.secrets.yaml.
+kdcube config export --aws-sm-prefix kdcube/<tenant>/<project> --aws-region <region> --out-dir ./aws-export
+
+# Import: compare first, then write.
+kdcube config import --aws-sm-prefix kdcube/<tenant>/<project> --aws-region <region> \
+  --descriptors-location ./aws-export --dry-run [--write-rule write-new]
+kdcube config import --aws-sm-prefix kdcube/<tenant>/<project> --aws-region <region> \
+  --descriptors-location ./aws-export --yes --no-runtime-writers [--write-rule write-new]
+```
+
+- **Export** reads `<prefix>/inventory` as the key list, then each document.
+  A listed key whose document or value is missing stops the export and is
+  named. The pair is written owner-only (folder `0700`, files `0600`) in the
+  layout the import and the cloud intake read; an existing pair is replaced
+  only with `--replace-descriptor-files`, checked before any value is read.
+  `bundles.yaml` comes from `<prefix>/bundles-meta`; when that is absent the
+  export says so and writes the secret pair only.
+- **Import** reads `bundles.secrets.yaml`, and `secrets.yaml` when it exists
+  (its `users` root carries the per-person secrets; its `platform` keys are
+  written only with `--include-platform-descriptors`).
+  `--write-rule overwrite` (the default) writes new and changed keys;
+  `--write-rule write-new` writes only keys that have no value yet. Keys not in
+  the folder are left as they are; deletion is always explicit.
+- **Matched pairs.** Problem Board and Connection Hub hold three values in
+  common: peer proof (`problem-board@1-0` `connection_hub.peer_proof_secret` /
+  `connection-hub@1-0` `project_membership.peer_proof_secret`), peer receipt
+  (`connection_hub.peer_receipt_secret` /
+  `card_transactions.problem_board_receipt_secret`) and identity lookup
+  (`connection_hub.identity_lookup_secret` /
+  `connections.delegated_credentials.admission.services.problem-board.signing_secret`).
+  For each pair the folder touches, the dry run and the import compare both
+  sides as they will be after the import (the folder value under the write
+  rule, else the stored one): `match`, `one-side`, or `differs`. A pair that
+  differs refuses the import before any write and is named, never its value;
+  the dry run reports it and exits with an error.
+- **`--dry-run`** reads and compares in memory and writes nothing. Each key is
+  printed with its document and `new`, `equal`, and `would-overwrite`
+  (overwrite) or `skipped` (write-new); never a value, length or hash.
+- **A write** needs `--yes` and `--no-runtime-writers`: the runtime's own
+  writes lock through Redis, which the CLI cannot take, so no runtime may write
+  secrets under the prefix during the import. The inventory is written first,
+  then each document is read again just before it is written, and only
+  documents that change are written. Last, the aggregate `<prefix>/bundles/secrets`
+  gets each imported app's whole document (other apps' entries stay); it is
+  updated only where it exists, since the deployment creates it, and the dry
+  run reports it as `equal`, `would-update` or `absent`. The first failed write
+  stops the import and names the documents already written; rerunning is safe,
+  under `write-new` the earlier writes compare equal, and a rerun with nothing
+  left to write still brings the aggregate up to date.
+- Values go to the `aws` CLI only on stdin (`--secret-string file:///dev/stdin`)
+  and come back only on stdout; an AWS error is reported by document name and
+  exit code, never with its text. `--include-user-data`, `--reload`,
+  `--skip-secret-values` and `--credential-stdin` are refused in this mode.
+
 ## 6) Code
 
 | Part | Code |
@@ -272,3 +349,4 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
 | Import of the pair | `kdcube_cli/management/secret_descriptors.py` |
 | User props import: CLI (batches, request, receipt) | `kdcube_cli/cli.py` (`_load_exported_user_props`), `kdcube_cli/secrets_commands.py` (`apply_user_props_import`), `kdcube_cli/management/models.py` |
 | User props import: route, contract, statement | `kdcube_ai_app/apps/chat/proc/rest/management/routes.py`, `user_props_contracts.py`, `user_props_runtime.py` |
+| AWS Secrets Manager export and import (section 5b) | `kdcube_cli/aws_sm_secrets.py`, `kdcube_cli/cli.py` (`_aws_sm_config_export`, `_aws_sm_config_import`); parity with `kdcube_ai_app/infra/secrets/manager.py` (`AwsSecretsManagerSecretsManager`) in `kdcube_cli/tests/test_w890_aws_sm_config.py` |

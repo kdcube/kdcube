@@ -967,14 +967,23 @@ Optional:
 
 This reconstructs:
 
-- `bundles.yaml`
-- `bundles.secrets.yaml`
+- `bundles.yaml` (skipped, with a notice, when `<prefix>/bundles-meta` is absent)
+- `bundles.secrets.yaml` (app secrets)
+- `secrets.yaml` (per-person secrets under `users`; platform keys only with
+  `--include-platform-descriptors`), owner-only
 
 from the authoritative grouped AWS SM documents:
 
 - `<prefix>/bundles-meta`
 - `<prefix>/bundles/<bundle_id>/descriptor`
-- `<prefix>/bundles/<bundle_id>/secrets`
+- `<prefix>/inventory`, the list of every secret key
+- `<prefix>/bundles/<bundle_id>/secrets`, `<prefix>/users/<user>/secrets`,
+  `<prefix>/users/<user>/bundles/<bundle_id>/secrets`
+
+The same flags on `kdcube config import --descriptors-location <dir>` write
+such a folder back (`--dry-run` first, then `--yes --no-runtime-writers`;
+`--write-rule overwrite|write-new`). See section 5b of
+[config-export-README.md](config-export-README.md).
 
 This is the correct export path for current live ECS state. It does not read:
 

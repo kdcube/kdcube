@@ -390,6 +390,15 @@ kdcube secrets import \
   --yes
 ```
 
+A deployment whose provider is AWS Secrets Manager can also be exported and
+imported without a runtime, straight against its secret documents with the
+caller's AWS access: `kdcube config export|import --aws-sm-prefix
+kdcube/<tenant>/<project> --aws-region <region>`, with `--dry-run`,
+`--write-rule overwrite|write-new`, and `--yes --no-runtime-writers` for a
+write. App and per-person secrets move by default; platform keys only with
+`--include-platform-descriptors`. See section 5b of
+[config-export-README.md](../cicd/config-export-README.md).
+
 ## Reusable Management Library
 
 Application-specific CLIs use the installable `kdcube_cli.management` package

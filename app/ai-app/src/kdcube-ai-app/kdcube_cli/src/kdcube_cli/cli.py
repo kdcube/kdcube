@@ -62,7 +62,8 @@ from kdcube_cli.deployment_provenance import (
     write_platform_source_marker,
 )
 from kdcube_cli.docker_storage import build_storage_maintenance_commands
-from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
+from kdcube_cli import aws_sm_secrets as aws_sm
+from kdcube_cli.export_live_bundles import export_live_bundle_descriptors, resolve_aws_sm_prefix
 from kdcube_cli.runtime_secrets_export import (
     RuntimeSecretsExportError,
     export_runtime_secrets_folder,
@@ -5054,6 +5055,204 @@ def _parse_workdir_namespace(workdir: Path) -> tuple[str, str]:
     return "", name
 
 
+def _aws_sm_flags_given(args: argparse.Namespace) -> bool:
+    return bool(
+        str(getattr(args, "aws_region", "") or "").strip()
+        or str(getattr(args, "aws_profile", "") or "").strip()
+        or str(getattr(args, "aws_sm_prefix", "") or "").strip()
+    )
+
+
+def _aws_sm_prefix_for(args: argparse.Namespace, cli_defaults: dict, workdir: Path) -> str:
+    explicit = str(getattr(args, "aws_sm_prefix", "") or "").strip()
+    if explicit:
+        return resolve_aws_sm_prefix(tenant="", project="", explicit=explicit)
+    tenant = str(args.tenant or cli_defaults.get("default_tenant", "") or "").strip()
+    project = str(args.project or cli_defaults.get("default_project", "") or "").strip()
+    if not (tenant and project):
+        try:
+            tenant, project = _parse_workdir_namespace(workdir)
+        except Exception:
+            pass
+    if not (tenant and project):
+        raise SystemExit(
+            "AWS Secrets Manager mode needs --aws-sm-prefix, or --tenant and --project "
+            "(prefix kdcube/<tenant>/<project>), or configured CLI defaults."
+        )
+    return resolve_aws_sm_prefix(tenant=tenant, project=project, explicit=None)
+
+
+def _aws_sm_config_import(
+    args: argparse.Namespace,
+    *,
+    cli_defaults: dict,
+    workdir: Path,
+    out: Console,
+) -> None:
+    """`kdcube config import` straight into AWS Secrets Manager (app and per-person secrets)."""
+    _refused = [
+        flag
+        for flag, given in (
+            ("--include-user-data", args.include_user_data),
+            ("--skip-secret-values", args.skip_secret_values),
+            ("--reload", args.reload_changed),
+            ("--credential-stdin", args.credential_stdin),
+            ("--no-open", args.no_open),
+            ("--no-wait", args.no_wait),
+            ("--out-dir", str(args.out_dir or "").strip()),
+            ("--replace-descriptor-files", args.replace_descriptor_files),
+        )
+        if given
+    ]
+    if _refused:
+        raise SystemExit(
+            f"{', '.join(_refused)} cannot be used with `kdcube config import` into AWS Secrets Manager. "
+            "User props move only through a running runtime."
+        )
+    if not str(args.descriptors_location or "").strip():
+        raise SystemExit("--descriptors-location is required with `kdcube config import`.")
+    write_rule = str(args.write_rule or aws_sm.WRITE_RULE_OVERWRITE)
+    if not args.dry_run and not (args.yes and args.no_runtime_writers):
+        raise SystemExit(
+            "Writing to AWS Secrets Manager requires --yes and --no-runtime-writers after reviewing --dry-run: "
+            "the runtime must not be writing secrets under the same prefix during the import."
+        )
+    prefix = _aws_sm_prefix_for(args, cli_defaults, workdir)
+    source = Path(os.path.expanduser(args.descriptors_location)).resolve()
+    values = aws_sm.import_values_from_descriptors(
+        source, include_platform=bool(args.include_platform_descriptors)
+    )
+    cli = aws_sm.AwsSecretsCli(
+        region=str(args.aws_region or "").strip() or None,
+        profile=str(args.aws_profile or "").strip() or None,
+    )
+    try:
+        if args.dry_run:
+            result = aws_sm.ImportResult(
+                plan=aws_sm.plan_import(cli, prefix, values),
+                aggregate=aws_sm.plan_aggregate(cli, prefix, values, write_rule=write_rule),
+                pairs=aws_sm.check_pairs(cli, prefix, values, write_rule=write_rule),
+            )
+        else:
+            result = aws_sm.apply_import(cli, prefix, values, write_rule=write_rule)
+    except aws_sm.AwsSecretsError as exc:
+        raise SystemExit(str(exc)) from exc
+    rows = [
+        {"key": item.key, "document": item.document, "status": aws_sm.plan_label(item, write_rule)}
+        for item in result.plan
+    ]
+    if args.json_output:
+        _print_json(
+            {
+                "status": "ok",
+                "action": "import",
+                "target": "aws-sm",
+                "prefix": prefix,
+                "write_rule": write_rule,
+                "dry_run": bool(args.dry_run),
+                "keys": rows,
+                "written_keys": result.written_keys,
+                "written_documents": list(result.written_documents),
+                "aggregate": {"document": aws_sm.aggregate_id(prefix), "status": result.aggregate},
+                "pairs": [{"name": pair.name, "status": pair.status} for pair in result.pairs],
+            }
+        )
+        _refuse_differing_pairs(result)
+        return
+    out.print(f"[dim]AWS SM prefix:[/dim] {prefix}  [dim]write rule:[/dim] {write_rule}")
+    for row in rows:
+        out.print(f"  {row['status']:<16} {row['key']}  [dim]{row['document']}[/dim]")
+    if result.aggregate != aws_sm.AGGREGATE_NONE:
+        out.print(f"  {result.aggregate:<16} [dim]{aws_sm.aggregate_id(prefix)} (all apps, one document)[/dim]")
+    for pair in result.pairs:
+        out.print(f"  {pair.status:<16} [dim]matched pair: {pair.name}[/dim]")
+    _refuse_differing_pairs(result)
+    if args.dry_run:
+        out.print(f"[yellow]Dry run: {len(rows)} key(s) compared, nothing written.[/yellow]")
+    else:
+        out.print(
+            f"[green]Wrote {result.written_keys} key(s) in {len(result.written_documents)} document(s).[/green]"
+        )
+
+
+def _refuse_differing_pairs(result: "aws_sm.ImportResult") -> None:
+    if any(pair.status == aws_sm.PAIR_DIFFERS for pair in result.pairs):
+        raise SystemExit(str(aws_sm.AwsSecretsPairMismatch(result.pairs)))
+
+
+def _aws_sm_config_export(
+    args: argparse.Namespace,
+    *,
+    cli_defaults: dict,
+    workdir: Path,
+    out_dir: Path,
+    out: Console,
+) -> None:
+    """`kdcube config export` straight from AWS Secrets Manager: bundles.yaml and the literal secret pair."""
+    if args.no_open or float(args.wait_seconds) != 300.0:
+        raise SystemExit("--no-open and --wait-seconds apply only to the governed provider export.")
+    if args.include_user_data:
+        raise SystemExit(
+            "--include-user-data cannot be used with an AWS Secrets Manager export: per-person secrets are "
+            "always exported; user props move only through a running runtime."
+        )
+    prefix = _aws_sm_prefix_for(args, cli_defaults, workdir)
+    region = str(args.aws_region or "").strip() or None
+    profile = str(args.aws_profile or "").strip() or None
+    cli = aws_sm.AwsSecretsCli(region=region, profile=profile)
+    out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # The target is checked before any value is read.
+    validate_existing_secret_descriptor_directory(out_dir, [], replace=bool(args.replace_descriptor_files))
+    try:
+        has_meta = cli.get(f"{prefix}/bundles-meta") is not None
+        values = aws_sm.export_values(cli, prefix, include_platform=bool(args.include_platform_descriptors))
+    except aws_sm.AwsSecretsError as exc:
+        raise SystemExit(str(exc)) from exc
+    files = []
+    if has_meta:
+        export_live_bundle_descriptors(
+            out,
+            tenant="",
+            project="",
+            out_dir=out_dir,
+            aws_region=region,
+            aws_profile=profile,
+            aws_sm_prefix=prefix,
+            include_secrets=False,
+        )
+        files.append({"name": "bundles.yaml", "target": str(out_dir / "bundles.yaml")})
+    else:
+        out.print(f"[yellow]{prefix}/bundles-meta does not exist: bundles.yaml is not written.[/yellow]")
+    written = aws_sm.write_values_to_descriptors(out_dir, values, replace=bool(args.replace_descriptor_files))
+    files += [
+        {"name": "secrets.yaml", "target": str(written.platform_path)},
+        {"name": "bundles.secrets.yaml", "target": str(written.bundles_path)},
+    ]
+    if args.json_output:
+        _print_json(
+            {
+                "status": "ok",
+                "action": "export",
+                "source": "aws-sm",
+                "prefix": prefix,
+                "out_dir": str(out_dir),
+                "include_platform_descriptors": bool(args.include_platform_descriptors),
+                "counts": {
+                    "platform": written.platform_count,
+                    "bundle": written.bundle_count,
+                    "user": written.user_count,
+                },
+                "files": files,
+            }
+        )
+        return
+    out.print(f"[dim]AWS SM prefix:[/dim] {prefix}")
+    out.print(
+        f"[green]Exported {written.bundle_count} app, {written.user_count} per-person and "
+        f"{written.platform_count} platform secret(s) to {out_dir} (owner-only).[/green]"
+    )
+
+
 def _read_cli_lock() -> dict | None:
     try:
         return json.loads(CLI_LOCK_FILE.read_text())
@@ -5728,10 +5927,42 @@ def main() -> None:
             "(never overwriting; counts only). Tokens Connection Hub acquires and its own props never move."
         ),
     )
-    _sp.add_argument("--aws-region", default="", help="With `config export`, AWS region for aws-sm bundle descriptor export")
-    _sp.add_argument("--aws-profile", default="", help="With `config export`, AWS profile for aws-sm bundle descriptor export")
-    _sp.add_argument("--aws-sm-prefix", default="", help="With `config export`, explicit AWS Secrets Manager prefix")
-    _sp.add_argument("--dry-run", action="store_true", help="With `config import` or `config apply`, show what would change without writing files")
+    _sp.add_argument(
+        "--aws-region",
+        default="",
+        help="With `config export` or `config import`, read or write AWS Secrets Manager directly in this region.",
+    )
+    _sp.add_argument(
+        "--aws-profile",
+        default="",
+        help="With `config export` or `config import`, read or write AWS Secrets Manager directly with this AWS profile.",
+    )
+    _sp.add_argument(
+        "--aws-sm-prefix",
+        default="",
+        help=(
+            "With `config export` or `config import`, the AWS Secrets Manager prefix to read or write directly "
+            "(default kdcube/<tenant>/<project>)."
+        ),
+    )
+    _sp.add_argument(
+        "--write-rule",
+        choices=aws_sm.WRITE_RULES,
+        default=None,
+        help=(
+            "With `config import` into AWS Secrets Manager: overwrite (default) writes new and changed keys; "
+            "write-new writes only keys that have no value yet."
+        ),
+    )
+    _sp.add_argument(
+        "--no-runtime-writers",
+        action="store_true",
+        help=(
+            "With `config import` into AWS Secrets Manager, confirm that no runtime writes secrets under "
+            "the prefix during the import. Required with --yes."
+        ),
+    )
+    _sp.add_argument("--dry-run", action="store_true", help="With `config import` or `config apply`, show what would change without writing")
     _sp.add_argument(
         "--yes",
         action="store_true",
@@ -6874,70 +7105,23 @@ def main() -> None:
                     or args.credential_stdin
                     or args.no_wait
                     or args.skip_secret_values
+                    or args.write_rule
+                    or args.no_runtime_writers
                 ):
                     raise SystemExit(
                         "--dry-run, --reload, --verbose, --yes, --credential-stdin, "
-                        "--no-wait, and --skip-secret-values are only supported with "
-                        "`kdcube config import`."
+                        "--no-wait, --skip-secret-values, --write-rule, and --no-runtime-writers "
+                        "are only supported with `kdcube config import`."
                     )
                 _out_dir = Path(os.path.expanduser(args.out_dir)).resolve()
-                _aws_export = bool(
-                    str(getattr(args, "aws_region", "") or "").strip()
-                    or str(getattr(args, "aws_profile", "") or "").strip()
-                    or str(getattr(args, "aws_sm_prefix", "") or "").strip()
-                )
-                if _aws_export:
-                    if args.no_open or args.replace_descriptor_files:
-                        raise SystemExit(
-                            "--no-open and --replace-descriptor-files require the governed "
-                            "provider export of an initialized runtime."
-                        )
-                    if args.include_platform_descriptors:
-                        raise SystemExit(
-                            "`kdcube config export --include-platform-descriptors` "
-                            "requires an initialized local runtime workdir. "
-                            "AWS SM export can reconstruct bundle descriptors only."
-                        )
-                    _t = str(args.tenant or cli_defaults.get("default_tenant", "") or "").strip()
-                    _p = str(args.project or cli_defaults.get("default_project", "") or "").strip()
-                    if not (_t and _p):
-                        try:
-                            _t, _p = _parse_workdir_namespace(_resolved)
-                        except Exception:
-                            pass
-                    if not (_t and _p):
-                        raise SystemExit(
-                            "`kdcube config export` with AWS SM flags requires "
-                            "--tenant and --project, or configured CLI defaults."
-                        )
-                    export_live_bundle_descriptors(
-                        _op_console,
-                        tenant=_t,
-                        project=_p,
+                if _aws_sm_flags_given(args):
+                    _aws_sm_config_export(
+                        args,
+                        cli_defaults=cli_defaults,
+                        workdir=_resolved,
                         out_dir=_out_dir,
-                        aws_region=str(args.aws_region or "").strip() or None,
-                        aws_profile=str(args.aws_profile or "").strip() or None,
-                        aws_sm_prefix=str(args.aws_sm_prefix or "").strip() or None,
-                        bundles_path=None,
-                        bundles_secrets_path=None,
-                        include_secrets=True,
+                        out=_op_console,
                     )
-                    if args.json_output:
-                        _print_json(
-                            {
-                                "status": "ok",
-                                "action": "export",
-                                "source": "aws-sm",
-                                "tenant": _t,
-                                "project": _p,
-                                "out_dir": str(_out_dir),
-                                "include_platform_descriptors": False,
-                                "files": [
-                                    {"name": "bundles.yaml", "target": str(_out_dir / "bundles.yaml")},
-                                    {"name": "bundles.secrets.yaml", "target": str(_out_dir / "bundles.secrets.yaml")},
-                                ],
-                            }
-                        )
                     return
                 if _config_dir is None:
                     raise SystemExit(
@@ -7078,12 +7262,14 @@ def main() -> None:
                     )
                 return
             if _action == "import":
-                if (
-                    str(getattr(args, "aws_region", "") or "").strip()
-                    or str(getattr(args, "aws_profile", "") or "").strip()
-                    or str(getattr(args, "aws_sm_prefix", "") or "").strip()
-                ):
-                    raise SystemExit("--aws-region, --aws-profile, and --aws-sm-prefix are only supported with `kdcube config export`.")
+                if _aws_sm_flags_given(args):
+                    _aws_sm_config_import(args, cli_defaults=cli_defaults, workdir=_resolved, out=_op_console)
+                    return
+                if args.write_rule or args.no_runtime_writers:
+                    raise SystemExit(
+                        "--write-rule and --no-runtime-writers apply only to `kdcube config import` "
+                        "into AWS Secrets Manager (--aws-sm-prefix, --aws-region or --aws-profile)."
+                    )
                 if _config_dir is None:
                     raise SystemExit(
                         f"Workdir is not initialized: {_resolved}\n"
