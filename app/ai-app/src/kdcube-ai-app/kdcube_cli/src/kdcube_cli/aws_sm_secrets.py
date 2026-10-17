@@ -46,6 +46,12 @@ STATUS_NEW = "new"
 STATUS_EQUAL = "equal"
 STATUS_DIFFERENT = "different"
 
+AGGREGATE_NONE = "none"
+AGGREGATE_ABSENT = "absent"
+AGGREGATE_EQUAL = "equal"
+AGGREGATE_WOULD_UPDATE = "would-update"
+AGGREGATE_UPDATED = "updated"
+
 
 class AwsSecretsError(RuntimeError):
     """A failure that names documents and keys, never a value."""
@@ -150,6 +156,11 @@ def key_tail(key: str) -> str:
 
 def inventory_id(prefix: str) -> str:
     return f"{prefix}/inventory"
+
+
+def aggregate_id(prefix: str) -> str:
+    """``{app id: that app's whole document}``; ECS injects it as KDCUBE_BUNDLES_SECRETS_JSON."""
+    return f"{prefix}/bundles/secrets"
 
 
 def _parts(path: str) -> list[str]:
@@ -326,6 +337,8 @@ class ImportResult:
     plan: tuple[KeyPlan, ...]
     written_keys: int = 0
     written_documents: tuple[str, ...] = field(default_factory=tuple)
+    # <prefix>/bundles/secrets: none (no app keys), absent, equal, would-update (dry run) or updated
+    aggregate: str = AGGREGATE_NONE
 
 
 def _status(document: Mapping[str, Any] | None, key: str, value: str) -> str:
@@ -377,8 +390,9 @@ def apply_import(
     """Write the selected keys: the inventory first, then each document re-read just before its write.
 
     ``overwrite`` writes new and different keys; ``write-new`` writes only keys that have no value yet.
-    Equal keys are not rewritten. The first failed write stops the run and names the documents
-    already written, so a rerun is safe.
+    Equal keys are not rewritten. Then ``<prefix>/bundles/secrets``, where it exists, gets each imported
+    app's whole document. The first failed write stops the run and names the documents already
+    written, so a rerun is safe; a rerun with nothing left to write still brings the aggregate up to date.
     """
     if write_rule not in WRITE_RULES:
         raise AwsSecretsError(f"--write-rule must be one of {', '.join(WRITE_RULES)}.")
@@ -386,15 +400,14 @@ def apply_import(
     selected = {
         item.key for item in plan if item.action(write_rule) in {"write", "overwrite"}
     }
-    if not selected:
-        return ImportResult(plan=plan)
     grouped = _group(prefix, {key: values[key] for key in selected})
 
-    inventory_secret = inventory_id(prefix)
-    raw_inventory = cli.get(inventory_secret)
-    inventory = set() if raw_inventory is None else set(parse_inventory(raw_inventory, secret_id=inventory_secret))
-    if not selected <= inventory:
-        cli.put(inventory_secret, serialize_inventory(inventory | selected))
+    if selected:
+        inventory_secret = inventory_id(prefix)
+        raw_inventory = cli.get(inventory_secret)
+        inventory = set() if raw_inventory is None else set(parse_inventory(raw_inventory, secret_id=inventory_secret))
+        if not selected <= inventory:
+            cli.put(inventory_secret, serialize_inventory(inventory | selected))
 
     written: list[str] = []
     written_keys = 0
@@ -421,7 +434,72 @@ def apply_import(
                 f"{exc} Stopped; documents already written: {done}. The inventory is updated; rerunning is safe.",
                 written_documents=tuple(written),
             ) from exc
-    return ImportResult(plan=plan, written_keys=written_keys, written_documents=tuple(written))
+    try:
+        aggregate_status, aggregate = _plan_aggregate(cli, prefix, values, write_rule)
+        if aggregate_status == AGGREGATE_WOULD_UPDATE:
+            cli.put(aggregate_id(prefix), _render_document(aggregate, secret_id=aggregate_id(prefix)))
+            aggregate_status = AGGREGATE_UPDATED
+    except AwsSecretsError as exc:
+        done = ", ".join(written) if written else "none"
+        raise AwsSecretsPartialWrite(
+            f"{exc} Stopped before {aggregate_id(prefix)}; documents already written: {done}. "
+            "Rerunning is safe and brings the aggregate up to date.",
+            written_documents=tuple(written),
+        ) from exc
+    return ImportResult(
+        plan=plan,
+        written_keys=written_keys,
+        written_documents=tuple(written),
+        aggregate=aggregate_status,
+    )
+
+
+def _clean(value: Any) -> Any:
+    """sync_secrets.py's ``clean``: the aggregate carries no empty or null leaf."""
+    if isinstance(value, Mapping):
+        cleaned = {key: _clean(child) for key, child in value.items()}
+        return {key: child for key, child in cleaned.items() if child is not None}
+    if value is None or value == "":
+        return None
+    return value
+
+
+def _plan_aggregate(
+    cli: AwsSecretsCli, prefix: str, values: Mapping[str, str], write_rule: str
+) -> tuple[str, dict[str, Any] | None]:
+    """The aggregate with every imported app's document as it is (or, in a dry run, will be) after the import.
+
+    It is updated only where it exists: the deployment creates it; the CLI never does.
+    """
+    by_app: dict[str, dict[str, str]] = {}
+    for key, value in values.items():
+        bundle = None if is_metadata_key(key) else _split_bundle_key(key)
+        if bundle:
+            by_app.setdefault(bundle[0], {})[key] = value
+    if not by_app:
+        return AGGREGATE_NONE, None
+    raw = cli.get(aggregate_id(prefix))
+    if raw is None:
+        return AGGREGATE_ABSENT, None
+    current = _parse_document(raw, secret_id=aggregate_id(prefix))
+    updated = dict(current)
+    for bundle_id, app_values in sorted(by_app.items()):
+        secret_id = f"{prefix}/bundles/{bundle_id}/secrets"
+        raw_document = cli.get(secret_id)
+        document = {} if raw_document is None else _parse_document(raw_document, secret_id=secret_id)
+        for key, value in sorted(app_values.items()):
+            status = _status(document, key, value)
+            if status == STATUS_NEW or (status == STATUS_DIFFERENT and write_rule == WRITE_RULE_OVERWRITE):
+                set_nested(document, key_tail(key), value)
+        updated[bundle_id] = _clean(document) or {}
+    if updated == current:
+        return AGGREGATE_EQUAL, None
+    return AGGREGATE_WOULD_UPDATE, updated
+
+
+def plan_aggregate(cli: AwsSecretsCli, prefix: str, values: Mapping[str, str], *, write_rule: str) -> str:
+    """For a dry run: none, absent, equal or would-update. Writes nothing."""
+    return _plan_aggregate(cli, prefix, values, write_rule)[0]
 
 
 # ── Export ──
@@ -514,6 +592,7 @@ __all__ = [
     "plan_label",
     "write_values_to_descriptors",
     "key_tail",
+    "plan_aggregate",
     "plan_import",
     "serialize_inventory",
 ]

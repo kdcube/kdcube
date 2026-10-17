@@ -5128,7 +5128,10 @@ def _aws_sm_config_import(
     )
     try:
         if args.dry_run:
-            result = aws_sm.ImportResult(plan=aws_sm.plan_import(cli, prefix, values))
+            result = aws_sm.ImportResult(
+                plan=aws_sm.plan_import(cli, prefix, values),
+                aggregate=aws_sm.plan_aggregate(cli, prefix, values, write_rule=write_rule),
+            )
         else:
             result = aws_sm.apply_import(cli, prefix, values, write_rule=write_rule)
     except aws_sm.AwsSecretsError as exc:
@@ -5149,12 +5152,15 @@ def _aws_sm_config_import(
                 "keys": rows,
                 "written_keys": result.written_keys,
                 "written_documents": list(result.written_documents),
+                "aggregate": {"document": aws_sm.aggregate_id(prefix), "status": result.aggregate},
             }
         )
         return
     out.print(f"[dim]AWS SM prefix:[/dim] {prefix}  [dim]write rule:[/dim] {write_rule}")
     for row in rows:
         out.print(f"  {row['status']:<16} {row['key']}  [dim]{row['document']}[/dim]")
+    if result.aggregate != aws_sm.AGGREGATE_NONE:
+        out.print(f"  {result.aggregate:<16} [dim]{aws_sm.aggregate_id(prefix)} (all apps, one document)[/dim]")
     if args.dry_run:
         out.print(f"[yellow]Dry run: {len(rows)} key(s) compared, nothing written.[/yellow]")
     else:

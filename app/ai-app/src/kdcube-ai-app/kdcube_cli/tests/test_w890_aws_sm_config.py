@@ -30,6 +30,7 @@ PERSON = "users.u-1.secrets.github.token"
 PERSON_APP = "users.u-1.bundles.travel@1-0.secrets.calendar.refresh_token"
 DOTTED = "bundles.travel@1-0.secrets.providers.maps.v2.key"
 PLATFORM = "platform.services.anthropic.api_key"
+AGGREGATE = f"{PREFIX}/bundles/secrets"
 
 VALUES = {
     APP: "app-value-1",
@@ -296,6 +297,42 @@ def test_a_key_that_would_drop_another_is_refused_before_any_write(stored, incom
     assert store.data == before
 
 
+def test_the_aggregate_is_kept_current_and_keeps_other_apps():
+    store = FakeAwsCli()
+    store.data[AGGREGATE] = json.dumps({"other@1-0": {"k": "v"}, "travel@1-0": {"stale": "x"}})
+    result = aws_sm.apply_import(_cli(store), PREFIX, VALUES, write_rule="write-new")
+    assert result.aggregate == "updated"
+    assert store.puts()[-1] == AGGREGATE  # after the per-app documents
+    aggregate = json.loads(store.data[AGGREGATE])
+    assert aggregate["other@1-0"] == {"k": "v"}
+    assert aggregate["travel@1-0"] == json.loads(store.data[f"{PREFIX}/bundles/travel@1-0/secrets"])
+    assert aggregate["connection-hub@1-0"] == {"google": {"client_secret": "hub-value-1"}}
+    assert "u-1" not in aggregate  # per-person documents are not in it
+    store.written.clear()
+    assert aws_sm.apply_import(_cli(store), PREFIX, VALUES, write_rule="overwrite").aggregate == "equal"
+    assert store.puts() == []
+
+
+def test_an_absent_aggregate_is_never_created():
+    store = FakeAwsCli()
+    result = aws_sm.apply_import(_cli(store), PREFIX, VALUES, write_rule="overwrite")
+    assert result.aggregate == "absent" and AGGREGATE not in store.data
+    assert aws_sm.apply_import(_cli(store), PREFIX, {PERSON: "p2"}, write_rule="overwrite").aggregate == "none"
+
+
+def test_a_failed_aggregate_write_is_finished_by_a_rerun():
+    store = FakeAwsCli()
+    store.data[AGGREGATE] = "{}"
+    store.fail_put.add(AGGREGATE)
+    with pytest.raises(aws_sm.AwsSecretsPartialWrite, match="Stopped before kdcube/demo/project/bundles/secrets"):
+        aws_sm.apply_import(_cli(store), PREFIX, VALUES, write_rule="overwrite")
+    store.fail_put.clear()
+    store.written.clear()
+    result = aws_sm.apply_import(_cli(store), PREFIX, VALUES, write_rule="write-new")
+    assert result.written_keys == 0 and result.aggregate == "updated" and store.puts() == [AGGREGATE]
+    assert json.loads(store.data[AGGREGATE]) == _app_documents(store.data)
+
+
 def test_values_never_travel_in_arguments():
     store = FakeAwsCli()
     aws_sm.apply_import(_cli(store), PREFIX, {**VALUES, PLATFORM: "platform-value"}, write_rule="overwrite")
@@ -364,10 +401,20 @@ def _bundle_secrets(bundles_doc: dict, bundle_id: str) -> dict:
     return next(item["secrets"] for item in bundles_doc["bundles"]["items"] if item["id"] == bundle_id)
 
 
+def _app_documents(data: dict[str, str]) -> dict[str, dict]:
+    head, tail = f"{PREFIX}/bundles/", "/secrets"
+    return {
+        secret_id[len(head):-len(tail)]: json.loads(raw)
+        for secret_id, raw in data.items()
+        if secret_id.startswith(head) and secret_id.endswith(tail) and secret_id != AGGREGATE
+    }
+
+
 @pytest.mark.parametrize("rule", ["overwrite", "write-new"])
 def test_round_trip_export_edit_import_export(monkeypatch, tmp_path, capsys, rule):
     store = FakeAwsCli()
     asyncio.run(_runtime(store.data).set_many({**VALUES, PLATFORM: "platform-value"}))
+    store.data[AGGREGATE] = "{}"  # the deployment creates it; the CLI keeps it current
 
     first = tmp_path / "first"
     _main(monkeypatch, store, tmp_path, "export", "--out-dir", str(first))
@@ -399,6 +446,7 @@ def test_round_trip_export_edit_import_export(monkeypatch, tmp_path, capsys, rul
     assert statuses["users.u-2.secrets.slack.token"] == "new"
     assert statuses[HUB] == "equal"
     assert PLATFORM not in statuses
+    assert report["aggregate"] == {"document": AGGREGATE, "status": "would-update"}
     assert "app-value-2" not in json.dumps(report) and "person-2-value" not in json.dumps(report)
     assert store.puts() == []
 
@@ -413,6 +461,9 @@ def test_round_trip_export_edit_import_export(monkeypatch, tmp_path, capsys, rul
     if rule == "write-new":
         _bundle_secrets(expected_bundles, "travel@1-0")["openai"]["api_key"] = "app-value-1"
     assert _pair(second) == (expected_secrets, expected_bundles)
+    # The aggregate holds every app's whole document, as the per-app documents now are.
+    assert json.loads(store.data[AGGREGATE]) == _app_documents(store.data)
+    assert set(_app_documents(store.data)) == {"travel@1-0", "connection-hub@1-0"}
     assert asyncio.run(_runtime(store.data).get_secret(PLATFORM)) == "platform-value"
 
 

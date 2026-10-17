@@ -280,6 +280,7 @@ No workdir, runtime, Card or bearer is involved.
  <prefix>/users/<user>/secrets                 users.<user>.secrets.<tail>
  <prefix>/users/<user>/bundles/<app>/secrets   users.<user>.bundles.<app>.secrets.<tail>
  <prefix>/platform/secrets                     platform.<tail>  (only with --include-platform-descriptors)
+ <prefix>/bundles/secrets                      {<app>: that app's whole document}; ECS injects it as KDCUBE_BUNDLES_SECRETS_JSON
  each document is one JSON object, nested by <tail> (a.b.c → {"a": {"b": {"c": ...}}})
 ```
 
@@ -314,9 +315,13 @@ kdcube config import --aws-sm-prefix kdcube/<tenant>/<project> --aws-region <reg
   writes lock through Redis, which the CLI cannot take, so no runtime may write
   secrets under the prefix during the import. The inventory is written first,
   then each document is read again just before it is written, and only
-  documents that change are written. The first failed write stops the import
-  and names the documents already written; rerunning is safe, and under
-  `write-new` the earlier writes compare equal.
+  documents that change are written. Last, the aggregate `<prefix>/bundles/secrets`
+  gets each imported app's whole document (other apps' entries stay); it is
+  updated only where it exists, since the deployment creates it, and the dry
+  run reports it as `equal`, `would-update` or `absent`. The first failed write
+  stops the import and names the documents already written; rerunning is safe,
+  under `write-new` the earlier writes compare equal, and a rerun with nothing
+  left to write still brings the aggregate up to date.
 - Values go to the `aws` CLI only on stdin (`--secret-string file:///dev/stdin`)
   and come back only on stdout; an AWS error is reported by document name and
   exit code, never with its text. `--include-user-data`, `--reload`,
