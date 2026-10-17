@@ -4172,15 +4172,17 @@ async def _serve_application_site(
             raise HTTPException(status_code=404, detail="Application site path not found")
         raise HTTPException(status_code=404, detail=f"Application site '{site_alias}' not found")
 
+    public_base = f"/sites/{site.alias}/" if site_alias else "/"
     if site.auth_mode == SITE_AUTH_PLATFORM_SESSION:
+        # Return to the public address, not the proxied one proc sees.
         sign_in = enforce_platform_session_user(
             request,
             _build_public_api_request_session(request),
+            return_path=public_base + (str(path or "").lstrip("/") if _application_site_path(path) else ""),
         )
         if sign_in is not None:
             return sign_in
 
-    public_base = f"/sites/{site.alias}/" if site_alias else "/"
     if site.target is None or not site.target.path:
         raise HTTPException(
             status_code=503,

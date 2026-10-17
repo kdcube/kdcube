@@ -80,7 +80,10 @@ def _signed_out_page(sign_in: str, *, heading: str, framed: bool) -> HTMLRespons
     )
 
 
-def platform_sign_in_redirect(request: Request) -> Response:
+def platform_sign_in_redirect(request: Request, *, return_path: str | None = None) -> Response:
+    """``return_path`` is the public path to come back to, when the proxy
+    rewrote the one this request arrived on (an application site is served
+    at ``/sites/<alias>/`` but reaches proc under ``/api/integrations``)."""
     from kdcube_ai_app.auth.bundle.login_lane import sign_in_bounce_path
 
     # The person has just signed out (the signed-out route adds the marker):
@@ -88,7 +91,7 @@ def platform_sign_in_redirect(request: Request) -> Response:
     # still signed in upstream sign them straight back in (W260). Show that
     # they are signed out, with a Sign in link that carries no marker.
     signed_out = request.query_params.get("signed_out") == "1"
-    return_to = request.url.path
+    return_to = return_path or request.url.path
     if signed_out:
         params = [(key, value) for key, value in request.query_params.multi_items() if key != "signed_out"]
         if params:
@@ -109,6 +112,8 @@ def platform_sign_in_redirect(request: Request) -> Response:
 def enforce_platform_session_user(
     request: Request,
     session: UserSession | None,
+    *,
+    return_path: str | None = None,
 ) -> Response | None:
     """Require a verified platform user and continue browser documents to login."""
 
@@ -117,7 +122,7 @@ def enforce_platform_session_user(
     if session is not None and user_type_value.lower() != UserType.ANONYMOUS.value:
         return None
     if is_browser_html_navigation(request):
-        return platform_sign_in_redirect(request)
+        return platform_sign_in_redirect(request, return_path=return_path)
     raise HTTPException(status_code=401, detail="User is required.")
 
 

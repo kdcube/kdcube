@@ -188,8 +188,9 @@ async def test_platform_session_site_redirects_signed_out_browser_before_serving
     response = await integrations.application_site_path(
         site_alias="problem-board",
         path="inbox",
+        # The proxy rewrites /sites/ to proc's /api/integrations mount.
         request=_request(
-            path="/sites/problem-board/inbox",
+            path="/api/integrations/sites/problem-board/inbox",
             query_string=b"worker=codex-ui&message=mail-9",
             headers=(
                 (b"accept", b"text/html,application/xhtml+xml"),
@@ -204,6 +205,123 @@ async def test_platform_session_site_redirects_signed_out_browser_before_serving
         "?next=%2Fsites%2Fproblem-board%2Finbox%3Fworker%3Dcodex-ui%26message%3Dmail-9"
     )
     assert response.headers["cache-control"] == "no-store"
+
+
+def _protected_site_catalog(*, alias: str = "problem-board", default: bool = False, hosts: tuple[str, ...] = ()):
+    return compile_application_site_catalog(
+        tenant="tenant-a",
+        project="project-a",
+        sites=[
+            ApplicationSite(
+                "board@1",
+                alias,
+                default,
+                hosts,
+                _SITE_TARGET,
+                SITE_AUTH_PLATFORM_SESSION,
+            )
+        ],
+    )
+
+
+_DOCUMENT_HEADERS = (
+    (b"accept", b"text/html,application/xhtml+xml"),
+    (b"sec-fetch-dest", b"document"),
+    (b"sec-fetch-mode", b"navigate"),
+)
+
+
+def _serve_protected(monkeypatch, catalog) -> None:
+    async def _catalog(_request):
+        return catalog
+
+    monkeypatch.setattr(integrations, "_application_site_catalog", _catalog)
+    monkeypatch.setattr(
+        integrations,
+        "serve_static_asset",
+        lambda **_kwargs: pytest.fail("signed-out site shell was served"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_platform_session_default_site_returns_to_the_public_root_path(monkeypatch) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog(default=True, hosts=("board.example.test",)))
+
+    response = await integrations.application_site_landing_path(
+        path="quickstart-works/",
+        request=_request(
+            host="board.example.test",
+            path="/api/integrations/site-root/quickstart-works/",
+            query_string=b"view=inbox",
+            headers=_DOCUMENT_HEADERS,
+        ),
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"].endswith("?next=%2Fquickstart-works%2F%3Fview%3Dinbox")
+
+
+@pytest.mark.asyncio
+async def test_platform_session_site_return_path_keeps_an_encoded_sub_path(monkeypatch) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog())
+
+    # The router hands the handler the decoded sub-path; the redirect encodes it again.
+    response = await integrations.application_site_path(
+        site_alias="problem-board",
+        path="my project/",
+        request=_request(
+            path="/api/integrations/sites/problem-board/my%20project/",
+            query_string=b"q=a%26b",
+            headers=_DOCUMENT_HEADERS,
+        ),
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"].endswith(
+        "?next=%2Fsites%2Fproblem-board%2Fmy%20project%2F%3Fq%3Da%2526b"
+    )
+
+
+@pytest.mark.asyncio
+async def test_platform_session_site_signed_out_page_links_to_the_public_path(monkeypatch) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog())
+
+    response = await integrations.application_site_root(
+        site_alias="problem-board",
+        request=_request(
+            path="/api/integrations/sites/problem-board",
+            query_string=b"signed_out=1",
+            headers=_DOCUMENT_HEADERS,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.body.decode("utf-8")
+    assert "You are signed out." in body
+    assert "next=%2Fsites%2Fproblem-board%2F\"" in body
+    assert "signed_out" not in body.split("kdcube-sign-in", 1)[1].split("</a>", 1)[0]
+
+
+@pytest.mark.asyncio
+async def test_platform_session_framed_site_prompt_links_to_the_public_path(monkeypatch) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog())
+
+    response = await integrations.application_site_path(
+        site_alias="problem-board",
+        path="quickstart-works",
+        request=_request(
+            path="/api/integrations/sites/problem-board/quickstart-works",
+            headers=(
+                (b"accept", b"text/html"),
+                (b"sec-fetch-dest", b"iframe"),
+                (b"sec-fetch-mode", b"navigate"),
+            ),
+        ),
+    )
+
+    assert response.status_code == 200
+    assert "Sign in to continue." in response.body.decode("utf-8")
+    assert "next=%2Fsites%2Fproblem-board%2Fquickstart-works\"" in response.body.decode("utf-8")
 
 
 @pytest.mark.asyncio
