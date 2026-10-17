@@ -787,12 +787,35 @@ could lose its body while still listed as pending.
   last-delivered ID, then runs `XTRIM key MINID ~ <boundary> LIMIT n`. It does
   not use XTRIM's own `ACKED` option: with `~ ... LIMIT`, that removed nothing
   on Redis 8.4.0.
-- **Result and DLQ streams: unchanged count caps.** They have no consumer
-  group and keep `DATA_BUS_RESULT_STREAM_MAXLEN` and `DATA_BUS_DLQ_STREAM_MAXLEN`
-  (10,000 each). A time window for them is a separate policy decision.
-- **When trimming runs.** After a terminal acknowledgement, at most once per
-  stream every five seconds per process. One call removes at most 1,000
-  entries. Nothing runs on a timer.
+- **Result stream: unchanged count cap.** It has no consumer group and keeps
+  `DATA_BUS_RESULT_STREAM_MAXLEN` (10,000); a result body above
+  `DATA_BUS_RESULT_INLINE_BYTES` is stored by reference.
+- **DLQ stream: bounded entries, seven days, and the count cap (W888).** The
+  operator's policy decision (2026-10-16, option c). A dead-letter entry keeps
+  its whole envelope (message id, subject, object, idempotency key, actor,
+  reason) and at most 16,384 UTF-8 bytes of the failed body and of the
+  details. A larger value becomes
+  `{"schema": "kdcube.data_bus.dlq_body.v1", "truncated": true, "bytes", "sha256", "head"}`,
+  where `head` is the first bytes, cut on a character boundary. An unreadable
+  record is bounded per field. After each DLQ write, entries older than seven
+  days (by stream ID, on the server clock) are removed with an exact
+  `XTRIM MINID`. It is not the approximate `~` form, which removes only whole
+  stream nodes (100 entries by default), so a small DLQ would keep old
+  entries. A refused trim never fails the write. Both values are fixed
+  policy, not configuration: no environment variable changes them, and a
+  different window is a new policy decision. `DATA_BUS_DLQ_STREAM_MAXLEN` (10,000) stays as a
+  second bound. Measured before this: 178 entries held 18 MB (p90 568 KB, max
+  761 KB), so the count cap alone allowed several GB. On deploy, the first
+  DLQ write removes the existing entries older than seven days.
+- **When trimming runs.** Both trims are driven by writes; nothing runs on a
+  timer, so an idle stream is not trimmed until its next write.
+  - *Message stream:* after a terminal acknowledgement, at most once per
+    stream every five seconds per process. One call removes at most 1,000
+    entries (`DATA_BUS_TRIM_LIMIT`), approximately (`~`).
+  - *DLQ:* after a DLQ write, at most once per stream every five seconds per
+    process. One exact call removes every entry past the seven days. It
+    takes no `DATA_BUS_TRIM_LIMIT`; the DLQ count cap bounds it. The count
+    cap is not a seven-day minimum: past 10,000 entries the oldest go sooner.
 
 The six-hour window was accepted at the measured incident rate of 8,353
 entries per hour: the stream supports recovery and diagnosis, while
