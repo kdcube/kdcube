@@ -18,6 +18,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Set, List, Tuple, Mapping
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
@@ -4174,11 +4175,14 @@ async def _serve_application_site(
 
     public_base = f"/sites/{site.alias}/" if site_alias else "/"
     if site.auth_mode == SITE_AUTH_PLATFORM_SESSION:
-        # Return to the public address, not the proxied one proc sees.
+        # Return to the public address, not the proxied one proc sees. The
+        # router hands over the decoded sub-path, so encode it again: a literal
+        # ?, # or % must stay part of the path in the sign-in `next`.
+        sub_path = str(path or "").lstrip("/") if _application_site_path(path) else ""
         sign_in = enforce_platform_session_user(
             request,
             _build_public_api_request_session(request),
-            return_path=public_base + (str(path or "").lstrip("/") if _application_site_path(path) else ""),
+            return_path=public_base + quote(sub_path, safe="/"),
         )
         if sign_in is not None:
             return sign_in

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import HTTPException
@@ -265,7 +266,8 @@ async def test_platform_session_default_site_returns_to_the_public_root_path(mon
 async def test_platform_session_site_return_path_keeps_an_encoded_sub_path(monkeypatch) -> None:
     _serve_protected(monkeypatch, _protected_site_catalog())
 
-    # The router hands the handler the decoded sub-path; the redirect encodes it again.
+    # The router hands the handler the decoded sub-path; the return path encodes
+    # it again, and `next` encodes that once more as a query value.
     response = await integrations.application_site_path(
         site_alias="problem-board",
         path="my project/",
@@ -278,8 +280,53 @@ async def test_platform_session_site_return_path_keeps_an_encoded_sub_path(monke
 
     assert response.status_code == 302
     assert response.headers["location"].endswith(
-        "?next=%2Fsites%2Fproblem-board%2Fmy%20project%2F%3Fq%3Da%2526b"
+        "?next=%2Fsites%2Fproblem-board%2Fmy%2520project%2F%3Fq%3Da%2526b"
     )
+
+
+def _callback_target(location: str) -> str:
+    """The address the sign-in callback returns to, after its own guard."""
+    from connection_hub.server_side_login.next_url import safe_next_target
+
+    return safe_next_target(parse_qs(urlsplit(location).query)["next"][0])
+
+
+@pytest.mark.parametrize(
+    ("site_alias", "default", "handler_path", "proc_path", "expected"),
+    [
+        (
+            "problem-board",
+            False,
+            "report?draft/#x%y",
+            "/api/integrations/sites/problem-board/report%3Fdraft/%23x%25y",
+            "/sites/problem-board/report%3Fdraft/%23x%25y?q=1",
+        ),
+        (
+            "",
+            True,
+            "report?draft/#x%y",
+            "/api/integrations/site-root/report%3Fdraft/%23x%25y",
+            "/report%3Fdraft/%23x%25y?q=1",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_platform_session_site_return_path_keeps_reserved_characters_in_the_path(
+    monkeypatch, site_alias, default, handler_path, proc_path, expected
+) -> None:
+    _serve_protected(monkeypatch, _protected_site_catalog(default=default, hosts=("board.example.test",)))
+    request = _request(host="board.example.test", path=proc_path, query_string=b"q=1", headers=_DOCUMENT_HEADERS)
+
+    if site_alias:
+        response = await integrations.application_site_path(site_alias=site_alias, path=handler_path, request=request)
+    else:
+        response = await integrations.application_site_landing_path(path=handler_path, request=request)
+
+    assert response.status_code == 302
+    target = _callback_target(response.headers["location"])
+    assert target == expected
+    # The literal ?, # and % stay in the path; only the original query follows.
+    assert urlsplit(target).path == expected.split("?", 1)[0]
 
 
 @pytest.mark.asyncio
