@@ -807,9 +807,15 @@ could lose its body while still listed as pending.
   second bound. Measured before this: 178 entries held 18 MB (p90 568 KB, max
   761 KB), so the count cap alone allowed several GB. On deploy, the first
   DLQ write removes the existing entries older than seven days.
-- **When trimming runs.** After a terminal acknowledgement, at most once per
-  stream every five seconds per process. One call removes at most 1,000
-  entries. Nothing runs on a timer.
+- **When trimming runs.** Both trims are driven by writes; nothing runs on a
+  timer, so an idle stream is not trimmed until its next write.
+  - *Message stream:* after a terminal acknowledgement, at most once per
+    stream every five seconds per process. One call removes at most 1,000
+    entries (`DATA_BUS_TRIM_LIMIT`), approximately (`~`).
+  - *DLQ:* after a DLQ write, at most once per stream every five seconds per
+    process. One exact call removes every entry past the seven days. It
+    takes no `DATA_BUS_TRIM_LIMIT`; the DLQ count cap bounds it. The count
+    cap is not a seven-day minimum: past 10,000 entries the oldest go sooner.
 
 The six-hour window was accepted at the measured incident rate of 8,353
 entries per hour: the stream supports recovery and diagnosis, while
