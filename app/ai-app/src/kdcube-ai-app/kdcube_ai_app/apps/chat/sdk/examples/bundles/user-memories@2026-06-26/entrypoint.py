@@ -155,16 +155,6 @@ class UserMemoriesEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         envelope = CredentialEnvelope.coerce(delegated.get("credential"))
         return envelope if (envelope.credential_kind or envelope.subject) else None
 
-    def _memory_mcp_grantor_authority(self, request=None) -> Dict[str, Any]:
-        delegated = getattr(getattr(request, "state", None), "delegated_credential", None) if request is not None else None
-        if not isinstance(delegated, dict):
-            return {}
-        grant_record = delegated.get("grant_record")
-        if not isinstance(grant_record, dict):
-            return {}
-        authority = grant_record.get("grantor_authority")
-        return dict(authority) if isinstance(authority, dict) else {}
-
     async def _memory_mcp_projection(self, scope, request=None) -> Dict[str, Any]:
         state = getattr(request, "state", None) if request is not None else None
         cached = getattr(state, "_kdcube_memory_mcp_projection", None) if state is not None else None
@@ -180,7 +170,6 @@ class UserMemoriesEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                     operation="delegated_identity_scope_resolve",
                     data={
                         "credential": envelope.to_dict(),
-                        "grantor_authority": self._memory_mcp_grantor_authority(request),
                     },
                     tenant=scope.tenant,
                     project=scope.project,
@@ -207,6 +196,10 @@ class UserMemoriesEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             user_ids = [str(uid or "").strip() for uid in raw if str(uid or "").strip()]
             if user_ids:
                 return user_ids
+        if self._memory_mcp_credential(request) is not None:
+            # A failed delegated scope read cannot widen into native family
+            # aggregation. Retain the already-admitted exact grantor scope.
+            return [scope.user_id] if scope.user_id else []
         return await self._memory_read_user_ids(scope=scope)
 
     async def _memory_mcp_economics_subject(self, scope, request=None):
@@ -214,20 +207,29 @@ class UserMemoriesEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             economics_subject_from_authority_context,
         )
 
-        projection = await self._memory_mcp_projection(scope, request=request)
-        economics = projection.get("economics") if isinstance(projection, dict) else None
+        # Identity-family resolution supplies data scope, not billing authority.
+        # The managed guard already computed the current grantor ceiling and
+        # this Card's effective role once for this request.
+        envelope = self._memory_mcp_credential(request)
+        if envelope is None:
+            return self._memory_search_econ_subject()
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.surface_guard import (
+            delegated_economics_authority,
+        )
+
+        economics = delegated_economics_authority(request)
         if isinstance(economics, dict) and str(economics.get("user_id") or "").strip():
             return economics_subject_from_authority_context(
                 tenant=scope.tenant,
                 project=scope.project,
                 identity_authority=economics,
-                actor_user_id=str((projection.get("provenance") or {}).get("actor_identity") or ""),
+                actor_user_id=str(economics.get("actor_identity") or ""),
                 fallback_user_id=str(economics.get("user_id") or "").strip(),
                 fallback_roles=tuple(economics.get("roles") or ()),
                 fallback_permissions=tuple(economics.get("permissions") or ()),
-                provenance=dict(economics.get("provenance") or projection.get("provenance") or {}),
+                provenance=dict(economics.get("provenance") or {}),
             )
-        return self._memory_search_econ_subject()
+        raise RuntimeError("delegated_memory_admission_authority_missing")
 
     async def _memory_mcp_query_embedding(self, scope, query: str, request=None):
         normalized = str(query or "").strip()

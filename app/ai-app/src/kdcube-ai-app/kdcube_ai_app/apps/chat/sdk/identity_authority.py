@@ -11,6 +11,7 @@ platform user Y" into execution-context fields carried by detached jobs.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -28,6 +29,83 @@ def _list(values: Iterable[Any] | None) -> list[str]:
     if isinstance(values, str):
         values = [values]
     return [_str(value) for value in (values or ()) if _str(value)]
+
+
+class PlatformAuthorityResolutionError(Exception):
+    """A target identity is unresolved, disabled, or its owner is unavailable."""
+
+    def __init__(self, reason: str, status_code: int = 403):
+        super().__init__(reason)
+        self.reason = reason
+        self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class NativePlatformIdentity:
+    """Facts read from the configured platform authority's native user record."""
+
+    authority_id: str
+    user_id: str
+    roles: tuple[str, ...]
+    permissions: tuple[str, ...]
+    source: str
+    updated_at: int
+    freshness: str = "last_native_sign_in_or_admin_write"
+
+
+async def resolve_native_platform_identity(
+    *, tenant: str, project: str, platform_user_id: str,
+    target_authority_id: str = "platform",
+) -> NativePlatformIdentity:
+    """Read target roles without consulting a derived request/session.
+
+    Bundle-session deployments own a native user record. Direct Cognito (and
+    other providers without a native read adapter) is unresolved until that
+    provider's lookup is wired. A store failure remains unavailable; neither
+    absence nor failure creates an identity or a registered role.
+    """
+    from kdcube_ai_app.apps.middleware.platform_auth import platform_authenticator_descriptor
+    from kdcube_ai_app.auth.bundle import get_bundle_session_authority
+
+    subject = _str(platform_user_id)
+    if not subject or subject.startswith("integration:"):
+        raise PlatformAuthorityResolutionError("target_authority_identity_unresolved")
+    try:
+        descriptor = platform_authenticator_descriptor(get_settings())
+    except Exception as exc:
+        raise PlatformAuthorityResolutionError("target_authority_unavailable", 503) from exc
+    aliases = {"platform", "kdcube.platform", "kdcube-front-shell", _str(descriptor.get("authority_id"))}
+    if _str(target_authority_id) not in aliases:
+        raise PlatformAuthorityResolutionError("required_authority_not_linked")
+    if descriptor.get("provider") != "bundle":
+        raise PlatformAuthorityResolutionError("target_authority_identity_unresolved")
+    try:
+        authority = get_bundle_session_authority(tenant=tenant, project=project)
+        user = await authority.get_user(subject)
+    except Exception as exc:
+        raise PlatformAuthorityResolutionError("target_authority_unavailable", 503) from exc
+    if user is None or _str(user.sub) != subject:
+        raise PlatformAuthorityResolutionError("target_authority_identity_unresolved")
+    # OAuth delegates have their own integration user records in this table.
+    # They are actors, never proof of a target platform identity's roles.
+    metadata = user.metadata if isinstance(user.metadata, dict) else {}
+    credential = metadata.get("credential")
+    if (
+        _str(user.provider) == "integration"
+        or isinstance(credential, dict) and _str(credential.get("credential_kind"))
+        in {"delegated_client_access", "delegated_client"}
+    ):
+        raise PlatformAuthorityResolutionError("target_authority_identity_unresolved")
+    if user.disabled:
+        raise PlatformAuthorityResolutionError("target_authority_identity_disabled")
+    return NativePlatformIdentity(
+        authority_id=_str(descriptor.get("authority_id")) or "kdcube.platform",
+        user_id=subject,
+        roles=tuple(_list(user.roles)),
+        permissions=tuple(_list(user.permissions)),
+        source="bundle_session_native_user",
+        updated_at=int(user.updated_at or 0),
+    )
 
 
 async def resolve_platform_authority(
@@ -186,8 +264,11 @@ def apply_authority_to_comm_context(comm_context: Any, *, source: Dict[str, Any]
 
 
 __all__ = [
+    "NativePlatformIdentity",
+    "PlatformAuthorityResolutionError",
     "apply_authority_to_comm_context",
     "authority_from_source",
     "normalize_execution_authority",
     "resolve_platform_authority",
+    "resolve_native_platform_identity",
 ]

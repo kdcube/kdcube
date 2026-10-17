@@ -23,6 +23,9 @@ from kdcube_ai_app.apps.chat.sdk.application_operations import (
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
     surface_guard,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.current_grantor import (
+    CurrentGrantorAuthority,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import (
     bind_delegated_catalog,
 )
@@ -358,6 +361,41 @@ def test_managed_mcp_transport_rejects_json_rpc_batches(monkeypatch):
     }
 
 
+def _native_grantor(monkeypatch, roles):
+    """Explicit current authority fixture, independent of captured grant facts."""
+    if roles is None:
+        return
+    from kdcube_ai_app.apps.chat.sdk.identity_authority import NativePlatformIdentity
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import current_grantor
+
+    async def resolve(**kwargs):
+        return NativePlatformIdentity(
+            authority_id="kdcube.platform", user_id=kwargs["platform_user_id"],
+            roles=tuple(roles), permissions=("records:read",),
+            source="bundle_session_native_user", updated_at=100,
+        )
+
+    monkeypatch.setattr(current_grantor, "resolve_native_platform_identity", resolve)
+
+
+def _admitted_grantor(request, roles):
+    """Supply the typed host fact required by synchronous projection readers."""
+    delegated = request.state.delegated_credential
+    credential = delegated["credential"]
+    grant = delegated["grant_record"]
+    request.state._delegated_current_grantor_authority = CurrentGrantorAuthority(
+        tenant="home", project="demo",
+        subject=credential["attrs"]["grantor_subject"],
+        source_authority=credential["issuer_authority_id"],
+        actor=credential["subject"], target_authority="kdcube.platform",
+        edge_id=grant.get("registry_access_id", ""),
+        edge_revision=grant.get("card_revision", 0),
+        roles=tuple(roles), permissions=("records:read",),
+        source="bundle_session_native_user", updated_at=100,
+        freshness="last_native_sign_in_or_admin_write",
+    )
+
+
 def _client(
     monkeypatch,
     *,
@@ -371,7 +409,9 @@ def _client(
     catalog_unavailable="",
     cards=None,
     authority_backend="",
+    native_roles=("kdcube:role:registered", "kdcube:role:super-admin"),
 ):
+    _native_grantor(monkeypatch, native_roles)
     async def fake_authenticate(token: str):
         if token != "reader":
             return None
@@ -442,7 +482,9 @@ def _rest_client(
     connections=None,
     catalog_unavailable="",
     cards=None,
+    native_roles=("kdcube:role:registered", "kdcube:role:super-admin"),
 ):
+    _native_grantor(monkeypatch, native_roles)
     async def fake_authenticate(token: str):
         if token != "reader":
             return None
@@ -493,6 +535,7 @@ def _rest_client(
 
 
 def _proxy_client(monkeypatch, *, grant_record, auth=None):
+    _native_grantor(monkeypatch, ("kdcube:role:registered", "kdcube:role:super-admin"))
     async def fake_authenticate(token: str):
         if token != "reader":
             return None
@@ -1239,6 +1282,7 @@ def test_rest_admission_can_evaluate_an_explicit_external_resource(
     monkeypatch,
     caplog,
 ):
+    _native_grantor(monkeypatch, ("kdcube:role:registered",))
     external_resource = "https://service.example/customers"
     connections = {
         "delegated_credentials": {
@@ -1493,6 +1537,7 @@ def test_managed_rest_guard_resource_policy_requires_selected_operation(monkeypa
 
 
 def test_application_operation_guard_uses_the_cards_wildcard_selection(monkeypatch):
+    _native_grantor(monkeypatch, ("kdcube:role:registered",))
     selected = application_operation_ref(
         application_id="records@1-0",
         operation_id="records.export",
@@ -1659,6 +1704,7 @@ def test_application_operation_projection_uses_only_the_invocation_role():
         },
     }
 
+    _admitted_grantor(request, ("kdcube:role:super-admin",))
     elevated = surface_guard.delegated_rest_runtime_projection(
         request,
         request_resource="*",
@@ -1686,6 +1732,7 @@ def test_application_operation_projection_uses_only_the_invocation_role():
 
 
 def test_application_operation_guard_rejects_a_mismatched_role_policy(monkeypatch):
+    _native_grantor(monkeypatch, ("kdcube:role:super-admin",))
     selected = application_operation_ref(
         application_id="records@1-0",
         operation_id="records.export",
@@ -1949,9 +1996,9 @@ def test_managed_guard_exposes_runtime_projection_for_proc_bridge(monkeypatch):
     assert projection["grantor_user_id"] == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
     assert projection["identity_scope"] == "grantor_identity_family"
     assert "memories:read" in projection["grants"]
-    assert "kdcube:role:super-admin" in projection["roles"]
+    assert projection["roles"] == ["kdcube:role:registered"]
     assert authority["economics_user_id"] == "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
-    assert authority["budget_bypass"] is True
+    assert authority["budget_bypass"] is False
     assert authority["actor_identity"] == "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
 
 
@@ -1990,6 +2037,7 @@ def test_card_selected_registered_role_does_not_inherit_grantor_admin() -> None:
         },
     }
 
+    _admitted_grantor(request, ("kdcube:role:super-admin",))
     projection = surface_guard.delegated_rest_runtime_projection(
         request,
         request_resource="*",
@@ -2004,6 +2052,24 @@ def test_card_selected_registered_role_does_not_inherit_grantor_admin() -> None:
     assert projection["delegated_roles_selected"] is True
     assert "kdcube:role:super-admin" not in projection["roles"]
     assert "kdcube:*" not in projection["permissions"]
+    assert projection["identity_authority"]["budget_bypass"] is False
+
+
+@pytest.mark.parametrize("forged_cast", [None, {"roles": ["kdcube:role:super-admin"]}])
+def test_projection_requires_a_typed_host_authority_cast(forged_cast):
+    credential = _authority(scopes=["kdcube:role:super-admin"], resource="*")
+    request = SimpleNamespace(state=SimpleNamespace(
+        delegated_credential={
+            "credential": credential,
+            "grant_record": {
+                "credential": credential,
+                "grantor_authority": {"grantor_roles": ["kdcube:role:super-admin"]},
+            },
+        },
+        _delegated_current_grantor_authority=forged_cast,
+    ))
+
+    assert surface_guard.delegated_rest_runtime_projection(request, request_resource="*") == {}
 
 
 def test_live_card_identity_is_carried_in_the_runtime_projection(monkeypatch):
@@ -2702,6 +2768,40 @@ def test_an_administrator_card_still_reaches_the_wildcard_row(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
+
+
+@pytest.mark.parametrize(
+    ("native_roles", "allowed"),
+    [
+        (("kdcube:role:super-admin",), True),
+        (("kdcube:role:registered",), False),
+    ],
+)
+def test_generic_admin_entrance_requires_current_native_admin(monkeypatch, native_roles, allowed):
+    credential = _authority(scopes=["kdcube:role:super-admin"], resource="*")
+    client = _rest_client(
+        monkeypatch,
+        native_roles=native_roles,
+        connections=_connections_with_admin_wildcard(keep_guard_resource=False),
+        grant_record={"credential": credential, "grantor_authority": {
+            "grantor_roles": ["kdcube:role:super-admin"],
+            "economics_budget_bypass": True,
+        }},
+    )
+
+    @client.app.post("/platform-admin")
+    async def platform_admin(request: Request):
+        runtime = await surface_guard.delegated_platform_admin_runtime_projection(
+            request, authority_id="delegated_client",
+        )
+        return JSONResponse(runtime)
+
+    projection = client.post("/platform-admin", headers={"Authorization": "Bearer reader"}).json()
+
+    assert bool(projection) is allowed
+    if allowed:
+        assert projection["roles"] == ["kdcube:role:super-admin"]
+        assert projection["identity_authority"]["budget_bypass"] is True
 
 
 @pytest.mark.parametrize(

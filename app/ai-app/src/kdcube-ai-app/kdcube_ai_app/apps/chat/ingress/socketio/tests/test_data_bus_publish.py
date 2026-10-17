@@ -1204,6 +1204,7 @@ async def test_data_bus_publish_refreshes_live_card_authority(monkeypatch):
         grantor_subject="user-a",
         delegate_subject="worker-a",
         expires_at=int(time.time()) + 3600,
+        card_revision=2,
         resource_grants={resource: ("work:relay", "work:journal:view")},
         resource_operations={resource: ("worker.heartbeat", "journal.view.publish")},
     )
@@ -1252,6 +1253,7 @@ async def test_data_bus_publish_refreshes_live_card_authority(monkeypatch):
     stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
     record = json.loads(redis.streams[stream_key][0][1]["json"])
     authority = (await _worker_view(monkeypatch, card, record["actor"]))["identity_authority"]
+    assert authority["delegated_card_binding"]["card_revision"] == 2
     assert authority["delegated_resource"] == resource
     assert authority["grants"] == ["work:relay", "work:journal:view"]
     assert authority["operations"] == [
@@ -1288,6 +1290,7 @@ async def test_data_bus_publish_carries_selected_operation_and_card_role(monkeyp
         grantor_subject="user-a",
         delegate_subject="worker-a",
         expires_at=int(time.time()) + 3600,
+        card_revision=7,
         resource_grants={"*": ("kdcube:role:registered", "reports:write")},
         resource_operations={"*": (operation_ref,)},
         properties={
@@ -1340,7 +1343,9 @@ async def test_data_bus_publish_carries_selected_operation_and_card_role(monkeyp
         "reports:write",
     ]
     assert "kdcube:role:super-admin" not in record["actor"]["roles"]
-    assert (await _worker_view(monkeypatch, card, record["actor"]))["identity_authority"][
+    seen = await _worker_view(monkeypatch, card, record["actor"])
+    assert seen["identity_authority"]["delegated_card_binding"]["card_revision"] == 7
+    assert seen["identity_authority"][
         APPLICATION_OPERATION_POLICY_PROPERTY
     ] == application_operation_policy()
 
@@ -1366,6 +1371,7 @@ async def test_data_bus_publish_carries_unselected_operation_to_worker_guard(mon
         grantor_subject="user-a",
         delegate_subject="worker-a",
         expires_at=int(time.time()) + 3600,
+        card_revision=9,
         resource_grants={"*": ("kdcube:role:registered",)},
         resource_operations={
             "*": (
@@ -1407,6 +1413,7 @@ async def test_data_bus_publish_carries_unselected_operation_to_worker_guard(mon
     stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
     record = json.loads(redis.streams[stream_key][0][1]["json"])
     seen = await _worker_view(monkeypatch, card, record["actor"])
+    assert seen["identity_authority"]["delegated_card_binding"]["card_revision"] == 9
     assert seen["identity_authority"]["resource_operations"]["*"] == [
         data_bus_application_operation_ref(
             application_id="task-tracker@1-0",

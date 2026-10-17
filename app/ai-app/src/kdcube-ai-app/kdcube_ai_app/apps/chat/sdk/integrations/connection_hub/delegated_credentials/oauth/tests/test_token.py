@@ -175,13 +175,16 @@ async def test_access_token_grant_binds_consented_tools(ctx):
     assert grant_record["credential"]["attrs"]["identity_scope"] == "grantor"
     assert grant_record["resource_operations"] == {}
     assert "grantor_roles" not in grant_record["credential"]["attrs"]
-    assert grant_record["grantor_authority"]["grantor_roles"] == ["kdcube:role:super-admin"]
-    assert grant_record["grantor_authority"]["economics_budget_bypass"] is True
+    assert not {
+        "grantor_roles", "grantor_permissions", "economics_budget_bypass",
+    }.intersection(grant_record["grantor_authority"])
     refresh_record = await store.validate_refresh_token(body["refresh_token"])
     assert refresh_record["operations"] == []
     assert refresh_record["resource_operations"] == {}
     assert refresh_record["credential"]["issuer_authority_id"] == DELEGATED_CLIENT_AUTHORITY_ID
-    assert refresh_record["grantor_authority"]["grantor_permissions"] == ["kdcube:*:records:*;read"]
+    assert not {
+        "grantor_roles", "grantor_permissions", "economics_budget_bypass",
+    }.intersection(refresh_record["grantor_authority"])
 
 
 @pytest.mark.asyncio

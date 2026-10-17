@@ -259,3 +259,7 @@ Authority Projection:
 
 Do not use `memory_user_ids` as authorization grants. Product records still need
 their normal access checks.
+
+Delegated scope responses carry no role/permission/bypass proof, including when
+a caller supplies those fields. Billing consumes the managed guard's admitted
+[required-authority cast](../delegated-credentials/delegation-edges-README.md#runtime-use).
