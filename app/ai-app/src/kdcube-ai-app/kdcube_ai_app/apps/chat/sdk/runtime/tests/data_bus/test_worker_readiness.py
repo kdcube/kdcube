@@ -1112,10 +1112,11 @@ async def test_default_producer_keeps_ordinary_native_actor_unchanged(
     user = {
         "user_id": "native-user", "user_type": "privileged",
         "roles": [ADMIN_ROLE], "permissions": ["native:admin"],
-        "identity_authority": {"identity_source": "native-sign-in"},
     }
     queued = await publish_default_actor(user)
-    assert queued.actor["identity_authority"] == user["identity_authority"]
+    # This positive control must pass before AND after metadata propagation:
+    # an ordinary native actor needs neither a delegation mapping nor a cast.
+    assert "identity_authority" not in queued.actor
     _forbid_card_lookup(monkeypatch)
     worker, stream, observed = _producer_worker(required_role=ADMIN_ROLE)
 
