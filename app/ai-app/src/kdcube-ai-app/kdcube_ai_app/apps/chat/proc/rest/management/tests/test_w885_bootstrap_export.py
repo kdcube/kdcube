@@ -71,8 +71,10 @@ class _SecretRuntime:
         self.reads = []
         self.inventory_targets: tuple[SecretTarget, ...] = ()
 
-    async def inventory(self):
-        return self.inventory_targets
+    async def inventory(self, *, skip_provider_key=None):
+        if skip_provider_key is None:
+            return self.inventory_targets
+        return tuple(target for target in self.inventory_targets if not skip_provider_key(target.provider_key))
 
     async def read(self, target):
         self.reads.append(target)
@@ -194,3 +196,91 @@ def test_the_approval_page_says_whether_user_props_are_included(monkeypatch):
     _run(monkeypatch, user_data=True, inventory=(SecretTarget(scope="user", user_id="u", key="remote_mcp.ref"),))
     page = _PAGES[-1]
     assert "Secrets (0)" in page and "User props:</strong> <strong>included</strong>" in page
+
+
+# --- the bootstrap drops keys it never exports before parsing them (W885, after window 16r) ----------------
+# dev-main, 2026-10-17 00:03Z: 1 of 67 provider keys was a Hub-acquired token under a user id with ":", which
+# the key contract refuses; inventory parsed every key first, so the whole bootstrap answered
+# secret_export_provider_unavailable.
+
+COLON_USER = "service:0123456789abcdef0123456789abcdef0123"
+RAW_KEYS = [
+    "platform.infra.redis.password",
+    "bundles.demo.bundle.secrets.provider.token",
+    "users.user-1.bundles.demo.bundle.secrets.github.token",
+    f"users.{COLON_USER}.bundles.demo.bundle.secrets.delegated_to_kdcube.credentials.c",
+    f"users.{COLON_USER}.secrets.connections.accounts.gmail.tokens",
+]
+
+
+class _Manager:
+    provider_type = "secrets-file"
+
+    def __init__(self, keys):
+        self.keys = list(keys)
+        self.reads: list[str] = []
+
+    async def list_all_secret_keys(self):
+        return list(self.keys)
+
+    async def get_secret_strict(self, key):
+        self.reads.append(key)
+        return f"canary::{key}"
+
+
+def _real_runtime_client(monkeypatch, keys):
+    from kdcube_ai_app.apps.chat.proc.rest.management.secret_runtime import KDCubeSecretRuntime
+
+    client, redis, _fake = _export_client(monkeypatch)
+    manager = _Manager(keys)
+    client.app.state.secret_export_runtime = KDCubeSecretRuntime(
+        SimpleNamespace(), tenant=TENANT, project=PROJECT, manager=manager)
+    return client, redis, manager
+
+
+def _start(client, selection, **extra):
+    return client.post("/api/integrations/management/v1/secrets/export/start", json={
+        "schema": SECRET_EXPORT_REQUEST_SCHEMA, "callback_uri": "http://127.0.0.1:53123/callback",
+        "state": "s" * 43, "code_challenge": "c" * 43, "code_challenge_method": "S256",
+        "selection": selection, **extra})
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("user_data", [False, True])
+def test_an_acquired_token_under_a_colon_user_id_neither_blocks_nor_leaves_the_bootstrap(monkeypatch, user_data):
+    client, redis, manager = _real_runtime_client(monkeypatch, RAW_KEYS)
+    response = _start(client, "bootstrap", user_data=user_data)
+    assert response.status_code == 200, response.text
+    frozen = json.loads(next(iter(redis.values.values())))["request"]["targets"]
+    keys = {item["key"] for item in frozen}
+    expected = {"platform.infra.redis.password", "provider.token"} | ({"github.token"} if user_data else set())
+    assert keys == expected
+    assert all(COLON_USER not in json.dumps(item) for item in frozen)
+    assert manager.reads == [], "nothing is read at start"
+
+
+def test_the_all_selection_stays_strict_on_a_key_outside_the_contract(monkeypatch):
+    client, redis, _manager = _real_runtime_client(monkeypatch, RAW_KEYS)
+    response = _start(client, "all")
+    assert response.status_code == 503 and response.json()["error"]["code"] == "secret_export_provider_unavailable"
+    assert redis.values == {}
+
+
+def test_an_ordinary_user_secret_under_a_colon_id_still_refuses_the_bootstrap_with_user_data(monkeypatch):
+    """It would be exported, and neither the key contract nor the cloud intake accepts the id."""
+    keys = [*RAW_KEYS, f"users.{COLON_USER}.bundles.demo.bundle.secrets.github.token"]
+    client, _redis, _manager = _real_runtime_client(monkeypatch, keys)
+    assert _start(client, "bootstrap", user_data=True).status_code == 503
+    client, _redis, _manager = _real_runtime_client(monkeypatch, keys)
+    assert _start(client, "bootstrap", user_data=False).status_code == 200, "without the flag it is never exported"
+
+
+def test_the_raw_key_rule_matches_the_parsed_bootstrap_filter():
+    parsed = [SecretTarget.from_provider_key(key) for key in RAW_KEYS if COLON_USER not in key]
+    for user_data in (False, True):
+        kept = {t.provider_key for t in secret_export_routes.bootstrap_targets(parsed, user_data=user_data)}
+        raw_kept = {t.provider_key for t in parsed
+                    if not secret_export_routes.bootstrap_skips_provider_key(t.provider_key, user_data=user_data)}
+        assert kept == raw_kept

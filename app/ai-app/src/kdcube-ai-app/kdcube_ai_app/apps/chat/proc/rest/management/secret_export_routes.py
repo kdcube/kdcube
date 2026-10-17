@@ -279,11 +279,14 @@ async def start_secret_export(request: Request) -> JSONResponse:
                     "secret_export_selection_invalid",
                     status_code=400,
                 )
-            targets = await _runtime(
-                request,
-                tenant=tenant,
-                project=project,
-            ).inventory()
+            runtime = _runtime(request, tenant=tenant, project=project)
+            if selection == "bootstrap":
+                # Keys the bootstrap never exports are dropped before parsing, so an acquired token under a
+                # user id the key contract refuses can neither block the export nor leave (W885).
+                targets = await runtime.inventory(
+                    skip_provider_key=lambda key: bootstrap_skips_provider_key(key, user_data=user_data))
+            else:
+                targets = await runtime.inventory()
             if selection == "bootstrap":
                 # W885: filtered before the manifest is frozen, so nothing left out is ever read.
                 targets = bootstrap_targets(targets, user_data=user_data)
@@ -613,6 +616,17 @@ BOOTSTRAP_EXCLUDED_USER_PREFIXES = (
     "connections.accounts.", "delegated_to_kdcube.", "remote_mcp.", "linkedin.accounts.",
 )
 MAX_BOOTSTRAP_USER_PROPS = 20000
+
+
+def bootstrap_skips_provider_key(key: str, *, user_data: bool) -> bool:
+    """A raw provider key the bootstrap selection leaves out: every user secret without user_data, and with
+    it the tokens Connection Hub acquires. Decided on the raw key, before any parsing."""
+    if not key.startswith("users."):
+        return False
+    if not user_data:
+        return True
+    _user, marker, tail = key.partition(".secrets.")
+    return bool(marker) and tail.startswith(BOOTSTRAP_EXCLUDED_USER_PREFIXES)
 
 
 def bootstrap_targets(targets: Any, *, user_data: bool) -> tuple[Any, ...]:

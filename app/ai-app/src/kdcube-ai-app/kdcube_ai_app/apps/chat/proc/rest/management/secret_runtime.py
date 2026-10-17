@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastapi import Request
@@ -87,12 +87,17 @@ class KDCubeSecretRuntime:
             "writable": manager.can_write(),
         }
 
-    async def inventory(self) -> tuple[SecretTarget, ...]:
-        """List every canonical key from the selected provider without values."""
+    async def inventory(
+        self, *, skip_provider_key: Callable[[str], bool] | None = None
+    ) -> tuple[SecretTarget, ...]:
+        """List every canonical key from the selected provider without values. A key ``skip_provider_key``
+        accepts is dropped before it is parsed, so a record a selection never exports cannot fail it."""
 
         manager = self._manager()
         try:
             keys = await manager.list_all_secret_keys()
+            if skip_provider_key is not None:
+                keys = [key for key in keys if not skip_provider_key(key)]
             targets = tuple(SecretTarget.from_provider_key(key) for key in keys)
         except (SecretsManagerError, ValueError) as exc:
             raise ManagementSecretsProviderUnavailable(

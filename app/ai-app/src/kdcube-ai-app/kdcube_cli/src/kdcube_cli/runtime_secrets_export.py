@@ -34,7 +34,7 @@ _FOLDER_MODE, _FILE_MODE = 0o700, 0o600
 
 
 class RuntimeSecretsExportError(SystemExit):
-    """A refusal that names no secret path or value."""
+    """A refusal that names no secret value or path; a nesting refusal names the two key names."""
 
 
 @dataclass
