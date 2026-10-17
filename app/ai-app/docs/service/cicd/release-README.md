@@ -41,7 +41,6 @@ Notes:
      PyPI version.
    - The workflow's "already on PyPI" check compares the ref as written, so it
      never matches a padded ref.
-   - The pb deployment policy accepts only the zero-stripped form.
 
 ---
 
