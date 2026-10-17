@@ -169,8 +169,8 @@ def test_app_secrets_are_also_in_bundles_secrets_yaml_for_a_provider_backed_impo
     output = tmp_path / "export"
     _export(monkeypatch, workdir, config_dir, output)
     items = {item["id"]: item for item in yaml.safe_load((output / "bundles.secrets.yaml").read_text())["bundles"]["items"]}
-    assert items["demo.bundle"]["secrets"]["provider.token"] == "app-canary-1"
-    assert items["other.bundle"]["secrets"]["api.key"] == "app-canary-2"
+    assert items["demo.bundle"]["secrets"]["provider"]["token"] == "app-canary-1"
+    assert items["other.bundle"]["secrets"]["api"]["key"] == "app-canary-2"
     assert "users" not in json.dumps(items), "user secrets never go into the descriptor"
     platform = yaml.safe_load((output / "secrets.yaml").read_text())
     assert platform == {"platform": {"services": {"marker": "kept"}}}, "the legacy users root is left out"
@@ -191,19 +191,20 @@ def test_with_the_flag_the_legacy_yaml_users_go_out_without_acquired_tokens(monk
     output = tmp_path / "export"
     _export(monkeypatch, workdir, config_dir, output, "--include-user-data")
     platform = yaml.safe_load((output / "secrets.yaml").read_text())
-    assert platform["users"]["person-1"]["bundles"]["demo.bundle"]["secrets"] == {"api.key": "legacy-user-canary"}
+    # W890: the legacy entry is kept and the folder's per-user values join it (the same values as secrets/).
+    assert platform["users"]["person-1"]["bundles"]["demo.bundle"]["secrets"] == {
+        "api": {"key": "legacy-user-canary"}, "github": {"token": "user-canary-1"}}
     assert platform["users"]["person-1"]["secrets"] == {}
     assert b"legacy-acquired-canary" not in _all_bytes(output)
 
 
-def test_a_key_and_a_key_below_it_both_survive_the_yaml_mirror_and_its_importer():
-    from kdcube_cli.management.secret_descriptors import _flatten_values
-    from kdcube_cli.runtime_secrets_export import merge_app_secrets
+def test_a_key_with_a_key_below_it_refuses_rather_than_drop_one():
+    """W890: the descriptors are nested, as aws-sm reads them; token and token.child cannot both be nested,
+    so the export refuses (never drops one). dev-main had 0 such pairs among 54 keys on 2026-10-16."""
+    from kdcube_cli.runtime_secrets_export import RuntimeSecretsExportError, merge_app_secrets
 
-    merged = merge_app_secrets({}, {"demo.bundle": {"token": "canary-parent", "token.child": "canary-child"}})
-    flattened: dict[str, str] = {}
-    _flatten_values("", merged["bundles"]["items"][0]["secrets"], flattened)
-    assert flattened == {"token": "canary-parent", "token.child": "canary-child"}
+    with pytest.raises(RuntimeSecretsExportError, match="one is below the other"):
+        merge_app_secrets({}, {"demo.bundle": {"token": "canary-parent", "token.child": "canary-child"}})
 
 
 def test_an_older_yaml_value_is_flattened_and_the_folder_value_wins():
@@ -212,7 +213,7 @@ def test_an_older_yaml_value_is_flattened_and_the_folder_value_wins():
     merged = merge_app_secrets({"bundles": {"version": "1", "items": [
         {"id": "demo.bundle", "secrets": {"provider": {"token": "old", "region": "eu"}}}]}},
         {"demo.bundle": {"provider.token": "new"}})
-    assert merged["bundles"]["items"][0]["secrets"] == {"provider.region": "eu", "provider.token": "new"}
+    assert merged["bundles"]["items"][0]["secrets"] == {"provider": {"region": "eu", "token": "new"}}
 
 
 def test_without_the_flag_no_user_secret_and_no_props_are_written(monkeypatch, tmp_path, capsys):
@@ -424,6 +425,144 @@ def test_a_bundle_less_legacy_user_secret_follows_the_flag_and_an_acquired_one_n
     assert b"bundle-less-acquired-canary" not in everything
     platform = yaml.safe_load((output / "secrets.yaml").read_text())
     if flag:
-        assert platform["users"]["person-1"]["secrets"] == {"provider.token": "bundle-less-ordinary-canary"}
+        assert platform["users"]["person-1"]["secrets"] == {"provider": {"token": "bundle-less-ordinary-canary"}}
     else:
         assert "users" not in platform and b"bundle-less-ordinary-canary" not in everything
+
+
+# --- W890: the exported pair is the cloud secrets bootstrap (SECRETS_YAML and BUNDLES_SECRETS_YAML) ---------
+
+import re as _re
+
+_INTAKE_ID = _re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@-]{0,511}")
+
+
+def _intake_identifier(value):
+    text = str(value or "").strip()
+    assert (_INTAKE_ID.fullmatch(text) and ".." not in text and ".bundles." not in text
+            and ".secrets." not in text), f"identifier the intake refuses: {text!r}"
+    return text
+
+
+def _assert_cloud_intake_accepts(secrets_doc: dict, bundles_doc: dict) -> None:
+    """The ECS secrets intake's validation rules (it writes the two descriptors into AWS Secrets Manager):
+    secrets.yaml has only a platform mapping and an optional users mapping; a user entry has only secrets
+    and/or bundles; a user application entry has exactly one secrets mapping; bundles.secrets.yaml has a
+    bundles mapping whose items are mappings with a unique id and a secrets mapping."""
+    assert set(secrets_doc) <= {"platform", "users"} and isinstance(secrets_doc.get("platform"), dict), set(secrets_doc)
+    for user_id, entry in (secrets_doc.get("users") or {}).items():
+        _intake_identifier(user_id)
+        assert isinstance(entry, dict) and entry and not set(entry) - {"secrets", "bundles"}, entry.keys()
+        if "secrets" in entry:
+            assert isinstance(entry["secrets"], dict)
+        for bundle_id, bundle_entry in (entry.get("bundles") or {}).items():
+            _intake_identifier(bundle_id)
+            assert set(bundle_entry) == {"secrets"} and isinstance(bundle_entry["secrets"], dict)
+    root = bundles_doc.get("bundles")
+    assert isinstance(root, dict) and isinstance(root.get("items", []), list)
+    ids = []
+    for item in root.get("items", []):
+        assert isinstance(item, dict) and isinstance(item.get("secrets", {}), dict) and item.get("id")
+        ids.append(_intake_identifier(item["id"]))
+    assert len(ids) == len(set(ids)), "bundle secret ids must be unique"
+
+
+def _resolves(document: dict, key: str):
+    """aws-sm's own nested lookup (manager._resolve_nested_value) over one stored JSON document."""
+    from kdcube_ai_app.infra.secrets.manager import _resolve_nested_value
+
+    return _resolve_nested_value(document, key)
+
+
+def test_with_the_flag_the_users_root_holds_exactly_what_the_secrets_folder_holds(monkeypatch, tmp_path):
+    workdir, config_dir, _root = _runtime(tmp_path)
+    (config_dir / "secrets.yaml").write_text(yaml.safe_dump({"platform": {"services": {"marker": "kept"}}}))
+    output = tmp_path / "export"
+    _export(monkeypatch, workdir, config_dir, output, "--include-user-data")
+    users = yaml.safe_load((output / "secrets.yaml").read_text())["users"]
+    folder = UserSecretFileStore(root=output / "secrets")
+    for (user, bundle, key), value in USERS.items():
+        assert folder.get(user_id=user, bundle_id=bundle, key=key) == value
+        assert _resolves(users[user]["bundles"][bundle]["secrets"], key) == value, "YAML and folder agree"
+    yaml_pairs = {(user, bundle) for user, entry in users.items() for bundle in (entry.get("bundles") or {})}
+    assert yaml_pairs == {(user, bundle) for (user, bundle, _key) in USERS}, "nothing extra in the YAML"
+
+
+@pytest.mark.parametrize("flag", [(), ("--include-user-data",)])
+def test_the_file_export_pair_passes_the_cloud_intake_rules_and_every_value_resolves(monkeypatch, tmp_path, flag):
+    workdir, config_dir, _root = _runtime(tmp_path)
+    (config_dir / "secrets.yaml").write_text(yaml.safe_dump({"platform": {"services": {"marker": "kept"}}}))
+    output = tmp_path / "export"
+    _export(monkeypatch, workdir, config_dir, output, *flag)
+    secrets_doc = yaml.safe_load((output / "secrets.yaml").read_text())
+    bundles_doc = yaml.safe_load((output / "bundles.secrets.yaml").read_text())
+    _assert_cloud_intake_accepts(secrets_doc, bundles_doc)
+    items = {item["id"]: item.get("secrets") or {} for item in bundles_doc["bundles"]["items"]}
+    for (bundle, key), value in APP.items():
+        assert _resolves(items[bundle], key) == value
+    assert ("users" in secrets_doc) is bool(flag)
+    both = (output / "secrets.yaml").read_bytes() + (output / "bundles.secrets.yaml").read_bytes()
+    for value in [*ACQUIRED.values(), RECORD]:
+        assert value.encode() not in both
+
+
+@pytest.mark.parametrize("flag", [(), ("--include-user-data",)])
+def test_the_provider_export_pair_passes_the_intake_and_keeps_bundle_less_user_secrets(monkeypatch, tmp_path, flag):
+    """W890: a provider user secret with no app has no folder home; it goes to users.<user>.secrets."""
+    from types import SimpleNamespace
+
+    from kdcube_cli.management.models import ManagementSecretTarget
+    from kdcube_cli.management.secret_export import ExportedSecret
+
+    def secret(scope, key, value, *, bundle_id="", user_id=""):
+        return ExportedSecret(target=ManagementSecretTarget.create(scope=scope, key=key, bundle_id=bundle_id,
+                                                                   user_id=user_id), value=value)
+
+    values = (secret("platform", "platform.services.fixture.token", "platform-canary"),
+              secret("bundle", "provider.token", "app-canary", bundle_id="demo.bundle"),
+              secret("user", "github.token", "user-app-canary", bundle_id="demo.bundle", user_id="person-1"),
+              secret("user", "provider.token", "user-bundle-less-canary", user_id="person-1"),
+              secret("user", "connections.accounts.gmail.tokens", "acquired-canary", user_id="person-1"))
+
+    async def bootstrap(**kwargs):
+        return SimpleNamespace(request_digest="a" * 64, assurance="session_confirmation",
+                               approval_method="browser_session", approval_verified_at=1,
+                               values=values, user_props=())
+
+    workdir = tmp_path / "vault__project"
+    config_dir = _write_initialized_runtime_config(workdir, secrets_provider="secrets-service")
+    monkeypatch.setattr(cli_mod, "local_management_target", lambda _w: object())
+    monkeypatch.setattr(cli_mod, "export_bootstrap_values", bootstrap)
+    output = tmp_path / "out"
+    _export(monkeypatch, workdir, config_dir, output, *flag)
+    secrets_doc = yaml.safe_load((output / "secrets.yaml").read_text())
+    bundles_doc = yaml.safe_load((output / "bundles.secrets.yaml").read_text())
+    _assert_cloud_intake_accepts(secrets_doc, bundles_doc)
+    assert _resolves(secrets_doc["platform"], "services.fixture.token") == "platform-canary"
+    assert _resolves(bundles_doc["bundles"]["items"][0]["secrets"], "provider.token") == "app-canary"
+    everything = _all_bytes(output)
+    assert b"acquired-canary" not in everything
+    if flag:
+        person = secrets_doc["users"]["person-1"]
+        assert _resolves(person["secrets"], "provider.token") == "user-bundle-less-canary"
+        assert _resolves(person["bundles"]["demo.bundle"]["secrets"], "github.token") == "user-app-canary"
+        assert UserSecretFileStore(root=output / "secrets").get(
+            user_id="person-1", bundle_id="demo.bundle", key="github.token") == "user-app-canary"
+    else:
+        assert "users" not in secrets_doc
+        assert b"user-bundle-less-canary" not in everything and b"user-app-canary" not in everything
+
+
+def test_a_refused_nesting_names_both_keys_and_leaves_no_secrets_folder(monkeypatch, tmp_path):
+    """claude-ops on #385: the refusal names the keys (never a value), and the export folder it created is
+    removed, so a refused export leaves no partial secrets/."""
+    workdir, config_dir, root = _runtime(tmp_path)
+    (config_dir / "secrets.yaml").write_text(yaml.safe_dump({"platform": {"services": {"marker": "kept"}}}))
+    (root / "demo.bundle" / "provider.token.child.json").write_text('{"value": "child-canary"}')
+    output = tmp_path / "export"
+    with pytest.raises(SystemExit) as refused:
+        _export(monkeypatch, workdir, config_dir, output)
+    message = str(refused.value)
+    assert "'provider.token'" in message and "provider.token.child" in message
+    assert "canary" not in message
+    assert not (output / "secrets").exists()
