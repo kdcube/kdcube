@@ -30,10 +30,11 @@ DATA_BUS_DLQ_STREAM_MAXLEN = max(128, int(os.getenv("DATA_BUS_DLQ_STREAM_MAXLEN"
 # W888, the operator's policy decision (2026-10-16 about 23:37Z, "3. yes" to option (c), 16 KB inline plus 7 days):
 # a DLQ entry keeps the envelope (who, what, why) and at most this many UTF-8 bytes of each failed body, with the
 # body's size and SHA-256; the count cap above stays. Measured before: 178 entries held 18 MB, p90 568 KB, max
-# 761 KB, so the 10,000-entry cap alone allowed several GB.
-DATA_BUS_DLQ_INLINE_BYTES = max(1024, int(os.getenv("DATA_BUS_DLQ_INLINE_BYTES", "16384") or "16384"))
+# 761 KB, so the 10,000-entry cap alone allowed several GB. Both values are this fixed policy, not configuration:
+# no environment knob reads them (a changed window is a new policy decision); tests pass constructor arguments.
+DATA_BUS_DLQ_INLINE_BYTES = 16384
 # DLQ entries older than this are removed (by stream ID, the server clock) after a DLQ write.
-DATA_BUS_DLQ_RETENTION_SECONDS = max(3600, int(os.getenv("DATA_BUS_DLQ_RETENTION_SECONDS", "604800") or "604800"))
+DATA_BUS_DLQ_RETENTION_SECONDS = 7 * 24 * 3600
 DLQ_BODY_SCHEMA = "kdcube.data_bus.dlq_body.v1"
 
 # W827 S2d: result data above this many UTF-8 bytes is stored once under its own key and the results-stream entry
@@ -499,7 +500,10 @@ class RedisDataBusStream:
     async def trim_dlq(self, *, force: bool = False) -> int | None:
         """Remove DLQ entries older than the DLQ retention window (W888).
 
-        The DLQ has no consumer group, so age is the only rule: XTRIM MINID ~ <server now - window> LIMIT n.
+        The DLQ has no consumer group, so age is the only rule: an EXACT XTRIM MINID <server now - window>. Not the
+        approximate "~" form: that removes only whole stream nodes (100 entries by default), so a small DLQ, often a
+        single node, would keep entries past the window (codex-infra, W888 review). Exact needs no LIMIT (XTRIM
+        allows LIMIT only with "~"); the DLQ is small, written rarely and count-capped, so one call stays short.
         Throttled like trim(); returns the number removed, or None when skipped or refused. Never fails the caller.
         """
         clock = time.monotonic()
@@ -512,8 +516,7 @@ class RedisDataBusStream:
             boundary_ms = int(seconds) * 1000 + int(micros) // 1000 - self.dlq_retention_ms
             if boundary_ms <= 0:
                 return 0
-            removed = await self.redis.xtrim(self.dlq_key, minid=f"{boundary_ms}-0", approximate=True,
-                                             limit=self.trim_limit)
+            removed = await self.redis.xtrim(self.dlq_key, minid=f"{boundary_ms}-0", approximate=False)
         except Exception:
             logger.warning("[data_bus.retention] DLQ trim refused stream=%s", self.dlq_key, exc_info=True)
             return None

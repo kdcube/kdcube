@@ -2,7 +2,8 @@
 
 The operator's policy decision (2026-10-16, option c): each entry keeps its envelope and at most 16 KB of the
 failed body, with the body's size and SHA-256, and entries older than seven days are removed; the 10,000-entry
-count cap stays. Set DATA_BUS_TEST_REDIS_URL to a disposable Redis (never a running KDCube Redis: each test flushes
+count cap stays. The trim is exact, so it holds with Redis's default 100-entry stream nodes, not only with the
+node size of 1 other retention tests use. Set DATA_BUS_TEST_REDIS_URL to a disposable Redis (never a running KDCube Redis: each test flushes
 its own database); run it on Redis 7.4 and 8.x. Old entries get explicit stream IDs, so no test sleeps.
 """
 from __future__ import annotations
@@ -24,9 +25,15 @@ redis_only = pytest.mark.skipif(not REDIS_URL, reason="requires a disposable Red
 DAY_MS = 86_400_000
 
 
-def test_defaults_are_the_operator_decision():
+def test_defaults_are_the_operator_decision_and_not_environment_knobs():
+    import inspect
+
     assert DATA_BUS_DLQ_INLINE_BYTES == 16384
     assert DATA_BUS_DLQ_RETENTION_SECONDS == 7 * 86400
+    # A fixed policy: no environment variable reads them (configuration is descriptor-owned).
+    source = inspect.getsource(stream_module)
+    assert 'getenv("DATA_BUS_DLQ_INLINE_BYTES"' not in source
+    assert 'getenv("DATA_BUS_DLQ_RETENTION_SECONDS"' not in source
 
 
 def test_a_body_within_the_bound_is_kept_as_it_is():
@@ -135,13 +142,29 @@ async def test_entries_older_than_seven_days_go_and_newer_stay(redis):
 
 @redis_only
 @pytest.mark.asyncio
-async def test_one_dlq_trim_removes_at_most_its_limit_and_the_count_cap_stays(redis):
-    stream = _stream(redis, trim_limit=10, dlq_stream_maxlen=128)
-    for n in range(1, 51):
+@pytest.mark.parametrize("node_entries", [100, 1])
+async def test_with_default_stream_nodes_an_old_entry_beside_a_fresh_one_still_goes(redis, node_entries):
+    """Redis's default node holds 100 entries: an approximate trim would keep this whole small stream (W888 review)."""
+    await redis.config_set("stream-node-max-entries", node_entries)
+    stream = _stream(redis)
+    seconds, micros = await redis.time()
+    now_ms = int(seconds) * 1000 + int(micros) // 1000
+    old = await redis.xadd(stream.dlq_key, {"json": "{}"}, id=f"{now_ms - 8 * DAY_MS}-0")
+    fresh = await redis.xadd(stream.dlq_key, {"json": "{}"}, id=f"{now_ms - DAY_MS}-0")
+    await stream.write_dlq(_message({}), reason="r")
+    ids = [entry_id for entry_id, _ in await redis.xrange(stream.dlq_key)]
+    assert old not in ids and ids[0] == fresh and len(ids) == 2
+
+
+@redis_only
+@pytest.mark.asyncio
+async def test_one_dlq_trim_removes_every_entry_past_the_window_and_the_count_cap_stays(redis):
+    await redis.config_set("stream-node-max-entries", 100)
+    stream = _stream(redis, dlq_stream_maxlen=128)
+    for n in range(1, 251):
         await redis.xadd(stream.dlq_key, {"json": "{}"}, id=f"1000000-{n}")
-    removed = await stream.trim_dlq(force=True)
-    assert 0 < removed <= 10
-    assert await redis.xlen(stream.dlq_key) == 50 - removed
+    assert await stream.trim_dlq(force=True) == 250
+    assert await redis.xlen(stream.dlq_key) == 0
     for _ in range(400):
         await stream.write_dlq(_message({}), reason="r")
     assert 128 <= await redis.xlen(stream.dlq_key) < 400
