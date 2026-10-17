@@ -308,6 +308,13 @@ def _callback_target(location: str) -> str:
             "/api/integrations/site-root/report%3Fdraft/%23x%25y",
             "/report%3Fdraft/%23x%25y?q=1",
         ),
+        (
+            "problem-board",
+            False,
+            "caf\u00e9 board/",
+            "/api/integrations/sites/problem-board/caf%C3%A9%20board/",
+            "/sites/problem-board/caf%C3%A9%20board/?q=1",
+        ),
     ],
 )
 @pytest.mark.asyncio
