@@ -152,9 +152,9 @@ async def test_site_root_and_index_hand_the_page_an_empty_site_path(monkeypatch)
 
     await integrations.application_site_root("docs", _request(path="/sites/docs"))
     await integrations.application_site_path("docs", "index.html", _request(path="/sites/docs/index.html"))
-    await integrations.application_site_path("docs", "quickstart-works/", _request(path="/sites/docs/quickstart-works/"))
+    await integrations.application_site_path("docs", "sample-site/", _request(path="/sites/docs/sample-site/"))
 
-    assert seen == ["", "", "quickstart-works"]
+    assert seen == ["", "", "sample-site"]
     assert integrations._application_site_path("/a/b/") == "a/b"
 
 
@@ -249,17 +249,17 @@ async def test_platform_session_default_site_returns_to_the_public_root_path(mon
     _serve_protected(monkeypatch, _protected_site_catalog(default=True, hosts=("board.example.test",)))
 
     response = await integrations.application_site_landing_path(
-        path="quickstart-works/",
+        path="sample-site/",
         request=_request(
             host="board.example.test",
-            path="/api/integrations/site-root/quickstart-works/",
+            path="/api/integrations/site-root/sample-site/",
             query_string=b"view=inbox",
             headers=_DOCUMENT_HEADERS,
         ),
     )
 
     assert response.status_code == 302
-    assert response.headers["location"].endswith("?next=%2Fquickstart-works%2F%3Fview%3Dinbox")
+    assert response.headers["location"].endswith("?next=%2Fsample-site%2F%3Fview%3Dinbox")
 
 
 @pytest.mark.asyncio
@@ -362,9 +362,9 @@ async def test_platform_session_framed_site_prompt_links_to_the_public_path(monk
 
     response = await integrations.application_site_path(
         site_alias="problem-board",
-        path="quickstart-works",
+        path="sample-site",
         request=_request(
-            path="/api/integrations/sites/problem-board/quickstart-works",
+            path="/api/integrations/sites/problem-board/sample-site",
             headers=(
                 (b"accept", b"text/html"),
                 (b"sec-fetch-dest", b"iframe"),
@@ -375,7 +375,7 @@ async def test_platform_session_framed_site_prompt_links_to_the_public_path(monk
 
     assert response.status_code == 200
     assert "Sign in to continue." in response.body.decode("utf-8")
-    assert "next=%2Fsites%2Fproblem-board%2Fquickstart-works\"" in response.body.decode("utf-8")
+    assert "next=%2Fsites%2Fproblem-board%2Fsample-site\"" in response.body.decode("utf-8")
 
 
 @pytest.mark.asyncio
