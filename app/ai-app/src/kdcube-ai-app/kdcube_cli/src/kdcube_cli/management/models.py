@@ -27,6 +27,10 @@ SECRET_OPERATIONS = frozenset(
         SECRET_DELETE,
     }
 )
+USER_PROPS_IMPORT = "kdcube.management.user_props.import"
+USER_PROPS_IMPORT_SCHEMA = "kdcube.management.user_props.import.v1"
+# Operations whose request digest binds values: KDCube keys it, so the CLI never computes or checks it.
+KEYED_DIGEST_OPERATIONS = frozenset({*SECRET_OPERATIONS, USER_PROPS_IMPORT})
 DEFAULT_MANAGEMENT_SCOPE = f"{DEPLOYMENT_INSPECT} {APPLICATION_SURFACES_READ}"
 
 MANAGEMENT_REQUEST_SCHEMA = "kdcube.management.request.v1"
@@ -106,6 +110,19 @@ def _invocation_id(value: str | None = None) -> str:
             "The KDCube management invocation identifier is invalid.",
         )
     return candidate
+
+
+def _prop_value(value: Any) -> str:
+    """A prop's JSON value as text, re-encoded canonically (the runtime does the same)."""
+    if not isinstance(value, str) or len(value.encode("utf-8")) > 64 * 1024:
+        raise ManagementCliError("management_value_invalid", "A user prop value is invalid.")
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        raise ManagementCliError("management_value_invalid", "A user prop value is invalid.") from None
+    if parsed is None:
+        raise ManagementCliError("management_value_invalid", "A user prop value is invalid.")
+    return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _secret_scope(value: str) -> str:
@@ -355,6 +372,11 @@ class ManagementTarget:
             ".well-known/oauth-protected-resource"
         )
 
+    @property
+    def user_props_resource(self) -> str:
+        encoded = (quote(self.tenant, safe="-._~"), quote(self.project, safe="-._~"))
+        return "urn:kdcube:management:user-props:" + ":".join(encoded)
+
     def route(self, suffix: str) -> str:
         return f"/api/integrations/management/v1/{suffix.lstrip('/')}"
 
@@ -567,6 +589,35 @@ class ManagementRequest:
             body=body,
         )
 
+    @classmethod
+    def user_props_import(
+        cls,
+        target: ManagementTarget,
+        *,
+        rows: list[Mapping[str, Any]],
+        invocation_id: str | None = None,
+    ) -> ManagementRequest:
+        """W890: one bounded batch of exported user props; KDCube inserts, never overwrites, and returns
+        counts only."""
+        exact = [
+            {name: _text(row.get(name), maximum=512) for name in ("user_id", "bundle_id", "key", "subsystem")}
+            | {"value_json": _prop_value(row.get("value_json"))}
+            for row in rows
+        ]
+        if not exact:
+            raise ManagementCliError("management_value_invalid", "A user props import needs at least one row.")
+        exact.sort(key=lambda row: (row["user_id"], row["bundle_id"], row["key"]))
+        return cls(
+            target=target,
+            operation=USER_PROPS_IMPORT,
+            method="POST",
+            path=target.route("user-props/import"),
+            application_id="",
+            invocation_id=_invocation_id(invocation_id),
+            resource=target.user_props_resource,
+            body={"schema": USER_PROPS_IMPORT_SCHEMA, "rows": exact},
+        )
+
     @property
     def target_key(self) -> str:
         return self.target.session_target_key
@@ -590,7 +641,7 @@ class ManagementRequest:
         # Secret-operation digests are keyed and calculated only by KDCube.
         # Returning an unkeyed value digest here would create an offline
         # verifier for low-entropy provider credentials.
-        if self.operation in SECRET_OPERATIONS:
+        if self.operation in KEYED_DIGEST_OPERATIONS:
             return ""
         encoded = json.dumps(
             self.canonical_payload,
@@ -675,7 +726,7 @@ class ConsentRecovery:
             choices=choices,
         )
         digest_matches = (
-            request.operation in SECRET_OPERATIONS
+            request.operation in KEYED_DIGEST_OPERATIONS
             or recovery.request_digest == request.request_digest
         )
         if (
@@ -840,10 +891,27 @@ def _public_result(
         SECRET_DELETE,
     }:
         return _secret_result(value, request=request)
+    if request.operation == USER_PROPS_IMPORT:
+        return _user_props_import_result(value, request=request)
     raise ManagementCliError(
         "management_result_invalid",
         "KDCube returned an invalid management result.",
     )
+
+
+def _user_props_import_result(value: Mapping[str, Any], *, request: ManagementRequest) -> dict[str, Any]:
+    counts = {name: value.get(name) for name in ("inserted", "equal", "different", "received")}
+    if (
+        value.get("state") != "imported"
+        or any(type(count) is not int or count < 0 for count in counts.values())
+        or counts["received"] != len(request.body.get("rows") or ())
+        or counts["inserted"] + counts["equal"] + counts["different"] != counts["received"]
+    ):
+        raise ManagementCliError(
+            "management_result_invalid",
+            "KDCube returned an invalid user props import receipt.",
+        )
+    return {**counts, "state": "imported"}
 
 
 def _deployment_result(value: Mapping[str, Any]) -> dict[str, Any]:

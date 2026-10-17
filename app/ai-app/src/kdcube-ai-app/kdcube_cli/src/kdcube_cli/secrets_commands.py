@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import hashlib
 import json
 import sys
 import time
@@ -566,6 +567,75 @@ async def apply_secret_descriptor_import(
             )
         applied += 1
     return SecretDescriptorApplyResult(applied=applied)
+
+
+# One request stays well inside the runtime's bounds (500 rows, 4 MiB).
+USER_PROPS_BATCH_ROWS = 500
+USER_PROPS_BATCH_BYTES = 3 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class UserPropsImportResult:
+    inserted: int = 0
+    equal: int = 0
+    different: int = 0
+    batches: int = 0
+    failed_request: ManagementRequest | None = None
+    denial: ManagementDenial | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.denial is None
+
+    def view(self) -> dict[str, Any]:
+        """Counts only, never a prop name or value."""
+        return {"inserted": self.inserted, "equal": self.equal, "different": self.different,
+                "batches": self.batches, "ok": self.ok}
+
+
+def user_props_batches(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    batches: list[list[dict[str, Any]]] = [[]]
+    size = 0
+    for row in sorted(rows, key=lambda r: (str(r.get("user_id")), str(r.get("bundle_id")), str(r.get("key")))):
+        row_size = len(json.dumps(row, ensure_ascii=False).encode("utf-8"))
+        if batches[-1] and (len(batches[-1]) >= USER_PROPS_BATCH_ROWS or size + row_size > USER_PROPS_BATCH_BYTES):
+            batches.append([])
+            size = 0
+        batches[-1].append(row)
+        size += row_size
+    return [batch for batch in batches if batch]
+
+
+def _batch_invocation_id(target: ManagementTarget, batch: list[dict[str, Any]]) -> str:
+    """Stable per batch, so a retried import replays the recorded outcome instead of importing twice."""
+    canonical = json.dumps([target.tenant, target.project, batch], ensure_ascii=True, sort_keys=True,
+                           separators=(",", ":")).encode("utf-8")
+    return "user-props-import-" + hashlib.sha256(canonical).hexdigest()[:48]
+
+
+async def apply_user_props_import(
+    *,
+    target: ManagementTarget,
+    rows: list[dict[str, Any]],
+    bearer: str,
+    no_open: bool,
+    no_wait: bool,
+) -> UserPropsImportResult:
+    """W890: insert exported user props into the running runtime through delegated management, in bounded
+    batches. KDCube never overwrites; the result is counts only."""
+    client = ManagementClient(transport=HttpxManagementTransport())
+    totals = {"inserted": 0, "equal": 0, "different": 0}
+    batches = 0
+    for batch in user_props_batches(rows):
+        request = ManagementRequest.user_props_import(
+            target, rows=batch, invocation_id=_batch_invocation_id(target, batch))
+        result = await _execute_with_consent(client, request, bearer, no_open=no_open, no_wait=no_wait)
+        if isinstance(result, ManagementDenial):
+            return UserPropsImportResult(**totals, batches=batches, failed_request=request, denial=result)
+        for name in totals:
+            totals[name] += int(result.result[name])
+        batches += 1
+    return UserPropsImportResult(**totals, batches=batches)
 
 
 def secret_import_result_view(

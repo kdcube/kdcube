@@ -200,8 +200,12 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
 - **`kdcube config import`** applies the descriptors. On a provider-backed
   target, `--yes` writes `platform`, `users` and every `secrets:` block into the
   store as governed upserts; on a `secrets-file` target the pair is staged as
-  file authority (run it without `--yes`). Import does not place `secrets/` or
-  the props.
+  file authority (run it without `--yes`). Import does not place `secrets/`.
+- **User props**: `kdcube config import --include-user-data` reads
+  `user-data/user_bundle_props.json` and, after the descriptors, sends the
+  props to the **running** runtime (section 5a). It works the same on a
+  `secrets-file` and a provider-backed target; the runtime is the only database
+  writer.
 - **`secrets/` on a `secrets-file` target**: copy it with its modes before
   `kdcube start` (`cp -Rp "$OUT_DIR/secrets/." "$WORKDIR/config/secrets/"`),
   owned by the user the runtime runs as.
@@ -209,10 +213,50 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
   `secrets.yaml` with only the `platform` and `users` roots, a user entry with
   only `secrets` and `bundles`, and `bundles.secrets.yaml` items with a unique
   `id` and a `secrets` mapping; the export writes exactly that shape.
-- **User props** have no cloud intake. They reach a cloud deployment through
-  a governed import into its running runtime after deploy, which inserts rows
-  without overwriting and reports equal and different rows; that import is
-  not built yet, so today the props are not bootstrapped in the cloud.
+- **User props** have no cloud intake: they reach a cloud deployment by
+  `kdcube config import --include-user-data --yes` against its running runtime
+  after the deploy (section 5a). No CI secret is involved.
+
+### 5a) User props import
+
+```text
+ kdcube config import --include-user-data            running runtime (chat-proc)           PostgreSQL
+ ──────────────────────────────────────              ──────────────────────────            ────────────────
+ user-data/user_bundle_props.json
+   drop Connection Hub props (delegated_to_kdcube.*)
+   --dry-run: counts only, nothing sent
+   --yes: batches of ≤ 500 rows / 3 MiB,
+          one stable Idempotency-Key per batch
+        │
+        └─ POST /management/v1/user-props/import ─▶ refuse before admission: a Connection Hub
+           Connection Hub bearer (the same one          prop, a duplicate, invalid JSON, > 500 rows
+           as the secret import)                     Connection Hub admission: Card resource
+                                                       urn:kdcube:management:user-props:<t>:<p>,
+                                                       operation kdcube.management.user_props.import,
+                                                       invocation policy (Once / Always)
+                                                     effect ledger (a retried batch replays)
+                                                     one statement ───────────────────────────▶ INSERT … ON CONFLICT
+                                                                                                 (user_id, bundle_id, key)
+                                                                                                 DO NOTHING
+                                                     counts ◀──────────────────────────────────  compare with the row
+        ◀─ inserted / equal / different ──────────                                               stored before
+```
+
+- **Never overwrites.** A prop already stored is left as it is: `equal` when
+  its value and subsystem match the export, `different` otherwise. Run the
+  import again and nothing changes.
+- **Counts only.** The CLI prints inserted, equal and different counts and
+  the number of Connection Hub props left out; no prop name or value is shown,
+  and the runtime's receipt and effect ledger hold counts only. The request
+  digest that approval and replay bind is keyed, so the rows leave no reusable
+  hash.
+- **Authority.** The caller's Card needs the operation on the user-props
+  resource, granted in Connection Hub's catalog like the secret writes
+  (super-admin delegable). A missing grant answers with the usual browser
+  consent recovery.
+- **The runtime must be up**, with delegated management enabled; the
+  descriptors are applied first, so a refused props import can simply be run
+  again.
 
 ## 6) Code
 
@@ -222,3 +266,5 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
 | The one writer (folder, nesting, users root, filters) | `kdcube_cli/runtime_secrets_export.py` |
 | Bootstrap transaction, inventory filter, props read | `kdcube_ai_app/apps/chat/proc/rest/management/secret_export_routes.py`, `secret_runtime.py` |
 | Import of the pair | `kdcube_cli/management/secret_descriptors.py` |
+| User props import: CLI (batches, request, receipt) | `kdcube_cli/cli.py` (`_load_exported_user_props`), `kdcube_cli/secrets_commands.py` (`apply_user_props_import`), `kdcube_cli/management/models.py` |
+| User props import: route, contract, statement | `kdcube_ai_app/apps/chat/proc/rest/management/routes.py`, `user_props_contracts.py`, `user_props_runtime.py` |

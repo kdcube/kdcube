@@ -614,3 +614,139 @@ def test_the_props_script_filters_in_the_database_and_gets_the_prefixes(monkeypa
     assert script == cli_mod._USER_PROPS_EXPORT_SCRIPT
     assert "starts_with(key, prefix)" in script and "excluded," in script
     assert json.loads(argument) == ["delegated_to_kdcube."]
+
+
+# --- W890: config import --include-user-data inserts the exported props into the running runtime ---------
+# Operator, option A ("5. A agree"): insert, never overwrite, report equal and different rows.
+
+def _props_source(tmp_path: Path, rows) -> Path:
+    source = tmp_path / "incoming"
+    _write_initialized_runtime_config(source.parent / "incoming-runtime", marker="incoming").rename(source)
+    (source / "user-data").mkdir()
+    (source / "user-data" / "user_bundle_props.json").write_text(
+        json.dumps({"schema": "kdcube.export.user_bundle_props.v1", "rows": rows}))
+    if os.name == "posix":
+        source.chmod(0o700)
+        for name in ("secrets.yaml", "bundles.secrets.yaml"):
+            (source / name).chmod(0o600)
+    return source
+
+
+def _import(monkeypatch, tmp_path, *flags, provider="secrets-file", rows=None):
+    workdir = tmp_path / "demo__project"
+    target_config = _write_initialized_runtime_config(workdir, marker="retained", secrets_provider=provider)
+    source = _props_source(tmp_path, [*PROPS, HUB_PROP] if rows is None else rows)
+    calls = {"bearer": 0, "props": [], "secrets": 0}
+
+    def bearer(_args):
+        calls["bearer"] += 1
+        return "delegated-test-bearer"
+
+    async def props_import(**kwargs):
+        assert kwargs["bearer"] == "delegated-test-bearer"
+        calls["props"].append(kwargs["rows"])
+        from kdcube_cli.secrets_commands import UserPropsImportResult
+
+        return UserPropsImportResult(inserted=1, equal=1, different=0, batches=1)
+
+    async def secret_import(**kwargs):
+        assert kwargs["bearer"] == "delegated-test-bearer"
+        calls["secrets"] += 1
+        from types import SimpleNamespace
+
+        return SimpleNamespace(ok=True, applied=1)
+
+    monkeypatch.setattr(cli_mod, "_load_cli_defaults", lambda: {})
+    monkeypatch.setattr(cli_mod, "_resolve_subcommand_workdir", lambda *_a, **_k: workdir)
+    monkeypatch.setattr(cli_mod, "_resolve_cli_workdir", lambda path, **_k: Path(path))
+    monkeypatch.setattr(cli_mod, "_canonical_descriptor_dir_from_initialized_workdir", lambda _w: target_config)
+    monkeypatch.setattr(cli_mod, "_resolve_subcommand_repo", lambda *_a, **_k: tmp_path / "repo")
+    monkeypatch.setattr(cli_mod, "_regenerate_runtime_config_from_descriptors", lambda *_a, **_k: None)
+    monkeypatch.setattr(cli_mod, "delegated_credential_from_input", bearer)
+    monkeypatch.setattr(cli_mod, "local_management_target", lambda _w: object())
+    monkeypatch.setattr(cli_mod, "apply_user_props_import", props_import)
+    monkeypatch.setattr(cli_mod, "apply_secret_descriptor_import", secret_import)
+    monkeypatch.setattr(sys, "argv", ["kdcube", "config", "import", "--workdir", str(workdir), "--descriptors-location",
+                                      str(source), "--include-platform-descriptors", "--include-user-data", "--json",
+                                      *flags])
+    cli_mod.main()
+    return calls
+
+
+def test_import_inserts_the_exported_props_without_connection_hub_props(monkeypatch, tmp_path, capsys):
+    calls = _import(monkeypatch, tmp_path, "--yes", "--credential-stdin")
+    assert calls["props"] == [PROPS], "Connection Hub's prop never reaches the runtime"
+    assert calls["bearer"] == 1 and calls["secrets"] == 0
+    out = capsys.readouterr().out
+    view = json.loads(out[out.index("{"):])["user_props_import"]
+    assert view == {"rows": 2, "connection_hub_props_left_out": 1, "dry_run": False, "inserted": 1, "equal": 1,
+                    "different": 0, "batches": 1, "ok": True}
+    assert "hub-prop-canary" not in out and "dark" not in out, "counts only"
+
+
+def test_provider_import_reads_the_bearer_once_for_secrets_and_props(monkeypatch, tmp_path):
+    calls = _import(monkeypatch, tmp_path, "--yes", "--credential-stdin", provider="secrets-service")
+    assert calls["secrets"] == 1 and calls["props"] == [PROPS] and calls["bearer"] == 1
+
+
+def test_a_dry_run_counts_the_props_and_imports_nothing(monkeypatch, tmp_path, capsys):
+    calls = _import(monkeypatch, tmp_path, "--dry-run")
+    assert calls["props"] == [] and calls["bearer"] == 0
+    out = capsys.readouterr().out
+    assert json.loads(out[out.index("{"):])["user_props_import"] == {
+        "rows": 2, "connection_hub_props_left_out": 1, "dry_run": True}
+
+
+def test_importing_props_needs_yes(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit, match="requires --yes"):
+        _import(monkeypatch, tmp_path)
+
+
+def test_import_with_the_flag_needs_a_real_props_export(tmp_path):
+    with pytest.raises(SystemExit, match="needs .*user_bundle_props.json"):
+        cli_mod._load_exported_user_props(tmp_path)
+    (tmp_path / "user-data").mkdir()
+    for document in ("[]", '{"schema": "other", "rows": []}', '{"schema": "kdcube.export.user_bundle_props.v1"}'):
+        (tmp_path / "user-data" / "user_bundle_props.json").write_text(document)
+        with pytest.raises(SystemExit, match="not a KDCube user props export"):
+            cli_mod._load_exported_user_props(tmp_path)
+
+
+def test_props_go_in_bounded_batches_with_stable_invocation_ids():
+    from kdcube_cli.management.models import ManagementTarget
+    from kdcube_cli.secrets_commands import USER_PROPS_BATCH_ROWS, _batch_invocation_id, user_props_batches
+
+    rows = [{"user_id": "u", "bundle_id": "b", "key": f"k{i:04d}", "subsystem": "bundle", "value_json": "1"}
+            for i in range(USER_PROPS_BATCH_ROWS + 3)]
+    batches = user_props_batches(list(reversed(rows)))
+    assert [len(batch) for batch in batches] == [USER_PROPS_BATCH_ROWS, 3]
+    big = [{"user_id": "u", "bundle_id": "b", "key": f"big{i}", "subsystem": "bundle",
+            "value_json": json.dumps("x" * 60000)} for i in range(60)]
+    assert len(user_props_batches(big)) == 2, "the byte bound splits too"
+    target = ManagementTarget.__new__(ManagementTarget)
+    object.__setattr__(target, "tenant", "t")
+    object.__setattr__(target, "project", "p")
+    assert _batch_invocation_id(target, batches[1]) == _batch_invocation_id(target, list(batches[1]))
+
+
+def test_the_request_is_exact_keyed_and_its_receipt_is_checked():
+    from kdcube_cli.management.errors import ManagementCliError
+    from kdcube_cli.management.models import ManagementRequest, ManagementTarget, _user_props_import_result
+
+    target = ManagementTarget.__new__(ManagementTarget)
+    for name, value in (("public_base_url", "https://runtime.test"), ("tenant", "t a"), ("project", "p"),
+                        ("session_target_key", "k")):
+        object.__setattr__(target, name, value)
+    request = ManagementRequest.user_props_import(target, rows=[
+        {"user_id": "u", "bundle_id": "b", "key": "z", "subsystem": "bundle", "value_json": '{"b": 1, "a": 2}'},
+        {"user_id": "u", "bundle_id": "b", "key": "a", "subsystem": "bundle", "value_json": '"x"'}])
+    assert request.path == "/api/integrations/management/v1/user-props/import"
+    assert request.resource == "urn:kdcube:management:user-props:t%20a:p"
+    assert [row["key"] for row in request.body["rows"]] == ["a", "z"]
+    assert request.body["rows"][1]["value_json"] == '{"a":2,"b":1}'
+    assert request.request_digest == "", "keyed by KDCube; the CLI never makes an offline verifier"
+    good = {"inserted": 1, "equal": 0, "different": 1, "received": 2, "state": "imported"}
+    assert _user_props_import_result(good, request=request) == good
+    for bad in ({**good, "received": 3}, {**good, "inserted": 2}, {**good, "state": "stored"}, {**good, "equal": -1}):
+        with pytest.raises(ManagementCliError):
+            _user_props_import_result(bad, request=request)
