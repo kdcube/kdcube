@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 from fastapi import HTTPException
@@ -45,7 +45,9 @@ def _request(
         {
             "type": "http",
             "method": "GET",
-            "path": path,
+            # As a server hands it over: `path` decoded, `raw_path` as sent.
+            "path": unquote(path),
+            "raw_path": path.encode("ascii"),
             "query_string": query_string,
             "headers": [(b"host", host.encode("utf-8")), *headers],
             "scheme": "https",
@@ -307,6 +309,20 @@ def _callback_target(location: str) -> str:
             "report?draft/#x%y",
             "/api/integrations/site-root/report%3Fdraft/%23x%25y",
             "/report%3Fdraft/%23x%25y?q=1",
+        ),
+        (
+            "problem-board",
+            False,
+            "a#b/",
+            "/api/integrations/sites/problem-board/a%23b/",
+            "/sites/problem-board/a%23b/?q=1",
+        ),
+        (
+            "",
+            True,
+            "x?y/",
+            "/api/integrations/site-root/x%3Fy/",
+            "/x%3Fy/?q=1",
         ),
         (
             "problem-board",

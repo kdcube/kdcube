@@ -96,8 +96,12 @@ def platform_sign_in_redirect(request: Request, *, return_path: str | None = Non
         params = [(key, value) for key, value in request.query_params.multi_items() if key != "signed_out"]
         if params:
             return_to = f"{return_to}?{urlencode(params)}"
-    elif request.url.query:
-        return_to = f"{return_to}?{request.url.query}"
+    else:
+        # The raw query, not request.url.query: Starlette rebuilds request.url
+        # from the decoded path, so an encoded ? or # in the path would split it.
+        query = request.scope.get("query_string", b"").decode("latin-1")
+        if query:
+            return_to = f"{return_to}?{query}"
     sign_in = f"{sign_in_bounce_path()}?next={quote(return_to, safe='')}"
     if is_framed_html_navigation(request):
         # W847: never send a frame to the identity provider (its frame policy can blank it, and a sign-in
