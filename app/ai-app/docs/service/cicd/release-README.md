@@ -1,9 +1,9 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/release-README.md
 title: "Release"
-summary: "Monorepo release guide driven by assembly.yaml + bundles.yaml: CI build/publish and deployment-time descriptor usage."
+summary: "Monorepo release guide: release.yaml platform.ref sets the version; a hand-dispatched workflow builds and publishes; assembly.yaml and bundles.yaml are used at deployment time."
 tags: ["service", "cicd", "release", "versioning", "git", "images", "bundles", "registry"]
-keywords: ["assembly.yaml", "bundles.yaml", "platform.ref", "git tag", "image tags", "BUNDLES_FORCE_ENV_ON_STARTUP", "BUNDLE_GIT_REDIS_LOCK", "monorepo versioning", "PyPI"]
+keywords: ["release.yaml", "assembly.yaml", "bundles.yaml", "platform.ref", "workflow_dispatch", "git tag", "image tags", "BUNDLES_FORCE_ENV_ON_STARTUP", "BUNDLE_GIT_REDIS_LOCK", "monorepo versioning", "PyPI"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/release-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
@@ -18,17 +18,30 @@ We use **one unified version** for the monorepo (platform + SDK) until the SDK i
 
 ## 1) Version Source
 
-**Source of truth:** `assembly.yaml` (platform) + `bundles.yaml` (bundles)
+**Source of truth:** `platform.ref` in `release.yaml` at the repository root.
+`assembly.yaml` and `bundles.yaml` are deployment descriptors (section 5); the
+release workflow does not read them.
 
 ```
 platform:
+  repo: "kdcube-ai-app"
   ref: "2026.3.4.1716"
+  description: |
+    What this release contains.
 ```
 
 Notes:
-1. `platform.ref` becomes the **git tag**.
-2. `platform.ref` is also used as the **image tag**.
-3. `platform.ref` must be **PEP440‑compatible** so the CLI can be published to PyPI.
+1. `platform.ref` becomes the **git tag**, exactly as written.
+2. `platform.ref` is also used as the **image tag**, exactly as written.
+3. `platform.ref` must be **PEP 440-compatible**, so the CLI can be published
+   to PyPI. The workflow checks this and stops otherwise.
+4. Write it **zero-stripped**: `2026.3.4.1716`, not `2026.03.04.1716`.
+   - PyPI stores the normalized form, and the workflow does not normalize. A
+     ref with leading zeros gives a git and image tag that differ from the
+     PyPI version.
+   - The workflow's "already on PyPI" check compares the ref as written, so it
+     never matches a padded ref.
+   - The pb deployment policy accepts only the zero-stripped form.
 
 ---
 
@@ -56,24 +69,29 @@ kdcube-chat-ingress:2026.3.4.1716
 
 ## 4) CI: Build + Publish (GitHub Actions)
 
-Suggested flow (platform team):
+Flow (platform team):
 
-1. Create a release branch (e.g. `release/2026.3.4.1716`)
-2. Update `assembly.yaml` and set `platform.ref`
-   - Bundles can be empty; the CLI can seed sample bundles on install
-3. Open PR and merge to `main`
-4. GitHub Actions does the rest:
-   - Reads `platform.ref`
-   - Validates `platform.ref` as **PEP440** (required by PyPI)
-   - Creates git tag `platform.ref`
-    - Builds & pushes images to dockerhub with that tag
-    - Builds & publishes the CLI with that exact version
-    - Creates a GitHub Release for the tag (if missing)
+1. Open a pull request that sets `platform.ref` and its `description` in
+   `release.yaml`. Review and merge it to `main` like any other change.
+2. Start the release by hand: **Actions → Release KDCube Platform (Images + CLI)
+   → Run workflow** on `main` (`release-kdcube-platform.yml`, `workflow_dispatch`
+   only). A merge never starts a release, so the record can be corrected or
+   prepared ahead.
+3. The workflow then:
+   - reads `platform.ref` from `release.yaml` and checks it as **PEP 440**;
+   - creates the git tag `platform.ref` if it is missing;
+   - builds and pushes the images to DockerHub with that tag, skipping an
+     image whose tag already exists;
+   - builds and publishes the CLI to PyPI with that version, skipping it if
+     the version already exists;
+   - checks that every image is pullable;
+   - creates a GitHub Release for the tag if it is missing.
 
 Notes:
-- The release branch name is a **convention only** (e.g., `release/<version>`). CI does not require it.
-- The CI workflow that runs automatically on merge is `release-kdcube-platform.yml`.
-- The standalone CLI workflow (`publish-kdcube-cli.yml`) is **manual** and useful for re‑publishing CLI only.
+- A release branch name such as `release/<version>` is a **convention only**.
+  The workflow does not require it.
+- The standalone CLI workflow (`publish-kdcube-cli.yml`) is also manual. It
+  reads the same `release.yaml` and is for re-publishing the CLI alone.
 
 ---
 
