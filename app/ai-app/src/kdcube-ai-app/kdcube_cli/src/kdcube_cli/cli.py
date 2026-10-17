@@ -92,7 +92,9 @@ from kdcube_cli.management.secret_descriptors import (
     validate_existing_secret_descriptor_directory,
 )
 from kdcube_cli.secrets_backend import backend_status
+from kdcube_cli.management.presentation import management_view
 from kdcube_cli.secrets_commands import (
+    apply_user_props_import,
     apply_secret_descriptor_import,
     delegated_credential_from_input,
     export_bootstrap_values,
@@ -2703,6 +2705,25 @@ def _read_user_props(*, repo_root: Path, workdir: Path, config_dir: Path) -> lis
     if not isinstance(rows, list):
         raise SystemExit("User props could not be read from the running processor.")
     return rows
+
+
+def _load_exported_user_props(source_dir: Path) -> tuple[list[dict[str, object]], int]:
+    """W890: the rows of an export's ``user-data/user_bundle_props.json``, without Connection Hub's props."""
+    path = source_dir / "user-data" / "user_bundle_props.json"
+    if path.is_symlink() or not path.is_file():
+        raise SystemExit(f"--include-user-data needs {path} from `kdcube config export --include-user-data`.")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"{path} is not readable.") from exc
+    if not isinstance(document, dict):
+        raise SystemExit(f"{path} is not a KDCube user props export.")
+    rows = document.get("rows")
+    if document.get("schema") != "kdcube.export.user_bundle_props.v1" or not isinstance(rows, list) or not all(
+        isinstance(row, dict) for row in rows
+    ):
+        raise SystemExit(f"{path} is not a KDCube user props export.")
+    return exportable_user_props(rows)
 
 
 def _write_private_json(path: Path, payload: object) -> None:
@@ -5701,9 +5722,10 @@ def main() -> None:
         "--include-user-data",
         action="store_true",
         help=(
-            "With `config export --include-platform-descriptors` of a secrets-file runtime, also write "
-            "per-user secrets (secrets/<bundle>/users/) and user props (user-data/user_bundle_props.json). "
-            "Tokens Connection Hub acquires at runtime are never exported."
+            "With `config export --include-platform-descriptors`, also write per-user secrets "
+            "(secrets/<bundle>/users/) and user props (user-data/user_bundle_props.json). With "
+            "`config import`, insert those user props into the running runtime through delegated management "
+            "(never overwriting; counts only). Tokens Connection Hub acquires and its own props never move."
         ),
     )
     _sp.add_argument("--aws-region", default="", help="With `config export`, AWS region for aws-sm bundle descriptor export")
@@ -7056,8 +7078,6 @@ def main() -> None:
                     )
                 return
             if _action == "import":
-                if args.include_user_data:
-                    raise SystemExit("--include-user-data is only supported with `kdcube config export`.")
                 if (
                     str(getattr(args, "aws_region", "") or "").strip()
                     or str(getattr(args, "aws_profile", "") or "").strip()
@@ -7094,6 +7114,17 @@ def main() -> None:
                 _skip_secret_values = bool(args.skip_secret_values)
                 _secret_import = None
                 _secret_apply = None
+                # W890: --include-user-data imports the exported user props into the running runtime.
+                _props_rows, _props_left_out = (
+                    _load_exported_user_props(_source_dir) if args.include_user_data else ([], 0)
+                )
+                _bearer_cache: list[str] = []
+
+                def _import_bearer() -> str:
+                    if not _bearer_cache:
+                        _bearer_cache.append(delegated_credential_from_input(args))
+                    return _bearer_cache[0]
+
                 if _provider_backed_import and not _skip_secret_values:
                     _secret_import = load_secret_descriptors(
                         _source_dir,
@@ -7124,7 +7155,7 @@ def main() -> None:
                             apply_secret_descriptor_import(
                                 target=_management_target,
                                 imported=_secret_import,
-                                bearer=delegated_credential_from_input(args),
+                                bearer=_import_bearer(),
                                 no_open=bool(args.no_open),
                                 no_wait=bool(args.no_wait),
                             )
@@ -7140,10 +7171,15 @@ def main() -> None:
                             else:
                                 console.print_json(data=_denial_view)
                             raise SystemExit(3)
-                elif args.yes or args.credential_stdin or args.no_open or args.no_wait:
+                elif (args.yes or args.credential_stdin or args.no_open or args.no_wait) and not _props_rows:
                     raise SystemExit(
                         "--yes, --credential-stdin, --no-open, and --no-wait apply only "
-                        "when importing secret values into a provider-backed runtime."
+                        "when importing secret values into a provider-backed runtime, "
+                        "or user props with --include-user-data."
+                    )
+                if _props_rows and not args.dry_run and not args.yes:
+                    raise SystemExit(
+                        "Importing user props requires --yes after reviewing --dry-run."
                     )
                 _result = apply_config_descriptors(
                     _op_console,
@@ -7177,6 +7213,48 @@ def main() -> None:
                             f"[green]Selected-provider secrets {verb}:[/green] "
                             f"{_result['provider_secret_import']['total_secret_count']}"
                         )
+                if args.include_user_data:
+                    _props_view: dict[str, object] = {
+                        "rows": len(_props_rows),
+                        "connection_hub_props_left_out": _props_left_out,
+                        "dry_run": bool(args.dry_run),
+                    }
+                    if _props_rows and not args.dry_run:
+                        # After the descriptors: the runtime inserts, never overwrites, and reports counts.
+                        _props_result = asyncio.run(
+                            apply_user_props_import(
+                                target=local_management_target(_resolved),
+                                rows=_props_rows,
+                                bearer=_import_bearer(),
+                                no_open=bool(args.no_open),
+                                no_wait=bool(args.no_wait),
+                            )
+                        )
+                        _props_view.update(_props_result.view())
+                        if not _props_result.ok:
+                            _props_view["denial"] = management_view(
+                                _props_result.failed_request, _props_result.denial
+                            )
+                            _result["user_props_import"] = _props_view
+                            if args.json_output:
+                                _print_json(_result)
+                            else:
+                                console.print_json(data=_props_view)
+                            raise SystemExit(3)
+                    _result["user_props_import"] = _props_view
+                    if not bool(args.quiet or args.json_output):
+                        if args.dry_run or not _props_rows:
+                            console.print(f"[green]User props that would be imported:[/green] {len(_props_rows)}")
+                        else:
+                            console.print(
+                                "[green]User props imported:[/green] "
+                                f"{_props_view['inserted']} inserted, {_props_view['equal']} already equal, "
+                                f"{_props_view['different']} already different (left unchanged)"
+                            )
+                        if _props_left_out:
+                            console.print(
+                                f"[dim]  Connection Hub props never imported: {_props_left_out}[/dim]"
+                            )
                 if args.json_output:
                     _print_json(_result)
                 return

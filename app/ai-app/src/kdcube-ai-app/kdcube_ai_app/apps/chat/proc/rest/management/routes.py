@@ -60,6 +60,20 @@ from kdcube_ai_app.apps.chat.proc.rest.management.service import (
     DelegatedManagementService,
     ManagementResponse,
 )
+from kdcube_ai_app.apps.chat.proc.rest.management.user_props_contracts import (
+    MAX_USER_PROPS_REQUEST_BYTES,
+    USER_PROPS_IMPORT_OPERATION,
+    USER_PROPS_RESOURCE_SELECTOR,
+    UserPropRow,
+    UserPropsRequestInvalid,
+    approval_context as user_props_approval_context,
+    import_body as user_props_import_body,
+    parse_user_props_import,
+    user_props_resource,
+)
+from kdcube_ai_app.apps.chat.proc.rest.management.user_props_runtime import (
+    KDCubeUserPropsRuntime,
+)
 from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
 
 router = APIRouter(prefix="/management/v1")
@@ -162,6 +176,7 @@ async def _service(request: Request) -> tuple[DelegatedManagementService, str]:
                 project=config.project,
             ),
             request_digest_secret=secret,
+            user_props_runtime=KDCubeUserPropsRuntime(),
         ),
         resource,
     )
@@ -177,6 +192,7 @@ async def _invoke(
     approval_context: dict[str, str] | None = None,
     secret_target: SecretTarget | None = None,
     response_headers: dict[str, str] | None = None,
+    user_props: tuple[UserPropRow, ...] | None = None,
 ) -> JSONResponse:
     _settings, config, resource = _configuration()
     effective_resource = str(resource_override or resource).strip()
@@ -227,6 +243,7 @@ async def _invoke(
             message="Delegated KDCube management is unavailable.",
             retryable=status == 503,
         )
+    extra: dict[str, Any] = {"user_props": user_props} if user_props is not None else {}
     response: ManagementResponse = await service.execute(
         operation=operation,
         delegated_bearer=bearer,
@@ -236,6 +253,7 @@ async def _invoke(
         resource=effective_resource,
         approval_context=approval_context,
         secret_target=secret_target,
+        **extra,
     )
     return JSONResponse(
         status_code=response.status_code,
@@ -267,7 +285,7 @@ async def protected_resource_metadata(request: Request) -> JSONResponse:
             "resource": resource,
             "authorization_servers": [issuer],
             "bearer_methods_supported": ["header"],
-            "kdcube_management_resources": [resource, SECRET_RESOURCE_SELECTOR],
+            "kdcube_management_resources": [resource, SECRET_RESOURCE_SELECTOR, USER_PROPS_RESOURCE_SELECTOR],
             "kdcube_management_operations": {
                 INSPECT_OPERATION: {
                     "method": "GET",
@@ -306,6 +324,11 @@ async def protected_resource_metadata(request: Request) -> JSONResponse:
                     "method": "POST",
                     "path": "/api/integrations/management/v1/secrets/delete",
                     "resource_selector": SECRET_RESOURCE_SELECTOR,
+                },
+                USER_PROPS_IMPORT_OPERATION: {
+                    "method": "POST",
+                    "path": "/api/integrations/management/v1/user-props/import",
+                    "resource_selector": USER_PROPS_RESOURCE_SELECTOR,
                 },
             },
         }
@@ -388,6 +411,36 @@ async def write_secret_value(request: Request) -> JSONResponse:
 @router.post("/secrets/delete")
 async def delete_secret(request: Request) -> JSONResponse:
     return await _invoke_secret(request, operation=SECRET_DELETE_OPERATION)
+
+
+@router.post("/user-props/import")
+async def import_user_props(request: Request) -> JSONResponse:
+    """W890: insert exported user props, never overwriting; counts only (inserted, equal, different)."""
+    _settings, config, _resource = _configuration()
+    try:
+        resource = user_props_resource(tenant=config.tenant, project=config.project)
+        payload = await read_json_object(request, maximum_bytes=MAX_USER_PROPS_REQUEST_BYTES)
+        rows = parse_user_props_import(payload)
+    except (UserPropsRequestInvalid, ValueError) as exc:
+        return _error_response(
+            status_code=400,
+            operation=USER_PROPS_IMPORT_OPERATION,
+            resource=USER_PROPS_RESOURCE_SELECTOR,
+            config=config,
+            invocation_id=request.headers.get("idempotency-key", ""),
+            code="user_props_request_invalid",
+            message=str(exc) if isinstance(exc, UserPropsRequestInvalid) else "The request is invalid.",
+            headers=SECRET_RESPONSE_HEADERS,
+        )
+    return await _invoke(
+        request,
+        operation=USER_PROPS_IMPORT_OPERATION,
+        body=user_props_import_body(rows),
+        resource_override=resource,
+        approval_context=user_props_approval_context(rows),
+        user_props=rows,
+        response_headers=SECRET_RESPONSE_HEADERS,
+    )
 
 
 @router.get("/deployment")

@@ -78,6 +78,7 @@ No operation accepts a tenant or project override.
 | `kdcube.management.secret.value.read` | `POST /api/integrations/management/v1/secrets/value/read` | One exact plaintext value for an admitted caller. Responses use `Cache-Control: no-store`. |
 | `kdcube.management.secret.value.write` | `POST /api/integrations/management/v1/secrets/value/write` | Set one exact value through the selected provider. |
 | `kdcube.management.secret.delete` | `POST /api/integrations/management/v1/secrets/delete` | Delete one exact value through the selected provider. |
+| `kdcube.management.user_props.import` | `POST /api/integrations/management/v1/user-props/import` | Insert up to 500 exported user props, never overwriting; counts of inserted, equal and different rows. Resource `urn:kdcube:management:user-props:<tenant>:<project>`; Connection Hub's own props are refused. See [config-export-README.md](config-export-README.md). |
 
 Every call requires an opaque Connection Hub bearer in `Authorization` and a
 printable 1..256-character `Idempotency-Key`. Reload accepts the exact JSON

@@ -43,6 +43,13 @@ from kdcube_ai_app.apps.chat.proc.rest.management.secret_runtime import (
     ManagementSecretsProviderReadOnly,
     ManagementSecretsProviderUnavailable,
 )
+from kdcube_ai_app.apps.chat.proc.rest.management.user_props_contracts import (
+    USER_PROPS_IMPORT_OPERATION,
+    UserPropRow,
+)
+from kdcube_ai_app.apps.chat.proc.rest.management.user_props_runtime import (
+    ManagementUserPropsUnavailable,
+)
 
 LOGGER = logging.getLogger("ChatProc.DelegatedManagement")
 
@@ -99,6 +106,14 @@ class SecretRuntime(Protocol):
         *,
         caller_profile: str,
     ) -> Mapping[str, Any]: ...
+
+
+class UserPropsRuntime(Protocol):
+    async def import_rows(self, rows: Any) -> Mapping[str, Any]: ...
+
+
+# Operations whose request digest binds values: keyed, so no reusable plaintext hash exists.
+_KEYED_DIGEST_OPERATIONS = frozenset({*SECRET_OPERATIONS, USER_PROPS_IMPORT_OPERATION})
 
 
 @dataclass(frozen=True)
@@ -181,6 +196,7 @@ class DelegatedManagementService:
         runtime: ManagementRuntime,
         secret_runtime: SecretRuntime | None = None,
         request_digest_secret: str = "",
+        user_props_runtime: UserPropsRuntime | None = None,
     ) -> None:
         self._tenant = tenant
         self._project = project
@@ -190,6 +206,7 @@ class DelegatedManagementService:
         self._ledger = ledger
         self._runtime = runtime
         self._secret_runtime = secret_runtime
+        self._user_props_runtime = user_props_runtime
         self._request_digest_secret = str(request_digest_secret or "")
 
     def _error(
@@ -230,6 +247,7 @@ class DelegatedManagementService:
         resource: str = "",
         approval_context: Mapping[str, str] | None = None,
         secret_target: SecretTarget | None = None,
+        user_props: tuple[UserPropRow, ...] | None = None,
     ) -> ManagementResponse:
         effective_resource = str(resource or self._resource).strip()
         try:
@@ -240,7 +258,7 @@ class DelegatedManagementService:
                 body=body,
                 secret=(
                     self._request_digest_secret
-                    if operation in SECRET_OPERATIONS
+                    if operation in _KEYED_DIGEST_OPERATIONS
                     else ""
                 ),
             )
@@ -473,8 +491,33 @@ class DelegatedManagementService:
                     secret_target,
                     caller_profile=caller_profile,
                 )
+            elif operation == USER_PROPS_IMPORT_OPERATION:
+                if self._user_props_runtime is None or not user_props:
+                    raise ManagementUserPropsUnavailable("Delegated user props import is unavailable")
+                result = await self._user_props_runtime.import_rows(user_props)
             else:
                 raise ValueError("unsupported management operation")
+        except ManagementUserPropsUnavailable:
+            response = self._error(
+                operation=operation,
+                invocation_id=invocation_id,
+                code="user_props_unavailable",
+                message="User props could not be imported.",
+                status_code=503,
+                retryable=True,
+                resource=effective_resource,
+            )
+            await self._settle(
+                reservation=reservation,
+                access_id=access_id,
+                operation=operation,
+                invocation_id=invocation_id,
+                request_digest=request_digest,
+                response=response,
+                failed=True,
+                resource=effective_resource,
+            )
+            return response
         except ManagementApplicationNotFound:
             response = self._error(
                 operation=operation,
@@ -704,4 +747,5 @@ __all__ = [
     "ManagementRuntime",
     "ManagementRuntimeUnavailable",
     "SecretRuntime",
+    "UserPropsRuntime",
 ]

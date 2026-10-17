@@ -245,6 +245,7 @@ def test_metadata_publishes_resource_authorization_server_and_operations(
     assert payload["kdcube_management_resources"] == [
         RESOURCE,
         SECRET_RESOURCE_SELECTOR,
+        "urn:kdcube:management:user-props:*:*",
     ]
     assert set(payload["kdcube_management_operations"]) == {
         "kdcube.management.deployment.inspect",
@@ -254,6 +255,7 @@ def test_metadata_publishes_resource_authorization_server_and_operations(
         SECRET_READ_OPERATION,
         SECRET_WRITE_OPERATION,
         SECRET_DELETE_OPERATION,
+        "kdcube.management.user_props.import",
     }
 
 
