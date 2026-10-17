@@ -751,6 +751,7 @@ class ChatCommunicator:
                 "fingerprint",
                 "roles",
                 "permissions",
+                "identity_authority",
                 "timezone",
                 "utc_offset_min",
             ):

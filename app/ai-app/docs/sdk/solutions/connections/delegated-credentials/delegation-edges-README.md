@@ -175,8 +175,15 @@ trusted sign-in/admin paths and integration-subject separation own its writes.
 
 Each queued delegated Data Bus invocation resolves this ceiling again after
 restoring the current Card and selecting its operation, before bundle or handler
-role visibility is evaluated. Carried actor roles and economics aliases do not
-survive that boundary. A missing native identity produces a rejected 403 result;
+role visibility is evaluated. The default communicator publisher preserves the
+delegation metadata needed for this recheck. Pointerless legacy projections
+must carry a consistent host-admitted delegate-to-native-target mapping; the
+worker reads that native target again without inventing a live Card pointer
+from the provenance's credential id. Missing or contradictory legacy mappings
+are refused with `required_authority_not_linked`. Their embedded grants remain
+legacy capability selections, not proof of current native roles. Carried actor
+roles and economics aliases do not survive that boundary. A missing native
+identity produces a rejected 403 result;
 an unavailable store produces an error result with status code 503 and
 `retryable: true`. These terminal results are acknowledged; automatic requeue
 is not part of this contract. Hosted gateway discovery uses the same request's
