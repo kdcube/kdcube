@@ -1,10 +1,12 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.09.23.0218"
+  ref: "2026.10.17.2103"
   description: |
-    This release follows 2026.09.02.1429 and covers the three weeks after it.
-    It publishes the platform images and the tag, and it is the record the
-    packaged CLI is published from.
+    This release follows 2026.09.02.1429, the last published platform
+    release. The records for 2026.09.13.0145 and 2026.09.23.0218 were never
+    published, so everything they describe ships here, together with the
+    work through 17 October. It publishes the platform images and the tag,
+    and it is the record the packaged CLI is published from.
 
     **Delegated authority is carried by the Card, end to end.** A Card is the
     delegation edge through the Data Bus, application Cards downscope runtime
@@ -57,5 +59,73 @@ platform:
     browses a scope, a lexical-only collection stops paying for vectors, and
     hybrid search can return the matched passage.
 
+    **Authority cutover is a reviewed operation.** It validates the target
+    schema, runs a rehearsal before writers stop, and applies the cutover
+    and the durable authority replacement in transactions. Delegated
+    request guards enforce the selected authority, and delegated platform
+    roles follow the current native authority.
+
+    **OAuth and sign-in were hardened.**
+    - A refresh restores the refresh token when issuance fails after
+      rotation, and names the failure.
+    - A profile consent reviews only the services that declare it, judged by
+      the grants their operations need.
+    - The device approval page names the agent.
+    - The original exchange keeps no issued bearer in secret custody.
+    - Server login can offer account selection, carries the provider's
+      verified-email claim, and signs out at the provider first.
+    - A site sign-in return keeps its public path and raw query.
+    - A framed widget gets a sign-in prompt instead of a raw 401.
+
+    **Conversations gained a verified cold tier.** It has dated reads and
+    scoped deletion, one folder per user and conversation, and a daily
+    archive. The default retention is 14 days, a hard delete covers the
+    cold tier, and a dated topic search reaches it and names where each hit
+    is stored. Bundle cron jobs run once per tick across processes.
+
+    **Runtime records and secrets are files with one owner.**
+    - One file per secret, owned by its bundle.
+    - Per-user secrets have one private file each, with a host migration.
+    - Ownership is repaired on Docker Desktop host shares, under a single
+      configurable owner uid.
+    - Secret writes broadcast on the existing update channel.
+    - An enrolled AWS Secrets Manager namespace is qualified by a signed
+      probe.
+
+    **Configuration moves between environments by export and import.**
+    - Export carries runtime and provider-held secrets and writes the cloud
+      secrets pair nested. It never exports Connection Hub props.
+    - Import writes secrets straight into AWS Secrets Manager.
+    - User props import through delegated management.
+
+    **The Data Bus bounds what it keeps.**
+    - Acknowledged messages are removed after an age, and the dead-letter
+      queue is retained by policy.
+    - Idle consumers with nothing pending are pruned.
+    - Large results are stored by a verified reference.
+    - A delegated actor is stored compactly and rebuilt from the live Card.
+    - Live sockets renew their transport lease from Engine.IO liveness.
+    - It has a read-only size report, timing logs, and batched session and
+      connection queries.
+
+    **Apps run what they pin.** A commit-pinned app runs its pinned commit
+    on every path, including its widget. Deployed source versions are
+    exposed for services and bundles. Peer calls name their calling bundle,
+    with an allowlist for peer callers. An attachment upload never replaces
+    another, S3 storage errors are typed, and repeated descriptor reads are
+    cached by content.
+
+    **The CLI refresh is safer.** It never leaves the stack down after an
+    image receipt failure. It refuses when the effective Compose files leave
+    the selected checkout. It accepts Compose's override and reset tags,
+    and refuses runtime-config overlays with duplicate keys or a redirected
+    source.
+
+    **Dependencies.** The images require the App Ecosystem PB set
+    2026.10.17.2026: connection-hub, project-board and app-foundation, with
+    service-foundation through connection-hub. The release guide now
+    describes the manually dispatched workflow and the zero-stripped
+    version.
+
 config:
-  version: "2026.09.23.0218"
+  version: "2026.10.17.2103"
