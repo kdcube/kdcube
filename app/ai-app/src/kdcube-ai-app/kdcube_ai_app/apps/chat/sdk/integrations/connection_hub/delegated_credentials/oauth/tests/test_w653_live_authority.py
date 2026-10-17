@@ -3,8 +3,9 @@
 Each test keeps ONE delivered session (the same bearer and its stored grant record) and changes only the
 live Card between calls, through the real managed MCP guard. identity_scope (whose identities' data the
 session reaches) and the record's top-level resource_grants must follow the live Card like every other Card
-fact; a record without a registry pointer (legacy) keeps its stored values. The grantor's consent-time IdP
-ceiling (grantor_authority) is pinned as deny-only; the live ceiling is the grantor's Control Card.
+fact; a record without a registry pointer (legacy) keeps its stored resource/scope values.
+Platform roles come from the grantor's current native authority, independently of consent metadata.
+The Card/Control selection remains bounded by that current ceiling.
 """
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
     GUARD_RESOURCE,
     _Redis,
     _authority,
+    _admitted_grantor,
     _client,
     _live_card,
     _rpc_tool_call,
@@ -44,10 +46,10 @@ OTHER_RESOURCE = "https://other.example.test/mcp"
 BEARER = {"Authorization": "Bearer reader"}
 
 
-def _session(monkeypatch, redis, grant_record):
+def _session(monkeypatch, redis, grant_record, *, native_roles=("kdcube:role:registered", "kdcube:role:super-admin")):
     """One delivered session through the real managed MCP guard at the granted resource. The route answers the
     runtime projection and the grant record the guard resolved for this call."""
-    return _session_over(_client(monkeypatch, grant_record=grant_record, redis=redis))
+    return _session_over(_client(monkeypatch, grant_record=grant_record, redis=redis, native_roles=native_roles))
 
 
 def _session_over(client):
@@ -278,7 +280,7 @@ def test_an_expired_card_ends_the_same_session(monkeypatch):
     assert response.status_code != 200 or _refused(response)
 
 
-# grantor_authority: the consent-time IdP ceiling only ever denies ----------------------------------------------
+# Current native authority bounds the Card selection independently of consent metadata -------------------------
 
 def test_a_consent_time_grantor_admin_role_does_not_enlarge_a_card_selected_role():
     """Pinned (no change): on the MCP/REST projection, a Card-selected role never inherits grantor roles."""
@@ -292,12 +294,13 @@ def test_a_consent_time_grantor_admin_role_does_not_enlarge_a_card_selected_role
                                                "grantor_permissions": ["kdcube:*"]}},
         "user": {"sub": credential["subject"], "roles": [], "permissions": []},
     }
+    _admitted_grantor(request, ("kdcube:role:super-admin",))
     projection = surface_guard.delegated_rest_runtime_projection(request, request_resource="*")
     assert "kdcube:role:super-admin" not in projection["roles"]
     assert "kdcube:*" not in projection["permissions"]
 
 
-# The platform-admin entrance (all resources): the same live enforcement, plus the deny-only grantor ceiling ----------
+# The platform-admin entrance (all resources): current Card and native grantor authority -----------------------
 
 ADMIN = "kdcube:role:super-admin"
 
@@ -306,11 +309,11 @@ def _admin_card(grants=(ADMIN,)):
     return _live_card(resource_grants={"*": tuple(grants)}, operations=())
 
 
-def _admin_session(monkeypatch, redis, *, grantor_roles=(ADMIN,)):
+def _admin_session(monkeypatch, redis, *, grantor_roles=(ADMIN,), native_roles=(ADMIN,)):
     record = {"registry_access_id": "oauth-access-1",
               "credential": _authority(scopes=[ADMIN], resource="*"),
               "grantor_authority": {"grantor_roles": list(grantor_roles)}}
-    client = _client(monkeypatch, grant_record=record, redis=redis, user={
+    client = _client(monkeypatch, grant_record=record, redis=redis, native_roles=native_roles, user={
         "sub": "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
         "roles": ["kdcube:role:delegated-client"], "permissions": [ADMIN]})
     client.app.state.oauth_delegated_config = {"tenant": "home", "project": "demo", "enabled": True, "resources": [
@@ -364,12 +367,19 @@ def test_the_admin_entrance_refuses_the_same_session_once_the_grantors_control_n
     assert not _entered(client)
 
 
-def test_the_consent_time_grantor_ceiling_only_denies(monkeypatch):
-    """Pinned (no change): a Card granting admin does not admit a grantor whose consent-time roles lack it.
-    The opposite window (a grantor demoted in the IdP after consent) is a named limitation, Root's decision."""
+def test_the_current_native_grantor_ceiling_denies_despite_captured_admin(monkeypatch):
+    """A Card granting admin cannot exceed a now-registered native grantor."""
     redis = _Redis()
     _store_live_card(redis, _admin_card())
-    assert not _entered(_admin_session(monkeypatch, redis, grantor_roles=("kdcube:role:registered",)))
+    assert not _entered(_admin_session(monkeypatch, redis, native_roles=("kdcube:role:registered",)))
+
+
+def test_stale_captured_registered_roles_cannot_deny_a_current_admin_card(monkeypatch):
+    redis = _Redis()
+    _store_live_card(redis, _admin_card())
+    assert _entered(_admin_session(
+        monkeypatch, redis, grantor_roles=("kdcube:role:registered",), native_roles=(ADMIN,),
+    ))
 
 
 def test_a_card_that_stops_selecting_admin_leaves_the_same_session_unprivileged(monkeypatch):
@@ -403,24 +413,25 @@ def test_the_same_session_is_refused_at_the_admin_entrance_once_its_card_drops_a
     assert not _entered(client)
 
 
-def test_a_legacy_record_keeps_the_grantors_consent_roles(monkeypatch):
-    """No registry pointer: the stored record is the authority, as before (legacy compatibility)."""
+def test_a_legacy_record_uses_native_roles_instead_of_captured_admin(monkeypatch):
+    """Legacy resource selection stays readable; native facts supply its unprivileged tier."""
     redis = _Redis()
     legacy = {"operations": ["records_export"], "credential": _authority(),
               "grantor_authority": {"grantor_roles": [ADMIN], "grantor_permissions": ["kdcube:*"]}}
-    client = _session(monkeypatch, redis, legacy)
+    client = _session(monkeypatch, redis, legacy, native_roles=("kdcube:role:paid",))
     projection = _projection(client)["projection"]
-    assert projection["roles"] == [ADMIN] and projection["permissions"] == ["kdcube:*"]
+    assert projection["roles"] == ["kdcube:role:paid"]
+    assert projection["permissions"] == ["records:read"]
+    assert projection["identity_authority"]["budget_bypass"] is False
 
 
 def test_a_live_card_without_a_role_keeps_the_grantors_non_privileged_tier(monkeypatch):
-    """The legacy tier contract for live Cards (test_delegated_bearer_slice_projects_card_principal_and_grantor_role)
-    is kept: a paid grantor's unselected Card still projects the paid role."""
+    """A currently paid native grantor's role-less Card retains that native tier."""
     redis = _Redis()
     _put(redis, _live_card())
     record = {**_stored(), "grantor_authority": {"grantor_roles": ["kdcube:role:paid"],
                                                  "grantor_permissions": ["records:read"]}}
-    client = _session(monkeypatch, redis, record)
+    client = _session(monkeypatch, redis, record, native_roles=("kdcube:role:paid",))
     assert _projection(client)["projection"]["roles"] == ["kdcube:role:paid"]
 
 
@@ -452,20 +463,17 @@ def test_the_tokens_own_admin_role_does_not_restore_privilege_once_the_card_drop
     assert not _entered(admin)
 
 
-@pytest.mark.parametrize("consent_roles, expected_roles", [(["kdcube:role:paid"], ["kdcube:role:paid"]), ([], [])])
-def test_a_token_admin_role_never_projects_for_a_live_card_with_a_non_privileged_consent(
-        monkeypatch, consent_roles, expected_roles):
-    """Main's return on 3db42f52: the filter is keyed on the live record alone. The consent names a paid role, or no
-    role at all (so the fallback reaches the token), the delegated access token itself carries ADMIN and kdcube:*, and
-    the live Card selects no role: nothing privileged projects, the session is not PRIVILEGED, and the admin entrance
-    refuses it."""
+@pytest.mark.parametrize("native_roles, expected_roles", [(["kdcube:role:paid"], ["kdcube:role:paid"]), ([], [])])
+def test_a_token_admin_role_never_projects_above_a_non_privileged_native_grantor(
+        monkeypatch, native_roles, expected_roles):
+    """Neither a token's admin claim nor captured admin metadata restores native privilege."""
     from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surface import _roles_user_type
     from kdcube_ai_app.auth.sessions import UserType
 
     redis = _Redis()
     _put(redis, _live_card())
-    record = {**_stored(), "grantor_authority": {"grantor_roles": list(consent_roles)}}
-    client = _session_over(_client(monkeypatch, grant_record=record, redis=redis, user={
+    record = {**_stored(), "grantor_authority": {"grantor_roles": [ADMIN]}}
+    client = _session_over(_client(monkeypatch, grant_record=record, redis=redis, native_roles=tuple(native_roles), user={
         "sub": "integration:claude:a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d", "roles": [ADMIN],
         "permissions": [ADMIN, "kdcube:*"]}))
     projection = _projection(client)["projection"]
@@ -476,4 +484,4 @@ def test_a_token_admin_role_never_projects_for_a_live_card_with_a_non_privileged
 
     entrance = _Redis()
     _store_live_card(entrance, _admin_card(grants=("records:read",)))
-    assert not _entered(_admin_session(monkeypatch, entrance, grantor_roles=tuple(consent_roles)))
+    assert not _entered(_admin_session(monkeypatch, entrance, native_roles=tuple(native_roles)))

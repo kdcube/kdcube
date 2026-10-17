@@ -18,9 +18,10 @@ RESOURCE = "https://board.example/api/integrations/bundles/t/p/problem-board@1-0
 OTHER = "https://other.example/mcp"
 
 
-def _card(*, operations=("board.get", "worker.heartbeat"), policy=None):
+def _card(*, operations=("board.get", "worker.heartbeat"), policy=None, card_revision=1):
     return SimpleNamespace(
         access_id="card-a", client_id="client-a", grantor_subject="user-a", delegate_subject="worker-a",
+        card_revision=card_revision,
         expires_at=int(time.time()) + 3600,
         resource_grants={RESOURCE: ("work:relay",), OTHER: ("other:grant",) * 40},
         resource_operations={RESOURCE: tuple(operations), OTHER: tuple(f"op.{n}" for n in range(200))},
@@ -43,6 +44,7 @@ def _stored_actor(card, **top):
             "delegated_card_binding": {
                 "schema": "connection_hub.delegated_card_binding.v1", "access_id": "card-a",
                 "client_id": "client-a", "grantor_user_id": "user-a", "delegate_identity": "worker-a",
+                "card_revision": card.card_revision,
                 "expires_at": card.expires_at,
             },
         },
@@ -81,11 +83,13 @@ async def test_the_live_recheck_yields_the_same_actor_from_the_compact_and_the_f
 async def test_a_card_changed_since_publish_is_what_the_handler_sees(monkeypatch):
     """The stored copy was never the authority: the live Card's narrower operations win either way."""
     published = _stored_actor(_card())
-    narrowed = _card(operations=("board.get",))
+    narrowed = _card(operations=("board.get",), card_revision=2)
 
     resolved = await _resolve(monkeypatch, narrowed, compact_card_actor(published))
 
     assert resolved["identity_authority"]["operations"] == ["board.get"]
+    assert published["identity_authority"]["delegated_card_binding"]["card_revision"] == 1
+    assert resolved["identity_authority"]["delegated_card_binding"]["card_revision"] == 2
 
 
 def test_compaction_keeps_the_recheck_inputs_and_every_other_field():
