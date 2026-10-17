@@ -302,9 +302,12 @@ def test_the_runtime_never_returns_connection_hub_props(monkeypatch):
                            "key": "delegated_to_kdcube.consent_demands", "subsystem": "bundle",
                            "value_json": '"hub-prop-canary"'}]
 
+    calls = []
+
     class _Con:
-        async def fetch(self, _sql):
-            return rows
+        async def fetch(self, sql, *params):
+            calls.append((sql, params))
+            return rows  # as if the database ignored the filter: the Python filter still holds
 
     class _Acquire:
         async def __aenter__(self):
@@ -326,4 +329,7 @@ def test_the_runtime_never_returns_connection_hub_props(monkeypatch):
     monkeypatch.setattr(props_manager, "get_props_manager", lambda: _Manager())
     returned = asyncio.run(secret_export_routes.read_user_props())
     assert returned == PROPS
+    sql, params = calls[0]
+    assert "starts_with(key, prefix)" in sql and sql.index("WHERE") < sql.index("LIMIT"), "filtered before the limit"
+    assert params == (["delegated_to_kdcube."],)
     assert "hub-prop-canary" not in json.dumps(returned)

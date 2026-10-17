@@ -302,7 +302,8 @@ the user props (`user-data/user_bundle_props.json`, without Connection Hub's own
 `delegated_to_kdcube.` props); the full reference is
 [config-export-README.md](../cicd/config-export-README.md); the browser approval page states whether
 user props are included. Tokens Connection Hub acquires at runtime are never
-exported, and a user secret that belongs to no app refuses the export. An
+exported; a user secret that belongs to no app has no folder home and goes
+only to `users.<user>.secrets` in `secrets.yaml`. An
 existing descriptor pair is replaced only with `--replace-descriptor-files`,
 checked before anything is disclosed. Folders are `0700` and files `0600`. See
 the `config export` section of the [CLI README](../cicd/cli-README.md).

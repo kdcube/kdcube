@@ -594,3 +594,23 @@ def test_the_helper_counts_what_it_leaves_out():
     kept, left_out = exportable_user_props([*PROPS, HUB_PROP])
     assert kept == PROPS and left_out == 1
 
+
+
+def test_the_props_script_filters_in_the_database_and_gets_the_prefixes(monkeypatch, tmp_path):
+    """claude-ops on #388: the Hub rows never reach the host; the processor's SELECT leaves them out."""
+    from types import SimpleNamespace
+
+    seen = {}
+
+    def run(command, **_kwargs):
+        seen["command"] = command
+        return SimpleNamespace(returncode=0, stdout="[]\n", stderr="")
+
+    monkeypatch.setattr(cli_mod.subprocess, "run", run)
+    monkeypatch.setattr(cli_mod, "_build_paths_for_repo", lambda *_a: SimpleNamespace(docker_dir=tmp_path))
+    monkeypatch.setattr(cli_mod.installer_mod, "compose_env", lambda _e: {})
+    assert cli_mod._read_user_props(repo_root=tmp_path, workdir=tmp_path, config_dir=tmp_path) == []
+    script, argument = seen["command"][-2], seen["command"][-1]
+    assert script == cli_mod._USER_PROPS_EXPORT_SCRIPT
+    assert "starts_with(key, prefix)" in script and "excluded," in script
+    assert json.loads(argument) == ["delegated_to_kdcube."]

@@ -74,7 +74,8 @@ holds the runtime, and reads the runtime secrets folder
    └─ (--include-user-data)
         docker compose exec chat-proc ────────▶  chat-proc ── its own pool ──▶ PostgreSQL
           rows on stdout, never printed                                     user_bundle_props
-          skip: Connection Hub props          ◀── rows ───────────────────────
+          prefixes passed in; the SELECT     ◀── rows ───────────────────────
+          leaves Connection Hub props out
                                                 user-data/user_bundle_props.json
 ```
 
@@ -123,9 +124,20 @@ to no app has no folder home; it goes only to `users.<user>.secrets` in
 | Runtime-record folders: `login-attempts`, `card-credentials`, `oauth-refresh-tokens` | the runtime secrets folder | Runtime state of this deployment, not configuration. |
 | Per-user secrets and user props without `--include-user-data` | provider; PostgreSQL | Users' data leaves only when asked for. |
 
-The filters are applied on the server before the manifest is frozen (nothing
-left out is ever read) and again by the CLI while it writes. The CLI prints
-counts only, never a secret name or value.
+Where each filter runs:
+
+- **Secret keys** (both paths): in a provider-backed export the runtime drops
+  the left-out keys from the inventory before the manifest is frozen, so
+  nothing left out is ever read; in a `secrets-file` export the CLI checks each
+  record's name before reading it. The CLI's writer applies the same rules
+  again.
+- **User props** (both paths): the `SELECT` on `user_bundle_props` itself leaves
+  Connection Hub's props out (`WHERE NOT starts_with(key, <prefix>)`, the
+  prefixes passed as a parameter), so those rows never leave the database and
+  never count towards the 20000-row limit. The runtime and the CLI drop them
+  again in Python whatever the database returns.
+
+The CLI prints counts only, never a secret name or value.
 
 ## 4) Output layout
 

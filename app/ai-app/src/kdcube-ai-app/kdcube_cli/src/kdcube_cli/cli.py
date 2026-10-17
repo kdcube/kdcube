@@ -70,6 +70,7 @@ from kdcube_cli.runtime_secrets_export import (
     merge_app_secrets,
     merge_user_secrets,
     filter_user_secrets,
+    EXCLUDED_USER_PROP_PREFIXES,
     exportable_user_props,
     write_provider_values,
 )
@@ -2663,12 +2664,16 @@ import asyncio, json, sys
 from kdcube_ai_app.infra.props.manager import get_props_manager
 
 async def main():
+    excluded = json.loads(sys.argv[1])  # Connection Hub's prop prefixes: those rows never leave the database
     manager = get_props_manager()
     pool = await manager._pool()
     async with pool.acquire() as con:
         rows = await con.fetch(
             "SELECT user_id, bundle_id, key, subsystem, value_json::text AS value_json "
-            f"FROM {manager._schema}.user_bundle_props ORDER BY user_id, bundle_id, key"
+            f"FROM {manager._schema}.user_bundle_props "
+            "WHERE NOT EXISTS (SELECT 1 FROM unnest($1::text[]) AS prefix WHERE starts_with(key, prefix)) "
+            "ORDER BY user_id, bundle_id, key",
+            excluded,
         )
     sys.stdout.write(json.dumps([dict(row) for row in rows], ensure_ascii=True) + "\\n")
 
@@ -2682,7 +2687,7 @@ def _read_user_props(*, repo_root: Path, workdir: Path, config_dir: Path) -> lis
     env_file = config_dir / ".env"
     ctx = _build_paths_for_repo(repo_root, workdir)
     command = ["docker", "compose", "--env-file", str(env_file), "exec", "-T", "chat-proc",
-               "python", "-c", _USER_PROPS_EXPORT_SCRIPT]
+               "python", "-c", _USER_PROPS_EXPORT_SCRIPT, json.dumps(list(EXCLUDED_USER_PROP_PREFIXES))]
     try:
         result = subprocess.run(command, cwd=ctx.docker_dir, env=installer_mod.compose_env(env_file),
                                 text=True, capture_output=True, timeout=120, check=False)
