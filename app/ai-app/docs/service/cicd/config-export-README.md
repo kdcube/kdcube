@@ -226,7 +226,7 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
    drop Connection Hub props (delegated_to_kdcube.*)
    --dry-run: counts only, nothing sent
    --yes: batches of ≤ 500 rows / 3 MiB,
-          one stable Idempotency-Key per batch
+          a fresh Idempotency-Key per batch and run
         │
         └─ POST /management/v1/user-props/import ─▶ refuse before admission: a Connection Hub
            Connection Hub bearer (the same one          prop, a duplicate, invalid JSON, > 500 rows
@@ -234,7 +234,7 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
                                                        urn:kdcube:management:user-props:<t>:<p>,
                                                        operation kdcube.management.user_props.import,
                                                        invocation policy (Once / Always)
-                                                     effect ledger (a retried batch replays)
+                                                     effect ledger (the same key never runs twice)
                                                      one statement ───────────────────────────▶ INSERT … ON CONFLICT
                                                                                                  (user_id, bundle_id, key)
                                                                                                  DO NOTHING
@@ -252,11 +252,15 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`) from AWS Secrets Manager.
   hash.
 - **Authority.** The caller's Card needs the operation on the user-props
   resource, granted in Connection Hub's catalog like the secret writes
-  (super-admin delegable). A missing grant answers with the usual browser
-  consent recovery.
-- **The runtime must be up**, with delegated management enabled; the
-  descriptors are applied first, so a refused props import can simply be run
-  again.
+  (super-admin delegable). The operation is request-bound: with `Once`, each
+  batch asks for its own browser approval (an import of N batches asks N
+  times); `Always` approves every later batch and run.
+- **Run it again at any time.** Each run sends fresh Idempotency-Keys, so a
+  batch that failed (for example a database error) executes on the next run,
+  and a later re-import is a real import, never a replay of an old receipt.
+  Nothing is written twice: rows already stored count as equal or different.
+- **The runtime must be up**, with delegated management enabled. The
+  descriptors are applied first; a refused props import is simply run again.
 
 ## 6) Code
 

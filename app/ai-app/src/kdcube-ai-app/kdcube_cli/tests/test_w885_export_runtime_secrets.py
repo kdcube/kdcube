@@ -712,21 +712,54 @@ def test_import_with_the_flag_needs_a_real_props_export(tmp_path):
             cli_mod._load_exported_user_props(tmp_path)
 
 
-def test_props_go_in_bounded_batches_with_stable_invocation_ids():
-    from kdcube_cli.management.models import ManagementTarget
-    from kdcube_cli.secrets_commands import USER_PROPS_BATCH_ROWS, _batch_invocation_id, user_props_batches
+def test_props_go_in_bounded_batches():
+    from kdcube_cli.secrets_commands import USER_PROPS_BATCH_ROWS, user_props_batches
 
     rows = [{"user_id": "u", "bundle_id": "b", "key": f"k{i:04d}", "subsystem": "bundle", "value_json": "1"}
             for i in range(USER_PROPS_BATCH_ROWS + 3)]
-    batches = user_props_batches(list(reversed(rows)))
-    assert [len(batch) for batch in batches] == [USER_PROPS_BATCH_ROWS, 3]
+    assert [len(batch) for batch in user_props_batches(list(reversed(rows)))] == [USER_PROPS_BATCH_ROWS, 3]
     big = [{"user_id": "u", "bundle_id": "b", "key": f"big{i}", "subsystem": "bundle",
             "value_json": json.dumps("x" * 60000)} for i in range(60)]
     assert len(user_props_batches(big)) == 2, "the byte bound splits too"
+
+
+def test_a_failed_batch_runs_again_on_the_next_import_with_a_fresh_key(monkeypatch):
+    """claude-ops on #389: the effect ledger replays a settled outcome, a failed one too, so a key derived
+    from the content would replay one transient 503 on every later run. Each run uses fresh keys; within a
+    run the key stays, so the retry after a browser approval is the same request."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from kdcube_cli import secrets_commands as commands
+    from kdcube_cli.management.models import ManagementDenial, ManagementTarget
+
     target = ManagementTarget.__new__(ManagementTarget)
-    object.__setattr__(target, "tenant", "t")
-    object.__setattr__(target, "project", "p")
-    assert _batch_invocation_id(target, batches[1]) == _batch_invocation_id(target, list(batches[1]))
+    for name, value in (("public_base_url", "https://runtime.test"), ("tenant", "t"), ("project", "p"),
+                        ("session_target_key", "k")):
+        object.__setattr__(target, name, value)
+    rows = [{"user_id": "u", "bundle_id": "b", "key": f"k{i:04d}", "subsystem": "bundle", "value_json": "1"}
+            for i in range(commands.USER_PROPS_BATCH_ROWS + 1)]
+    sent: list[str] = []
+    fail_once = {"left": 1}
+
+    async def execute(_client, request, _bearer, **_kwargs):
+        sent.append(request.invocation_id)
+        if fail_once["left"] and len(request.body["rows"]) == 1:
+            fail_once["left"] -= 1
+            return ManagementDenial(status=503, code="user_props_unavailable", retryable=True)
+        n = len(request.body["rows"])
+        return SimpleNamespace(result={"inserted": n, "equal": 0, "different": 0, "received": n})
+
+    monkeypatch.setattr(commands, "_execute_with_consent", execute)
+    monkeypatch.setattr(commands, "HttpxManagementTransport", lambda: None)
+    run = lambda: asyncio.run(commands.apply_user_props_import(  # noqa: E731
+        target=target, rows=rows, bearer="b", no_open=True, no_wait=True))
+    first = run()
+    assert not first.ok and first.inserted == commands.USER_PROPS_BATCH_ROWS and first.batches == 1
+    second = run()
+    assert second.ok and second.batches == 2, "the batch that failed executes on the next run"
+    assert len(sent) == 4 and len(set(sent)) == 4, "every run sends fresh keys"
+    assert sent[0].rsplit("-", 1)[0] == sent[1].rsplit("-", 1)[0], "one run shares one run id"
 
 
 def test_the_request_is_exact_keyed_and_its_receipt_is_checked():

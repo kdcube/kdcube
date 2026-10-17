@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
-import hashlib
 import json
+import secrets
 import sys
 import time
 import webbrowser
@@ -606,11 +606,12 @@ def user_props_batches(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]
     return [batch for batch in batches if batch]
 
 
-def _batch_invocation_id(target: ManagementTarget, batch: list[dict[str, Any]]) -> str:
-    """Stable per batch, so a retried import replays the recorded outcome instead of importing twice."""
-    canonical = json.dumps([target.tenant, target.project, batch], ensure_ascii=True, sort_keys=True,
-                           separators=(",", ":")).encode("utf-8")
-    return "user-props-import-" + hashlib.sha256(canonical).hexdigest()[:48]
+def _batch_invocation_id(run_id: str, index: int) -> str:
+    """Fresh for every import run (claude-ops on #389): the effect ledger replays a settled outcome, failed
+    ones included, so a key derived from the content would replay one transient failure, or an old receipt,
+    on every later run. A second run is harmless without it: the runtime never overwrites, and reports the
+    rows as equal. Within one run the key stays, so the retry after a browser approval is the same request."""
+    return f"user-props-import-{run_id}-{index:04d}"
 
 
 async def apply_user_props_import(
@@ -626,9 +627,10 @@ async def apply_user_props_import(
     client = ManagementClient(transport=HttpxManagementTransport())
     totals = {"inserted": 0, "equal": 0, "different": 0}
     batches = 0
-    for batch in user_props_batches(rows):
+    run_id = secrets.token_hex(12)
+    for index, batch in enumerate(user_props_batches(rows)):
         request = ManagementRequest.user_props_import(
-            target, rows=batch, invocation_id=_batch_invocation_id(target, batch))
+            target, rows=batch, invocation_id=_batch_invocation_id(run_id, index))
         result = await _execute_with_consent(client, request, bearer, no_open=no_open, no_wait=no_wait)
         if isinstance(result, ManagementDenial):
             return UserPropsImportResult(**totals, batches=batches, failed_request=request, denial=result)
