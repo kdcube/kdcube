@@ -93,8 +93,9 @@ holds. Binding is in `auth/session_authority_runtime.py`: Redis-source mode at
 | A5 admission replay nonce | written; **durable** replay fence | not written; PostgreSQL `replay_claims` |
 
 The table describes `auth.sessions.platform.backend: authority` (the default).
-With `auth.sessions.platform.backend: redis`, P1 and P2 use their existing
-Redis TTL lane even when the bundle authority is PostgreSQL. P10 and P11 are
+With `auth.sessions.authority.backend: postgresql` and
+`auth.sessions.platform.backend: redis`, P1 and P2 use their existing
+Redis TTL lane. P10 and P11 are
 then not written; P8 and P9 remain fenced PostgreSQL projections. The three
 bundle families and their issuance ledger remain PostgreSQL-authoritative,
 and their activation receipt need not include `platform_sessions`. Other
