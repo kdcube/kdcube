@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/server-side-login-and-platform-session-README.md
 title: "Server-Side Login And The Platform Session"
-summary: "How an app-defined login turns an authenticator proof into one KDCube-owned platform session with PostgreSQL authority, a fenced Redis projection, protected browser entry, and sliding lifetime."
+summary: "How an app-defined login turns an authenticator proof into a KDCube-owned session, with durable login authority, independently selectable browser-record storage, protected browser entry, and sliding lifetime."
 tags: ["service", "auth", "application", "bundle", "session", "sso"]
 keywords: ["server-side login", "app-defined authenticator", "platform session", "platform principal", "connection edge", "bundle", "kst1", "login lane", "login", "logout", "register", "invalidate", "sliding session", "OIDC", "Cognito hosted UI"]
-updated_at: 2026-10-07
+updated_at: 2026-10-18
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/app-simple-idp-bridge-README.md
@@ -851,16 +851,26 @@ session-invalidating operation across all replicas.
 
 ## Storage Surfaces
 
-Server-side platform sessions use PostgreSQL as mutable authority and Redis as
-a read projection. Keys are tenant/project and generation scoped.
+With `auth.sessions.authority.backend: postgresql`, login users, revocation
+versions, signed `kst1` backing sessions and credential issuance use
+PostgreSQL authority with fenced Redis read projections. The separate
+`SessionManager` browser/request record follows that backend by default.
+
+To keep only that disposable record in Redis, set
+`auth.sessions.platform.backend: redis` while retaining the PostgreSQL
+authority and its activated `generation_id`. `authority` is the default value;
+omitting the option keeps current behavior. See the
+[session storage descriptor contract](../../configuration/assembly-descriptor-README.md#session-authority-storage).
+This is a restart-time deployment choice, not a live toggle or a migration.
 
 | Storage | Shape | Lifetime | Used by |
 |---|---|---|---|
 | Bundle user, user version, and session rows | PostgreSQL session-authority schema | Durable until explicit delete; sessions retain idle and hard expiry | Login, role freshness, logout, invalidate, delete, and token hash match. |
 | Bundle-session projection | `{tenant}:{project}:kdcube:auth:bundle-session:projection:<generation-hash>:session:<sid>` | Native Redis TTL to the earlier idle/hard expiry | Fast validation payload; a miss or stale fence rebuilds from PostgreSQL. |
 | Bundle user-session projection index | `{tenant}:{project}:kdcube:auth:bundle-session:projection:<generation-hash>:user-sessions:<subject-hash>` | Native Redis TTL to hard expiry | Best-effort projection invalidation; PostgreSQL revocation is authoritative. |
-| Platform-session rows | PostgreSQL session-authority schema | Durable session expiry | Platform-session create, renewal, lookup, and revoke. |
-| Platform-session projection | `{tenant}:{project}:kdcube:auth:platform-session:projection:<generation-hash>:*` | Native Redis session TTL | Read-through projection; every positive hit is fenced by PostgreSQL. |
+| Platform-session rows (`platform.backend: authority`, PostgreSQL selected) | PostgreSQL session-authority schema | Durable session expiry | Platform-session create, renewal, lookup, and revoke. |
+| Platform-session projection (`platform.backend: authority`, PostgreSQL selected) | `{tenant}:{project}:kdcube:auth:platform-session:projection:<generation-hash>:*` | Native Redis session TTL | Read-through projection; every positive hit is fenced by PostgreSQL. |
+| Disposable platform-session record and index (`platform.backend: redis`) | `{tenant}:{project}:kdcube:session:<principal>` and `{tenant}:{project}:kdcube:session:index:<sid>` | Native Redis TTL, 24 hours by default | Existing atomic session merge/create and lookup; no PostgreSQL platform-session writes. |
 | Principal edge projection | `{tenant}:{project}:kdcube:connection-edge:principal:<identity-hash>` | Rebuildable | Resolve a verified issuer/subject to its platform user without reading bundle storage. |
 | Login-attempt pointer | `{tenant}:{project}:kdcube:auth:browser-login:<state-sha256>` | Attempt TTL and current Redis run | Single-use lookup containing no raw state, PKCE verifier, or browser binding. |
 | Login-attempt secret | host vault `platform.runtime.login-attempts.<ref>` or AWS `<prefix>/runtime/login-attempts/<ref>` | Attempt TTL | Raw one-time browser-login payload; consumed with forced deletion. |
@@ -870,6 +880,15 @@ a read projection. Keys are tenant/project and generation scoped.
 Validation reads the current user record. A role update made through
 `register_user(...)` is reflected on the next request without waiting for the
 browser cookie to expire.
+
+The mixed Redis/PostgreSQL choice requires an activated receipt for the three
+bundle families, with or without `platform_sessions`. Bound Card issuance
+continues through the PostgreSQL ledger; a Redis cache loss does not reset
+those users, credentials or revocations. The disposable record contains
+generic request identity and roles, not application state. Redis loss causes
+reconstruction after authentication or a fresh sign-in. Existing PostgreSQL
+platform-session rows are left untouched, and switching back does not import
+Redis records into them.
 
 ## Application SDK API
 

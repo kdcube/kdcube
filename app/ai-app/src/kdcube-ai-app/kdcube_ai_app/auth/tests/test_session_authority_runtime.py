@@ -19,6 +19,8 @@ from kdcube_ai_app.auth.session_authority_runtime import (
 )
 from kdcube_ai_app.auth.sessions import SessionManager
 
+BUNDLE_FAMILIES = ("bundle_users", "bundle_sessions", "bundle_authority_version")
+
 
 @pytest.fixture(autouse=True)
 def _clean_runtime_registry():
@@ -192,23 +194,28 @@ class _Cutovers(_PreparedStore):
         return object()
 
 
-def _settings() -> SimpleNamespace:
+def _settings(backend="postgresql", platform_backend=None) -> SimpleNamespace:
     authority = SimpleNamespace(
-        BACKEND="postgresql",
-        GENERATION_ID="durable-authority-v1",
+        BACKEND=backend,
+        GENERATION_ID="durable-authority-v1" if backend == "postgresql" else "",
     )
+    sessions = SimpleNamespace(AUTHORITY=authority)
+    if platform_backend is not None:
+        sessions.PLATFORM = SimpleNamespace(BACKEND=platform_backend)
     return SimpleNamespace(
         TENANT="tenant-a",
         PROJECT="project-a",
         AUTH=SimpleNamespace(
-            SESSIONS=SimpleNamespace(AUTHORITY=authority)
+            SESSIONS=sessions
         ),
     )
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("platform_backend", [None, "authority", "redis"])
 async def test_prepare_publishes_stores_only_after_the_exact_receipt(
     monkeypatch,
+    platform_backend,
 ) -> None:
     import kdcube_ai_app.auth.bundle.session_store as bundle_store_module
     import kdcube_ai_app.auth.platform_session_store as platform_store_module
@@ -236,26 +243,30 @@ async def test_prepare_publishes_stores_only_after_the_exact_receipt(
 
     snapshot = await prepare_configured_session_authority(
         pg_pool=object(),
-        settings=_settings(),
+        settings=_settings(platform_backend=platform_backend),
         redis=object(),
     )
 
     assert snapshot.ready is True
-    assert events == [
-        ("schema", "bundle"),
-        ("schema", "platform"),
+    mixed = platform_backend == "redis"
+    assert events == [("schema", "bundle")] + ([] if mixed else [("schema", "platform")]) + [
         ("schema", "cutovers"),
         (
             "receipt",
             "durable-authority-v1",
-            KDCUBE_SESSION_AUTHORITY_FAMILIES,
+            BUNDLE_FAMILIES if mixed else KDCUBE_SESSION_AUTHORITY_FAMILIES,
         ),
     ]
+    manager = SessionManager("redis://unused", tenant="tenant-a", project="project-a")
+    assert (manager.authority_store is None) == mixed
+    assert bundle_session_store_for(tenant="tenant-a", project="project-a") is not None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("platform_backend", ["authority", "redis"])
 async def test_prepare_keeps_postgresql_fail_closed_when_receipt_is_missing(
     monkeypatch,
+    platform_backend,
 ) -> None:
     import kdcube_ai_app.auth.bundle.session_store as bundle_store_module
     import kdcube_ai_app.auth.platform_session_store as platform_store_module
@@ -287,7 +298,7 @@ async def test_prepare_keeps_postgresql_fail_closed_when_receipt_is_missing(
     ):
         await prepare_configured_session_authority(
             pg_pool=object(),
-            settings=_settings(),
+            settings=_settings(platform_backend=platform_backend),
             redis=object(),
         )
 
@@ -301,3 +312,33 @@ async def test_prepare_keeps_postgresql_fail_closed_when_receipt_is_missing(
         match="session_authority_generation_not_prepared",
     ):
         _ = manager.authority_store
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform_backend", [None, "authority", "redis"])
+async def test_prepare_source_mode_needs_no_postgres_or_receipt(platform_backend):
+    snapshot = await prepare_configured_session_authority(
+        pg_pool=None, settings=_settings("redis-migration-source", platform_backend),
+    )
+    assert snapshot.ready
+    assert snapshot.platform_backend == (platform_backend or "authority")
+    assert bundle_session_store_for(tenant="tenant-a", project="project-a") is None
+
+
+@pytest.mark.parametrize("backend", ["postgresql", "redis-migration-source"])
+def test_platform_selection_cannot_change_in_process(backend):
+    config = _config(backend=backend, generation_id="durable-authority-v1" if backend == "postgresql" else "")
+    configure_session_authority(tenant="tenant-a", project="project-a", config=config)
+    with pytest.raises(SessionAuthorityUnavailable, match="configuration_changed_in_process"):
+        configure_session_authority(
+            tenant="tenant-a", project="project-a", config=config, platform_backend="redis",
+        )
+
+
+@pytest.mark.parametrize("platform_backend", ["typo", "postgresql", None, True])
+def test_configure_rejects_invalid_platform_backend(platform_backend):
+    with pytest.raises(ValueError, match="auth.sessions.platform.backend"):
+        configure_session_authority(
+            tenant="tenant-a", project="project-a", config=_config(),
+            platform_backend=platform_backend,
+        )

@@ -25,10 +25,13 @@ if TYPE_CHECKING:
     from kdcube_ai_app.auth.bundle.session_store import BundleSessionStore
     from kdcube_ai_app.auth.platform_session_store import PlatformSessionStore
 
-KDCUBE_SESSION_AUTHORITY_FAMILIES = (
+KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES = (
     FAMILY_BUNDLE_USERS,
     FAMILY_BUNDLE_SESSIONS,
     FAMILY_BUNDLE_AUTHORITY_VERSION,
+)
+KDCUBE_SESSION_AUTHORITY_FAMILIES = (
+    *KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES,
     FAMILY_PLATFORM_SESSIONS,
 )
 
@@ -43,11 +46,13 @@ class SessionAuthoritySnapshot:
     project: str
     config: DurableAuthorityConfig
     ready: bool
+    platform_backend: str = "authority"
 
 
 @dataclass
 class _SessionAuthorityBinding:
     config: DurableAuthorityConfig
+    platform_backend: str = "authority"
     bundle_store: BundleSessionStore | None = None
     platform_store: PlatformSessionStore | None = None
     ready: bool = False
@@ -97,17 +102,24 @@ def configure_session_authority(
     tenant: str,
     project: str,
     config: DurableAuthorityConfig,
+    platform_backend: str = "authority",
 ) -> SessionAuthoritySnapshot:
     """Declare the selected generation before any asynchronous preparation."""
 
+    if platform_backend not in ("authority", "redis"):
+        raise ValueError("auth.sessions.platform.backend must be authority or redis")
     scope = _scope(tenant, project)
     existing = _BINDINGS.get(scope)
-    if existing is not None and existing.config != config:
+    if existing is not None and (
+        existing.config != config or existing.platform_backend != platform_backend
+    ):
         raise SessionAuthorityUnavailable(
             "session_authority_configuration_changed_in_process"
         )
     if existing is None:
-        existing = _SessionAuthorityBinding(config=config)
+        existing = _SessionAuthorityBinding(
+            config=config, platform_backend=platform_backend,
+        )
         _BINDINGS[scope] = existing
     if config.backend == AUTHORITY_BACKEND_REDIS_MIGRATION_SOURCE:
         existing.bundle_store = None
@@ -119,6 +131,7 @@ def configure_session_authority(
         project=scope[1],
         config=existing.config,
         ready=existing.ready,
+        platform_backend=existing.platform_backend,
     )
 
 
@@ -128,18 +141,24 @@ def activate_session_authority_stores(
     project: str,
     config: DurableAuthorityConfig,
     bundle_store: BundleSessionStore,
-    platform_store: PlatformSessionStore,
+    platform_store: PlatformSessionStore | None,
+    platform_backend: str = "authority",
 ) -> SessionAuthoritySnapshot:
-    """Publish both prepared stores together for all existing consumers."""
+    """Publish the selected prepared stores together for existing consumers."""
 
     snapshot = configure_session_authority(
         tenant=tenant,
         project=project,
         config=config,
+        platform_backend=platform_backend,
     )
     if config.backend != AUTHORITY_BACKEND_POSTGRESQL:
         raise SessionAuthorityUnavailable(
             "session_authority_postgresql_not_selected"
+        )
+    if bundle_store is None or (platform_store is None) != (platform_backend == "redis"):
+        raise SessionAuthorityUnavailable(
+            "session_authority_selected_store_missing_or_mismatched"
         )
     scope = (snapshot.tenant, snapshot.project)
     binding = _BINDINGS[scope]
@@ -151,6 +170,7 @@ def activate_session_authority_stores(
         project=scope[1],
         config=binding.config,
         ready=True,
+        platform_backend=binding.platform_backend,
     )
 
 
@@ -164,7 +184,9 @@ def _resolved_binding(
         try:
             from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
-            selected = session_authority_config_from_settings(get_settings())
+            settings = get_settings()
+            selected = session_authority_config_from_settings(settings)
+            platform_session_backend_from_settings(settings)
         except SessionAuthorityUnavailable:
             raise
         except Exception as exc:
@@ -214,6 +236,16 @@ def session_authority_config_from_settings(settings: Any) -> DurableAuthorityCon
     )
 
 
+def platform_session_backend_from_settings(settings: Any) -> str:
+    auth = getattr(settings, "AUTH", None)
+    sessions = getattr(auth, "SESSIONS", None)
+    platform = getattr(sessions, "PLATFORM", None)
+    backend = getattr(platform, "BACKEND", "authority")
+    if backend not in ("authority", "redis"):
+        raise ValueError("auth.sessions.platform.backend must be authority or redis")
+    return backend
+
+
 async def prepare_configured_session_authority(
     *,
     pg_pool: Any,
@@ -223,12 +255,14 @@ async def prepare_configured_session_authority(
     """Prepare and atomically expose durable stores plus Redis projections."""
 
     config = session_authority_config_from_settings(settings)
+    platform_backend = platform_session_backend_from_settings(settings)
     tenant = str(getattr(settings, "TENANT", "") or "").strip() or "default"
     project = str(getattr(settings, "PROJECT", "") or "").strip() or "default"
     snapshot = configure_session_authority(
         tenant=tenant,
         project=project,
         config=config,
+        platform_backend=platform_backend,
     )
     if config.backend == AUTHORITY_BACKEND_REDIS_MIGRATION_SOURCE:
         return snapshot
@@ -272,22 +306,29 @@ async def prepare_configured_session_authority(
         tenant=scope[0],
         project=scope[1],
     )
-    platform_authority = PostgresPlatformSessionStore(
-        pg_pool=pg_pool,
-        tenant=scope[0],
-        project=scope[1],
-    )
+    platform_authority = None
+    if platform_backend == "authority":
+        platform_authority = PostgresPlatformSessionStore(
+            pg_pool=pg_pool,
+            tenant=scope[0],
+            project=scope[1],
+        )
     cutovers = PostgresAuthorityCutoverStore(
         pg_pool=pg_pool,
         tenant=scope[0],
         project=scope[1],
     )
     await bundle_authority.ensure_schema()
-    await platform_authority.ensure_schema()
+    if platform_authority is not None:
+        await platform_authority.ensure_schema()
     await cutovers.ensure_schema()
     await cutovers.require_activated(
         config.generation_id,
-        required_families=KDCUBE_SESSION_AUTHORITY_FAMILIES,
+        required_families=(
+            KDCUBE_SESSION_AUTHORITY_FAMILIES
+            if platform_authority is not None
+            else KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES
+        ),
     )
     bundle_store = ProjectedBundleSessionStore(
         authority=bundle_authority,
@@ -298,21 +339,24 @@ async def prepare_configured_session_authority(
             generation_id=config.generation_id,
         ),
     )
-    platform_store = ProjectedPlatformSessionStore(
-        authority=platform_authority,
-        projection=RedisPlatformSessionProjection(
-            projection_redis,
-            tenant=scope[0],
-            project=scope[1],
-            generation_id=config.generation_id,
-        ),
-    )
+    platform_store = None
+    if platform_authority is not None:
+        platform_store = ProjectedPlatformSessionStore(
+            authority=platform_authority,
+            projection=RedisPlatformSessionProjection(
+                projection_redis,
+                tenant=scope[0],
+                project=scope[1],
+                generation_id=config.generation_id,
+            ),
+        )
     return activate_session_authority_stores(
         tenant=scope[0],
         project=scope[1],
         config=config,
         bundle_store=bundle_store,
         platform_store=platform_store,
+        platform_backend=platform_backend,
     )
 
 
@@ -379,6 +423,7 @@ def reset_session_authority_runtime_for_tests() -> None:
 
 
 __all__ = [
+    "KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES",
     "KDCUBE_SESSION_AUTHORITY_FAMILIES",
     "SessionAuthoritySnapshot",
     "SessionAuthorityUnavailable",
@@ -386,6 +431,7 @@ __all__ = [
     "bundle_session_store_for",
     "configure_session_authority",
     "platform_session_store_for",
+    "platform_session_backend_from_settings",
     "open_configured_session_authority",
     "prepare_configured_session_authority",
     "reset_session_authority_runtime_for_tests",

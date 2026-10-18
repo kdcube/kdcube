@@ -22,7 +22,7 @@ from kdcube_ai_app.apps.chat.sdk.config_scopes import (
     MetricsCloudWatchConfig, MetricsPrometheusConfig,
     PyExecConfig, ExecConfig, ReactDebugConfig, AccountingConfig, GitBundlesConfig, ApplicationsConfig,
     PlatformConfig, IDPLocalConfig, IDPConfig, AuthConfig, CognitoTrustedProviderConfig,
-    SessionAuthorityConfig, SessionsConfig, ServicesConfig,
+    PlatformSessionsConfig, SessionAuthorityConfig, SessionsConfig, ServicesConfig,
     SIMPLE_IDP_STORE_PATH,
 )
 from connection_hub.authority_registry_config import (
@@ -1805,6 +1805,12 @@ class Settings(PLATFORM_CONFIG):
                 ),
             ),
             SESSIONS=SessionsConfig(
+                PLATFORM=PlatformSessionsConfig(
+                    BACKEND=(
+                        self._assembly_str("auth.sessions.platform.backend")
+                        or "authority"
+                    ),
+                ),
                 AUTHORITY=SessionAuthorityConfig(
                     BACKEND=(
                         self._assembly_str("auth.sessions.authority.backend")
