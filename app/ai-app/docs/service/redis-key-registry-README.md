@@ -92,6 +92,16 @@ holds. Binding is in `auth/session_authority_runtime.py`: Redis-source mode at
 | A1 OAuth clients, A2 refresh chains, A3 access bindings, A4 Card handles | written; the only copy, **durable** | not written; the PostgreSQL authority store holds them |
 | A5 admission replay nonce | written; **durable** replay fence | not written; PostgreSQL `replay_claims` |
 
+The table describes `auth.sessions.platform.backend: authority` (the default).
+With `auth.sessions.platform.backend: redis`, P1 and P2 use their existing
+Redis TTL lane even when the bundle authority is PostgreSQL. P10 and P11 are
+then not written; P8 and P9 remain fenced PostgreSQL projections. The three
+bundle families and their issuance ledger remain PostgreSQL-authoritative,
+and their activation receipt need not include `platform_sessions`. Other
+families and Connection Hub's authority selection are unchanged. See the
+[session storage descriptor contract](../configuration/assembly-descriptor-README.md#session-authority-storage)
+for the restart boundary and existing-row behavior.
+
 `auth/migration/redis_source.py:29-34` names P1 (without `index:*`), P3, P4 and
 P5 as the families a cutover carries, and App Ecosystem's reset source carries
 A1 to A5.
