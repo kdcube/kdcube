@@ -17,6 +17,7 @@ from kdcube_ai_app.auth.bundle.session_store import (
     BundleSessionValidationFence,
     BundleSessionValidationState,
 )
+from kdcube_ai_app.auth.bundle.session_issuance_store import SessionIssuanceReservation
 from kdcube_ai_app.auth.session_projection_support import (
     decode_session_projection,
     session_projection_generation_scope,
@@ -190,6 +191,38 @@ class ProjectedBundleSessionStore:
     ) -> None:
         self._authority = authority
         self._projection = projection
+
+    # Issuance remains wholly on the durable authority. A reservation is not a
+    # positive authentication cache entry; validation still checks its live fence.
+    async def read_issuance(self, identity: str) -> SessionIssuanceReservation | None:
+        return await self._authority.read_issuance(identity)
+
+    async def reserve_issuance(
+        self, identity: str, inputs_digest: str, session_id: str, secret_ref: str,
+        expires_at: int, *, session_record: Mapping[str, Any], expected_version: int,
+        user_record: Mapping[str, Any] | None = None,
+        expected_user_revision: int | None = None,
+        delivery_deadline: int | None = None,
+        reserved_until: int | None = None,
+    ) -> SessionIssuanceReservation:
+        return await self._authority.reserve_issuance(
+            identity, inputs_digest, session_id, secret_ref, expires_at,
+            session_record=session_record, expected_version=expected_version,
+            user_record=user_record, expected_user_revision=expected_user_revision,
+            delivery_deadline=delivery_deadline, reserved_until=reserved_until,
+        )
+
+    async def activate_reserved(
+        self, identity: str, *, expected_inputs_digest: str | None = None,
+        activation_digest: str | None = None,
+    ) -> SessionIssuanceReservation:
+        return await self._authority.activate_reserved(
+            identity, expected_inputs_digest=expected_inputs_digest,
+            activation_digest=activation_digest,
+        )
+
+    async def retire_issuance(self, context: object) -> SessionIssuanceReservation | None:
+        return await self._authority.retire_issuance(context)
 
     async def register_user(
         self,

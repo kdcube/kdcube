@@ -45,6 +45,7 @@ def test_shipped_assemblies_start_from_the_migration_source(
 
     assert settings.AUTH.SESSIONS.AUTHORITY.BACKEND == "redis-migration-source"
     assert settings.AUTH.SESSIONS.AUTHORITY.GENERATION_ID == ""
+    assert settings.AUTH.SESSIONS.PLATFORM.BACKEND == "authority"
 
 
 def test_missing_session_authority_selector_keeps_the_migration_source(
@@ -59,6 +60,36 @@ def test_missing_session_authority_selector_keeps_the_migration_source(
 
     assert settings.AUTH.SESSIONS.AUTHORITY.BACKEND == "redis-migration-source"
     assert settings.AUTH.SESSIONS.AUTHORITY.GENERATION_ID == ""
+    assert settings.AUTH.SESSIONS.PLATFORM.BACKEND == "authority"
+
+
+@pytest.mark.parametrize("backend", ["authority", "redis"])
+def test_platform_backend_is_independent_and_descriptor_owned(monkeypatch, tmp_path, backend):
+    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path.write_text(yaml.safe_dump({"auth": {"sessions": {
+        "authority": {"backend": "postgresql", "generation_id": "durable-authority-v1"},
+        "platform": {"backend": backend},
+    }}}), encoding="utf-8")
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+    monkeypatch.setenv("AUTH_SESSIONS_PLATFORM_BACKEND", "invalid-env-override")
+
+    settings = sdk_config.Settings()
+
+    assert settings.AUTH.SESSIONS.PLATFORM.BACKEND == backend
+    assert settings.AUTH.SESSIONS.AUTHORITY.BACKEND == "postgresql"
+    assert settings.AUTH.SESSIONS.AUTHORITY.GENERATION_ID == "durable-authority-v1"
+
+
+@pytest.mark.parametrize("backend", ["postgresql", "redsi", True, {"redis": True}])
+def test_invalid_platform_backend_refuses_configuration(monkeypatch, tmp_path, backend):
+    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path.write_text(yaml.safe_dump({"auth": {"sessions": {
+        "platform": {"backend": backend},
+    }}}), encoding="utf-8")
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+
+    with pytest.raises(ValueError, match="BACKEND"):
+        sdk_config.Settings()
 
 
 def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
@@ -177,6 +208,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
         settings.AUTH.SESSIONS.AUTHORITY.GENERATION_ID
         == "durable-authority-v1"
     )
+    assert settings.AUTH.SESSIONS.PLATFORM.BACKEND == "authority"
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ title: "Platform Assembly Descriptor"
 summary: "Platform-level non-secret deployment configuration in assembly.yaml: tenant/project identity, auth, models, services, ports, storage backends, local runtime paths, and frontend/runtime wiring."
 tags: ["service", "configuration", "platform", "deployment", "assembly", "descriptor"]
 keywords: ["platform deployment identity", "tenant and project scope", "auth and cognito settings", "service port layout", "storage and workspace backends", "runtime path wiring", "application preparation concurrency", "application preparation retry", "bundle descriptor provider", "frontend build metadata", "local compose topology", "aws deployment mapping"]
-updated_at: 2026-10-09
+updated_at: 2026-10-18
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
@@ -312,7 +312,8 @@ The server selects a verifier from token claims (`iss` plus `client_id` or
 ### Session Authority Storage
 
 `auth.sessions.authority` selects the storage authority for bundle users,
-authority versions, bundle sessions, and platform sessions:
+authority versions, and bundle sessions (including the credential issuance
+ledger). Platform/browser session records follow that selection by default:
 
 ```yaml
 auth:
@@ -325,7 +326,45 @@ Shipped descriptors remain in source mode until a reviewed cutover succeeds.
 After apply, set `backend: postgresql` and the exact `generation_id` from the
 activation receipt. PostgreSQL then owns session authority; Redis keeps only
 generation-scoped, TTL-bound read projections whose positive hits are fenced
-against current PostgreSQL state. See
+against current PostgreSQL state.
+
+`auth.sessions.platform.backend` independently selects storage for the
+`SessionManager` browser/request session record:
+
+| Value | Meaning |
+|---|---|
+| `authority` (default) | Follow `auth.sessions.authority`: source-mode Redis or PostgreSQL with a fenced Redis projection. Omitting the option preserves existing behavior. |
+| `redis` | Use the existing atomic Redis session merge/create and native TTL lane, with no PostgreSQL platform-session writes or platform-session projection. |
+
+For disposable browser sessions alongside durable login and Card credentials:
+
+```yaml
+auth:
+  sessions:
+    authority:
+      backend: postgresql
+      generation_id: <activated-generation-id>
+    platform:
+      backend: redis
+```
+
+This mixed mode still requires the exact activated generation for
+`bundle_users`, `bundle_authority_version`, and `bundle_sessions`. Its receipt
+may include `platform_sessions`, but that family is not required. Bundle
+identities, revocation epochs, signed `kst1` backing sessions and bound
+credential issuance remain PostgreSQL-authoritative. The selector does not
+move application state or change Connection Hub's separate authority selector.
+Unknown values fail configuration; there is no environment-variable override.
+
+The Redis record and session-id index use the existing session TTL (24 hours
+by default). Redis loss discards those browser records; subsequent requests
+reconstruct them after the normal authentication checks, and a user may need
+to sign in again. Backend changes are a coordinated service restart boundary,
+not an in-process toggle. Selecting Redis neither migrates nor deletes old
+PostgreSQL platform-session rows, and does not copy them back on a later
+switch. Keep the PostgreSQL authority selection for the bundle families.
+
+See
 [Move Runtime Authority To PostgreSQL](../recipes/operations/move-authority-to-postgresql-README.md).
 
 ### Connection Hub Delegated Credential Adapters

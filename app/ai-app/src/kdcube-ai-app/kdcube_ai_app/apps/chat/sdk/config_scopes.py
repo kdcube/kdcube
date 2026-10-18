@@ -604,16 +604,23 @@ class CognitoTrustedProviderConfig(BaseModel):
 
 
 class SessionAuthorityConfig(BaseModel):
-    """Descriptor-selected authority generation for platform sessions."""
+    """Descriptor-selected authority generation for session families."""
 
     BACKEND: str = ""
     GENERATION_ID: str = ""
+
+
+class PlatformSessionsConfig(BaseModel):
+    """Browser session storage, independently of durable bundle credentials."""
+
+    BACKEND: Literal["authority", "redis"] = "authority"
 
 
 class SessionsConfig(BaseModel):
     AUTHORITY: SessionAuthorityConfig = Field(
         default_factory=SessionAuthorityConfig
     )
+    PLATFORM: PlatformSessionsConfig = Field(default_factory=PlatformSessionsConfig)
 
 
 class AuthConfig(BaseModel):
