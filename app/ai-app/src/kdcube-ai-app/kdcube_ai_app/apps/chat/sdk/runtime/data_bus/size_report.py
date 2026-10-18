@@ -76,7 +76,7 @@ def _label(document: Mapping[str, Any], kind: str, allowed: frozenset[str]) -> s
 
 
 def _operation(document: Mapping[str, Any]) -> str:
-    """A message's application operation, where its payload names one (Problem Board: payload.operation)."""
+    """A message's application operation, where its payload names one (Project Board: payload.operation)."""
     payload = document.get("payload")
     value = payload.get("operation") if isinstance(payload, Mapping) else None
     return value if isinstance(value, str) else ""

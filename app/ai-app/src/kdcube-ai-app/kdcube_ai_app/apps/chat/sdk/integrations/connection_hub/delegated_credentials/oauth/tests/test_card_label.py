@@ -28,7 +28,7 @@ STANDARD = f"Connection Hub CLI · problem_board · claude-code:claude-main:{SES
 
 
 def _worker(name: str, *, provider: str = "claude-code", alias: str = "claude-main", session: str = SESSION) -> dict:
-    """The full worker shape a Problem Board worker registers (local/authorization.py)."""
+    """The full worker shape a Project Board worker registers (local/authorization.py)."""
 
     return {
         "client_name": name,
