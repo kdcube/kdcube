@@ -11,6 +11,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/servicing-interfaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/synch-mechanisms/critical-section-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/redis-key-registry-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/gateway-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/environment/README.md
@@ -27,6 +28,7 @@ Core entry points:
 - Service-facing chat interfaces: [servicing-interfaces-README.md](servicing-interfaces-README.md)
 - Service streams: [streams/README.md](streams/README.md)
 - Synchronization mechanisms and locks: [synch-mechanisms/critical-section-README.md](synch-mechanisms/critical-section-README.md)
+- What Redis holds, family by family, and which families are durable: [redis-key-registry-README.md](redis-key-registry-README.md)
 - Gateway architecture: [gateway-README.md](gateway-README.md)
 - Monitoring & observability: [README-monitoring-observability.md](README-monitoring-observability.md)
 - Control plane configuration: [instance-config-README.md](maintenance/instance-config-README.md)
