@@ -15,7 +15,6 @@ from kdcube_ai_app.auth.bundle import BundleSessionAuthManager, BundleSessionAut
 from kdcube_ai_app.auth.bundle.session_issuance import SessionIssuanceRefused
 from kdcube_ai_app.auth.platform_session_schema import TABLE_PLATFORM_SESSIONS
 from kdcube_ai_app.auth.session_authority_runtime import (
-    KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES,
     KDCUBE_SESSION_AUTHORITY_FAMILIES,
     SessionAuthorityUnavailable,
     open_configured_session_authority,
@@ -26,6 +25,8 @@ from kdcube_ai_app.auth.sessions import RequestContext, SessionManager, UserType
 from kdcube_ai_app.auth.tests.test_bound_session_issuance_store import counts, store
 from kdcube_ai_app.auth.tests.test_bound_session_issuer import context as committed_context
 from kdcube_ai_app.auth.tests.test_planned_session_issuer import applied, plan
+
+BUNDLE_FAMILIES = ("bundle_users", "bundle_sessions", "bundle_authority_version")
 
 
 @pytest.fixture(autouse=True)
@@ -51,9 +52,9 @@ def _settings(scope, *, backend="postgresql", platform_backend="redis"):
 @pytest.mark.parametrize("platform_backend,receipt_families,ready", [
     ("authority", KDCUBE_SESSION_AUTHORITY_FAMILIES, True),
     ("redis", KDCUBE_SESSION_AUTHORITY_FAMILIES, True),
-    ("redis", KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES, True),
-    ("authority", KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES, False),
-    ("redis", KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES[:-1], False),
+    ("redis", BUNDLE_FAMILIES, True),
+    ("authority", BUNDLE_FAMILIES, False),
+    ("redis", BUNDLE_FAMILIES[:-1], False),
 ])
 async def test_runtime_selected_store_keeps_bound_issuance_on_postgres(
     store, platform_backend, receipt_families, ready,

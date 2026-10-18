@@ -10,7 +10,6 @@ from connection_hub.delegated_credentials.authority_config import (
 from kdcube_ai_app.auth.bundle.sessions import BundleSessionAuthority
 from kdcube_ai_app.auth.session_authority_runtime import (
     KDCUBE_SESSION_AUTHORITY_FAMILIES,
-    KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES,
     SessionAuthorityUnavailable,
     activate_session_authority_stores,
     bundle_session_store_for,
@@ -19,6 +18,8 @@ from kdcube_ai_app.auth.session_authority_runtime import (
     reset_session_authority_runtime_for_tests,
 )
 from kdcube_ai_app.auth.sessions import SessionManager
+
+BUNDLE_FAMILIES = ("bundle_users", "bundle_sessions", "bundle_authority_version")
 
 
 @pytest.fixture(autouse=True)
@@ -253,7 +254,7 @@ async def test_prepare_publishes_stores_only_after_the_exact_receipt(
         (
             "receipt",
             "durable-authority-v1",
-            KDCUBE_BUNDLE_SESSION_AUTHORITY_FAMILIES if mixed else KDCUBE_SESSION_AUTHORITY_FAMILIES,
+            BUNDLE_FAMILIES if mixed else KDCUBE_SESSION_AUTHORITY_FAMILIES,
         ),
     ]
     manager = SessionManager("redis://unused", tenant="tenant-a", project="project-a")
