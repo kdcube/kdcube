@@ -48,7 +48,7 @@ psycopg2-binary==2.9.10
 psycopg[binary]>=3.1
 # Delegated-access authority shared with the Connection Hub application.
 connection-hub>=2026.10.17.2026,<2027
-# Problem Board contracts and the packaged worker client used by its built-in app.
+# Project Board contracts and the packaged worker client used by its built-in app.
 project-board>=2026.10.17.2026,<2027
 # Host-neutral MCP client construction and result normalization.
 app-foundation[mcp]>=2026.10.17.2026,<2027

@@ -25,7 +25,7 @@ def _asserted_worker_identity(asserted: Mapping[str, Any]) -> str:
 
     The shape is what a KDCube host worker registers (``kdcube_worker_id``,
     ``kdcube_worker_alias``, ``kdcube_agent_provider`` and
-    ``kdcube_agent_session_id``), for example every Problem Board worker. A
+    ``kdcube_agent_session_id``), for example every Project Board worker. A
     client asserting only some of these keeps the general naming rule.
     """
 

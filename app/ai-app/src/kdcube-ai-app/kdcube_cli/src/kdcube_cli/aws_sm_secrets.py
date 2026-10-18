@@ -46,7 +46,7 @@ STATUS_NEW = "new"
 STATUS_EQUAL = "equal"
 STATUS_DIFFERENT = "different"
 
-# Matched pairs: one value that two apps must both hold (Problem Board and Connection Hub sign and
+# Matched pairs: one value that two apps must both hold (Project Board and Connection Hub sign and
 # verify each other's requests with it). An import that would leave the two sides different is refused.
 _PB = "bundles.problem-board@1-0.secrets."
 _CH = "bundles.connection-hub@1-0.secrets."

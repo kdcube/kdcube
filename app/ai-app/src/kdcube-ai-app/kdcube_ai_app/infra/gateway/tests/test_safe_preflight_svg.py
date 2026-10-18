@@ -1,6 +1,6 @@
 """An SVG is accepted as a picture and refused as a document.
 
-Problem Board renders a diagram attached to a report, and until this existed no
+Project Board renders a diagram attached to a report, and until this existed no
 diagram could ever reach that renderer: the preflight refused image/svg+xml as
 an unsupported type, so the render path was unreachable and the refusal reached
 the sender only as a 422 after five silent retries.

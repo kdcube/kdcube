@@ -48,7 +48,7 @@ def test_problem_board_host_images_use_the_same_compatibility_floor() -> None:
         for filename in PROJECT_BOARD_HOST_REQUIREMENTS
     }
     assert requirements == {PROJECT_BOARD_REQUIREMENT}, (
-        "Problem Board host images must use the shared compatibility floor "
+        "Project Board host images must use the shared compatibility floor "
         f"{PROJECT_BOARD_REQUIREMENT}; found {requirements}"
     )
 

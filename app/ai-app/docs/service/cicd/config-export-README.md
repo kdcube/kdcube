@@ -308,7 +308,7 @@ kdcube config import --aws-sm-prefix kdcube/<tenant>/<project> --aws-region <reg
   `--write-rule overwrite` (the default) writes new and changed keys;
   `--write-rule write-new` writes only keys that have no value yet. Keys not in
   the folder are left as they are; deletion is always explicit.
-- **Matched pairs.** Problem Board and Connection Hub hold three values in
+- **Matched pairs.** Project Board and Connection Hub hold three values in
   common: peer proof (`problem-board@1-0` `connection_hub.peer_proof_secret` /
   `connection-hub@1-0` `project_membership.peer_proof_secret`), peer receipt
   (`connection_hub.peer_receipt_secret` /
