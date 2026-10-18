@@ -44,8 +44,10 @@ def test_default_descriptor_uses_one_role_ceiling_for_application_downscoping() 
         resource for resource in oauth["resources"] if resource.get("resource") == "*"
     )
 
-    assert all_applications["admin_only"] is True
-    assert all_applications["grants"] == ["kdcube:role:super-admin"]
+    # The default offers every platform role; the approver's delegable role
+    # ceiling still narrows the choices and the resulting authority.
+    assert all_applications.get("admin_only", False) is False
+    assert all_applications["grants"] == DELEGABLE_PLATFORM_ROLES
     assert capabilities["kdcube:role:registered"]["delegable_roles"] == (
         DELEGABLE_PLATFORM_ROLES
     )
@@ -67,7 +69,7 @@ def test_default_descriptor_uses_one_role_ceiling_for_application_downscoping() 
         for resource in access_map["resources"]
         if resource.get("resource") == "*"
     )
-    assert all_applications_view["grant_union"] == ["kdcube:role:super-admin"]
+    assert all_applications_view["grant_union"] == DELEGABLE_PLATFORM_ROLES
     assert {
         grant["grant"]: grant["delegable_roles"]
         for grant in access_map["grants"]

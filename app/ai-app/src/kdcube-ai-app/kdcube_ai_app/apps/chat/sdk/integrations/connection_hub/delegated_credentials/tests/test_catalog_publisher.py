@@ -164,7 +164,8 @@ async def test_unhashable_connections_are_a_publication_error(tmp_path, cache):
     store = BundleStorageDelegatedCatalogStore(tmp_path)
     with pytest.raises(CatalogPublicationError) as exc:
         await _ensure({"resources": {object()}}, store, cache)
-    assert exc.value.reason == "connections_not_hashable"
+    # Unsupported wire values are refused before the content-hash step.
+    assert exc.value.reason == "connections_not_wire_safe"
     assert await store.read_active() is None
 
 
@@ -267,5 +268,5 @@ async def test_an_unhashable_reread_is_a_publication_error(tmp_path, cache):
 
     with pytest.raises(CatalogPublicationError) as exc:
         await _ensure(CONNECTIONS, store, cache, reread=_reread)
-    assert exc.value.reason == "connections_not_hashable"
+    assert exc.value.reason == "connections_not_wire_safe"
     assert await store.read_active() is None

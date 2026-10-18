@@ -27,7 +27,6 @@ from connection_hub.delegated_credentials.cards.card_participant import (
 from connection_hub.delegated_credentials.cards.credential_handles import RedisCardCredentialHandleStore
 from connection_hub.delegated_credentials.cards.effect_targets import compose_card_effects
 from connection_hub.delegated_credentials.cards.persistence import DurableCardPersistence
-from connection_hub.delegated_credentials.cards.service import DelegatedCardService
 from connection_hub.delegated_credentials.cards.store import BundleStorageDelegatedCardStore, subject_hash_for
 from connection_hub.delegated_credentials.catalog.models import CatalogDocument
 from connection_hub.delegated_credentials.oauth.authority_store import PostgresOAuthAuthorityStore
@@ -75,17 +74,14 @@ async def hub_world(tmp_path, monkeypatch, secrets_rig):
         @asynccontextmanager
         async def mutation_lock(**kwargs):
             yield
-        cache = SimpleNamespace(**{name: AsyncMock(return_value=value) for name, value in {
-            "claim_transition": True, "reconcile_projection": False, "commit_projection": True,
-            "commit_tombstone": True, "index_add": None, "index_remove": None,
-            "finalize_removal": None, "read": None}.items()})
         r.cards = BundleStorageDelegatedCardStore(tmp_path / "hub-cards")
         transaction_store.bind_transaction_decisions(r.cards, DecisionStorePort(decisions))
-        cards = DelegatedCardService(store=r.cards, cache=cache, mutation_lock=mutation_lock)
         handles = RedisCardCredentialHandleStore(redis, tenant=r.tenant, project=r.project)
         persistence = DurableCardPersistence(redis=redis, tenant=r.tenant, project=r.project,
             card_store=r.cards, mutation_lock=mutation_lock, credential_handles=handles)
-        persistence._cards = cards
+        # Reuse persistence's composed service and its real Redis projection.
+        # The intent source and participant must use this same service.
+        cards = persistence.card_service
         @asynccontextmanager
         async def policy_lock(**kwargs):
             yield {}
@@ -94,7 +90,7 @@ async def hub_world(tmp_path, monkeypatch, secrets_rig):
             mutation_lock=policy_lock)
         compose_card_effects(card_service=cards, card_store=r.cards, grant_store=r.grants,
                              policies=r.policies, issuance_store=r.oauth, credential_handles=handles)
-        intents = LocalCardIntentSource(r.cards)
+        intents = LocalCardIntentSource(r.cards, service=cards, decisions=decisions)
         participant = HubCardParticipant(service=cards, store=r.cards, intents=intents, decisions=decisions)
         connections = {"delegated_credentials": {"oauth": {"enabled": True,
             "capabilities": [{"grant": "records:read", "label": "Read records",

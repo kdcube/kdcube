@@ -20,17 +20,27 @@ async def test_argument_digest_matches_real_hub_begin_defaults(changes):
     inputs = {"grantor_subject": "human", "client_id": "unit-client", **changes}
     normalized = oauth_issuance_arguments(inputs)
     captured = SimpleNamespace()
+    planned_at = 1999999940
     class Store:
         async def read_issuance_plan_request(self, request):
+            captured.request = request
             return None
         async def put_issuance_plan(self, **value):
             return {"plan": value["plan"]}
-    service = object.__new__(AutomationAccessService)
+        async def delete_plan_attempt(self, request, *, planned_at):
+            captured.deleted_attempt = (request, planned_at)
+    # This test captures public begin arguments without composing Card storage.
+    # Initialize its persistence port so the real request-section lookup can
+    # select the documented lock-free unit composition.
+    service = AutomationAccessService(
+        redis=object(), tenant="unit", project="unit", config=SimpleNamespace(),
+        grant_store=object(), card_persistence=SimpleNamespace(card_store=None),
+    )
     service._issuance_parts = lambda: (object(), object(), object(), 60, Store())
     async def plan(**value):
         captured.digest, captured.arguments = value["input_digest"], value["record_inputs"]
         captured.policies = value["invocation_policies"]
-        return {"reserved_until": 2000000000}
+        return {"planned_at": planned_at, "reserved_until": planned_at + 60}
     async def begin(plan, **kwargs):
         return plan
     service._plan_oauth_issuance, service._begin_planned_issuance = plan, begin
@@ -39,6 +49,7 @@ async def test_argument_digest_matches_real_hub_begin_defaults(changes):
     assert captured.arguments == {key: value for key, value in normalized.items()
                                    if key not in {"grantor_subject", "client_id", "invocation_policies"}}
     assert captured.policies == normalized.get("invocation_policies")
+    assert captured.deleted_attempt == (captured.request, planned_at)
 
 
 def test_argument_normalization_freezes_nested_host_input():
