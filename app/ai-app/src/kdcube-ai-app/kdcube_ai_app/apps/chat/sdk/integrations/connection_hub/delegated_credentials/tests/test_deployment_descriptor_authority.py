@@ -69,7 +69,7 @@ def test_default_descriptor_uses_one_role_ceiling_for_application_downscoping() 
         for resource in access_map["resources"]
         if resource.get("resource") == "*"
     )
-    assert all_applications_view["grant_union"] == DELEGABLE_PLATFORM_ROLES
+    assert all_applications_view["grant_union"] == sorted(DELEGABLE_PLATFORM_ROLES)
     assert {
         grant["grant"]: grant["delegable_roles"]
         for grant in access_map["grants"]
