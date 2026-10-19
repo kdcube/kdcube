@@ -47,11 +47,11 @@ psycopg2-binary==2.9.10
 # shared pool); only these framework stores need psycopg v3.
 psycopg[binary]>=3.1
 # Delegated-access authority shared with the Connection Hub application.
-connection-hub>=2026.10.17.2026,<2027
+connection-hub>=2026.10.19.1800,<2027
 # Project Board contracts and the packaged worker client used by its built-in app.
-project-board>=2026.10.17.2026,<2027
+project-board>=2026.10.19.1800,<2027
 # Host-neutral MCP client construction and result normalization.
-app-foundation[mcp]>=2026.10.17.2026,<2027
+app-foundation[mcp]>=2026.10.19.1800,<2027
 
 ddgs
 semantic-kernel

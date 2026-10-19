@@ -9,12 +9,12 @@ CONFIG_IMPORTING_REQUIREMENTS = (
     "requirements-dbdeploy.txt",
     "requirements-metric-service.txt",
 )
-CONNECTION_HUB_REQUIREMENT = "connection-hub>=2026.10.17.2026,<2027"
+CONNECTION_HUB_REQUIREMENT = "connection-hub>=2026.10.19.1800,<2027"
 PROJECT_BOARD_HOST_REQUIREMENTS = (
     "requirements-chat.txt",
     "requirements-chat-processor.txt",
 )
-PROJECT_BOARD_REQUIREMENT = "project-board>=2026.10.17.2026,<2027"
+PROJECT_BOARD_REQUIREMENT = "project-board>=2026.10.19.1800,<2027"
 
 
 def _requirement(filename: str, distribution: str) -> str:
