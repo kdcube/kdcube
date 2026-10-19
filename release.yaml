@@ -1,17 +1,18 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.10.18.158"
+  ref: "2026.10.19.1830"
   description: |
-    This release follows 2026.10.17.2103. It publishes the platform images
+    This release follows 2026.10.18.158. It publishes the platform images
     and the tag, and it is the record the packaged CLI is published from.
 
-    **The chat-ingress image installs app-foundation.** The ingress web app
-    imports the conversation search, which reaches the index and vector-store
-    primitives of app-foundation. The 2026.10.17.2103 ingress image did not
-    install that package and failed at startup with "No module named
-    'app_foundation'". The ingress requirements now declare
-    app-foundation >=2026.10.17.2026 (#396), the floor the processor and
-    executor images already use.
+    The processor and executor require connection-hub, project-board and
+    app-foundation[mcp] >=2026.10.19.1800,<2027. The ingress requires
+    connection-hub and app-foundation at the same floor. This includes the
+    Project Board client operation-deadline update and the Connection Hub
+    participant failure diagnostics from that package set.
+
+    These ranges set minimum versions; the release image verification records
+    the installed package versions and image identities.
 
 config:
-  version: "2026.10.18.158"
+  version: "2026.10.19.1830"
