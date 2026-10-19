@@ -8,8 +8,8 @@ platform:
     The processor and executor require connection-hub, project-board and
     app-foundation[mcp] >=2026.10.19.1800,<2027. The ingress requires
     connection-hub and app-foundation at the same floor. This includes the
-    Project Board client operation-deadline update and the Connection Hub
-    participant failure diagnostics from that package set.
+    Project Board worker contract and CLI for importing project exports, and
+    the Connection Hub participant failure diagnostics from that package set.
 
     These ranges set minimum versions; the release image verification records
     the installed package versions and image identities.
