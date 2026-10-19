@@ -1,18 +1,25 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.10.19.1830"
+  ref: "2026.10.19.2230"
   description: |
-    This release follows 2026.10.18.158. It publishes the platform images
+    This release follows 2026.10.19.1830. It publishes the platform images
     and the tag, and it is the record the packaged CLI is published from.
 
     The processor and executor require connection-hub, project-board and
-    app-foundation[mcp] >=2026.10.19.1800,<2027. The ingress requires
-    connection-hub and app-foundation at the same floor. This includes the
+    app-foundation[mcp] >=2026.10.19.2200,<2027. The ingress requires
+    connection-hub and app-foundation at the same floor. The dbdeploy and
+    metric-service images require connection-hub at that floor too. This includes the
     Project Board worker contract and CLI for importing project exports, and
     the Connection Hub participant failure diagnostics from that package set.
+
+    The 2026.10.19.2200 pb set also includes the Connection Hub Card lock
+    policy check through INFO memory when CONFIG is restricted, as on
+    ElastiCache (elenaviter/app-ecosystem#861). An explicit noeviction policy
+    is still required; unknown policies remain refused. No Redis topology
+    or eviction-policy configuration is changed.
 
     These ranges set minimum versions; the release image verification records
     the installed package versions and image identities.
 
 config:
-  version: "2026.10.19.1830"
+  version: "2026.10.19.2230"
