@@ -17,7 +17,7 @@ psycopg2-binary==2.9.10
 Pillow
 
 # Shared descriptor and authority configuration.
-connection-hub>=2026.10.17.2026,<2027
+connection-hub>=2026.10.19.1800,<2027
 
 # CloudWatch export
 -r requirements-aws.txt
