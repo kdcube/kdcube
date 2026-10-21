@@ -493,6 +493,24 @@ def _allowed_bundle_ids() -> Set[str] | None:
     return set(value) | {ADMIN_BUNDLE_ID}
 
 
+def allowed_bundle_ids_are_current() -> bool:
+    """False when this process's allow-list predates the assembly descriptor.
+
+    The allow-list filters every registry and props read in this process. During
+    a rolling replacement an older process keeps its startup list, so anything it
+    projects from those reads can omit apps the deployment now allows.
+    """
+    settings = get_settings()
+    try:
+        current = settings.current_assembly_bundle_allowlist()
+    except ValueError:
+        return False
+    loaded = getattr(settings.PLATFORM.APPLICATIONS, "ALLOWED_BUNDLE_IDS", None)
+    if current is None or loaded is None:
+        return current is None and loaded is None
+    return set(current) == set(loaded)
+
+
 def _bundle_allowed(bundle_id: str) -> bool:
     allowed = _allowed_bundle_ids()
     return allowed is None or bundle_id in allowed

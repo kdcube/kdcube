@@ -99,7 +99,8 @@ browser-authentication fields into a versioned catalog:
 ```text
 bundles.yaml application config
         |
-        | startup / application update / properties update
+        | startup / application update / properties update /
+        | application ready / periodic reconcile
         v
 validated ApplicationSiteCatalog
         |
@@ -118,6 +119,15 @@ The projection is derived and rebuildable. Redis distributes generations; it
 is not the descriptor authority. A proc subscribes before loading the current
 snapshot, then rejects delayed generations. Request handlers never read Redis,
 parse YAML, or scan application properties.
+
+Every publication replaces the stored catalog, so the last publisher wins. A
+proc does not publish when its `allowed_bundle_ids` predate the assembly
+descriptor (the list is resolved once per process, and during a rolling
+replacement an older task would omit newly allowed apps); it keeps the stored
+catalog and logs that it should be restarted. A catalog whose revision equals
+the stored one is not published again. Proc refreshes the catalog when an
+application becomes ready and on the periodic bundle reconcile, so a catalog
+left by an older peer converges on the current view.
 
 Invalid aliases, duplicate aliases, duplicate host declarations, and multiple
 defaults are rejected while compiling the catalog. The previous valid hot

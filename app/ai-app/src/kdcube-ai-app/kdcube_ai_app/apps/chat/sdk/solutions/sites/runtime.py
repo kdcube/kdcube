@@ -120,9 +120,19 @@ async def refresh_application_site_catalog(
     runtime: Optional[ApplicationSiteCatalogRuntime] = None,
     route_prefix: Any = None,
 ) -> ApplicationSiteCatalog:
-    """Project authoritative app properties into the distributed site catalog."""
+    """Project authoritative app properties into the distributed site catalog.
 
-    from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props
+    Publishing is skipped, and the stored catalog kept, when this process's
+    allowed_bundle_ids predate the assembly descriptor: its registry and props
+    reads omit apps the deployment now allows. A catalog whose revision equals
+    the stored one is not published again, so periodic refreshes add no
+    generations.
+    """
+
+    from kdcube_ai_app.infra.plugin.bundle_store import (
+        allowed_bundle_ids_are_current,
+        get_bundle_props,
+    )
 
     if not hasattr(applications, "items"):
         raise TypeError("applications must be a mapping of application id to runtime spec")
@@ -153,6 +163,34 @@ async def refresh_application_site_catalog(
         application_specs=application_specs,
         route_prefix=route_prefix,
     )
+    try:
+        stored = await load_application_site_catalog(redis, tenant=tenant, project=project)
+    except Exception:
+        logger.warning(
+            "Stored application site catalog is unreadable; publishing a replacement: tenant=%s project=%s",
+            tenant,
+            project,
+            exc_info=True,
+        )
+        stored = None
+    if not allowed_bundle_ids_are_current():
+        logger.warning(
+            "Application site catalog not published: this process's allowed_bundle_ids predate "
+            "the assembly descriptor; restart it to project the current apps. "
+            "tenant=%s project=%s kept_revision=%s",
+            tenant,
+            project,
+            stored.revision if stored is not None else None,
+        )
+        if stored is not None:
+            if runtime is not None:
+                runtime.replace(stored)
+            return stored
+        return catalog
+    if stored is not None and stored.revision == catalog.revision:
+        if runtime is not None:
+            runtime.replace(stored)
+        return stored
     projected = await publish_application_site_catalog(redis, catalog)
     if runtime is not None:
         runtime.replace(projected)

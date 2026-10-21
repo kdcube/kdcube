@@ -182,6 +182,7 @@ apps/chat/proc/web_app.py
         |         apps/chat/proc/app_lifecycle/supervisor.py
         |         infra/plugin/app_readiness.py
         |           `-- ready callback reconciles scheduler + Data Bus
+        |               and the site catalog
         |                 apps/chat/processor.py
         |
         `-- [6] on failure or a newer desired generation
