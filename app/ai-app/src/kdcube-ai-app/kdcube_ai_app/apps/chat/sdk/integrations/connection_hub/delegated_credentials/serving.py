@@ -17,6 +17,20 @@ SERVING_RESOLVERS_ATTR = _core.SERVING_RESOLVERS_ATTR
 DelegatedServingResolvers = _core.DelegatedServingResolvers
 delegated_serving_resolvers = _core.delegated_serving_resolvers
 
+# Set by Connection Hub on each request it binds: that request's own External MCP
+# family policy, an immutable value read from its descriptor.
+PROJECT_RESOURCE_FAMILIES_STATE_ATTR = "connection_hub_project_resource_families"
+
+
+def project_resource_families_kwargs(request: Any) -> dict[str, Any]:
+    """The live-grant keyword that carries this request's External MCP family policy.
+
+    Empty when the request carries none (a Connection Hub that does not bind one):
+    the composition then keeps the switch closed, as such a Hub does itself.
+    """
+    value = getattr(getattr(request, "state", None), PROJECT_RESOURCE_FAMILIES_STATE_ATTR, None)
+    return {} if value is None else {"project_families": value}
+
 
 def connection_hub_app_id() -> str:
     from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surface import (
@@ -123,9 +137,11 @@ def __dir__() -> list[str]:
 __all__ = [
     "SERVING_RESOLVERS_ATTR",
     "DelegatedServingResolvers",
+    "PROJECT_RESOURCE_FAMILIES_STATE_ATTR",
     "build_delegated_serving_resolvers",
     "connection_hub_app_id",
     "delegated_card_store",
     "delegated_serving_resolvers",
     "install_delegated_serving_resolvers",
+    "project_resource_families_kwargs",
 ]

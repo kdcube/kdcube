@@ -64,6 +64,7 @@ from connection_hub.delegated_credentials.catalog.resolver import (
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
     delegated_serving_resolvers,
+    project_resource_families_kwargs,
 )
 from connection_hub.authority_projection import (
     authority_has_platform_privilege,
@@ -651,6 +652,8 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
         expected_grantor_subject=str(attrs.get("grantor_subject") or ""),
         expected_delegate_subject=str(credential.get("subject") or ""),
         card_store=card_store,
+        # The Hub's own External MCP family policy for this request (closed without one).
+        **project_resource_families_kwargs(request),
     )
     if composition is None:
         LOGGER.info("[connection-hub.oauth.guard] registry card %s gone — binding treated as revoked", access_id)

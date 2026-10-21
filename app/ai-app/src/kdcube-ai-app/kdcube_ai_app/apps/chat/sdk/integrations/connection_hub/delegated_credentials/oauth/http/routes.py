@@ -80,6 +80,7 @@ from connection_hub.delegated_credentials.cards.identity import (
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
     delegated_card_store,
     delegated_serving_resolvers,
+    project_resource_families_kwargs,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import (
     CardCommitFailed,
@@ -3704,6 +3705,8 @@ async def token(request: Request) -> Response:
                     expected_grantor_subject=str(rec.get("sub") or ""),
                     expected_delegate_subject=str(credential.get("subject") or ""),
                     card_store=card_store,
+                    # The Hub's own External MCP family policy for this request (closed without one).
+                    **project_resource_families_kwargs(request),
                 )
             except LiveGrantCardError as exc:
                 LOGGER.warning(
