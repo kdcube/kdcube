@@ -88,3 +88,54 @@ async def test_catalog_reconcile_failure_does_not_break_readiness(monkeypatch, c
     await processor.reconcile_application_runtime("application-ready:landing@1")
 
     assert processor.scheduler_reasons == ["application-ready:landing@1"]
+
+
+@pytest.mark.asyncio
+async def test_application_ready_refreshes_the_catalog_when_the_scheduler_fails(catalog_refreshes) -> None:
+    processor = _processor()
+
+    async def _scheduler_fails(reason):
+        raise RuntimeError("scheduler reconcile failed")
+
+    processor._reconcile_bundle_scheduler_from_authority = _scheduler_fails
+
+    with pytest.raises(RuntimeError, match="scheduler reconcile failed"):
+        await processor.reconcile_application_runtime("application-ready:landing@1")
+
+    assert len(catalog_refreshes) == 1
+
+
+@pytest.mark.asyncio
+async def test_application_ready_cancellation_skips_the_catalog_refresh(catalog_refreshes) -> None:
+    processor = _processor()
+
+    async def _cancelled(reason):
+        raise asyncio.CancelledError()
+
+    processor._reconcile_bundle_scheduler_from_authority = _cancelled
+
+    with pytest.raises(asyncio.CancelledError):
+        await processor.reconcile_application_runtime("application-ready:landing@1")
+
+    assert catalog_refreshes == []
+
+
+@pytest.mark.asyncio
+async def test_periodic_reconcile_refreshes_the_catalog_when_the_scheduler_fails(catalog_refreshes) -> None:
+    processor = _processor()
+    processor._bundle_scheduler_reconcile_interval_sec = 0.0
+    processor._stop_event = asyncio.Event()
+    attempts: list[str] = []
+
+    async def _scheduler_fails(reason):
+        attempts.append(reason)
+        if len(attempts) >= 2:
+            processor._stop_event.set()
+        raise RuntimeError("scheduler reconcile failed")
+
+    processor._reconcile_bundle_scheduler_from_authority = _scheduler_fails
+
+    await asyncio.wait_for(processor._bundle_scheduler_reconcile_loop(), timeout=5)
+
+    assert attempts == ["periodic", "periodic"]
+    assert len(catalog_refreshes) == 2

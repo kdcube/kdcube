@@ -989,8 +989,18 @@ class EnhancedChatRequestProcessor:
             )
 
     async def reconcile_application_runtime(self, reason: str) -> None:
-        """Refresh app-owned scheduler/Data Bus adapters and the site catalog after an app becomes ready."""
-        await self._reconcile_bundle_scheduler_from_authority(reason)
+        """Refresh app-owned scheduler/Data Bus adapters and the site catalog after an app becomes ready.
+
+        A scheduler or Data Bus failure still propagates, but the site catalog is
+        refreshed first: an adapter failure must not keep an older peer's catalog.
+        """
+        try:
+            await self._reconcile_bundle_scheduler_from_authority(reason)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await self._reconcile_site_catalog(reason)
+            raise
         await self._reconcile_site_catalog(reason)
 
     async def quiesce_application_runtime(self, bundle_id: str) -> dict[str, int]:
@@ -1027,7 +1037,13 @@ class EnhancedChatRequestProcessor:
                 await asyncio.sleep(interval + jitter)
                 if self._stop_event.is_set():
                     break
-                await self._reconcile_bundle_scheduler_from_authority("periodic")
+                try:
+                    await self._reconcile_bundle_scheduler_from_authority("periodic")
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.warning("Periodic bundle scheduler reconcile failed", exc_info=True)
+                # Independent of the adapters: their failure must not keep an older peer's catalog.
                 await self._reconcile_site_catalog("periodic")
             except asyncio.CancelledError:
                 break
