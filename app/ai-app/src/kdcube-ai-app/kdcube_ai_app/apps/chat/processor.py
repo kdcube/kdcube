@@ -955,9 +955,43 @@ class EnhancedChatRequestProcessor:
             self._data_bus_manager is not None,
         )
 
+    async def _reconcile_site_catalog(self, reason: str) -> None:
+        """Republish this process's site catalog when it differs from the stored one.
+
+        Every catalog publication replaces the stored one, so a peer with an older
+        view can publish last (for example an older task during a rolling
+        replacement). Refreshing on app readiness and periodically lets a current
+        process restore the catalog once that peer is gone.
+        """
+        from kdcube_ai_app.apps.chat.sdk.solutions.sites import (
+            application_site_catalog_runtime,
+            refresh_application_site_catalog,
+        )
+        from kdcube_ai_app.infra.plugin.bundle_registry import get_all
+
+        settings = get_settings()
+        try:
+            await refresh_application_site_catalog(
+                self.redis,
+                tenant=settings.TENANT,
+                project=settings.PROJECT,
+                applications=get_all(),
+                runtime=application_site_catalog_runtime,
+                route_prefix=settings.plain("proxy.route_prefix"),
+            )
+        except Exception:
+            logger.warning(
+                "Application site catalog reconcile failed: reason=%s tenant=%s project=%s",
+                reason,
+                settings.TENANT,
+                settings.PROJECT,
+                exc_info=True,
+            )
+
     async def reconcile_application_runtime(self, reason: str) -> None:
-        """Refresh app-owned scheduler/Data Bus adapters after an app becomes ready."""
+        """Refresh app-owned scheduler/Data Bus adapters and the site catalog after an app becomes ready."""
         await self._reconcile_bundle_scheduler_from_authority(reason)
+        await self._reconcile_site_catalog(reason)
 
     async def quiesce_application_runtime(self, bundle_id: str) -> dict[str, int]:
         """Stop one app's recurring intake and wait for its executing tasks."""
@@ -994,6 +1028,7 @@ class EnhancedChatRequestProcessor:
                 if self._stop_event.is_set():
                     break
                 await self._reconcile_bundle_scheduler_from_authority("periodic")
+                await self._reconcile_site_catalog("periodic")
             except asyncio.CancelledError:
                 break
             except Exception:

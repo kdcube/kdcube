@@ -1836,6 +1836,17 @@ class Settings(PLATFORM_CONFIG):
         # picked up automatically by Pydantic — no manual resolution needed here.
         self.RUNTIME_CONFIG = RUNTIME_CONFIG()
 
+    def current_assembly_bundle_allowlist(self) -> list[str] | None:
+        """``allowed_bundle_ids`` as the assembly descriptor states it now.
+
+        ``PLATFORM.APPLICATIONS.ALLOWED_BUNDLE_IDS`` is resolved once per process,
+        so a process started before an assembly update keeps the older list.
+        """
+        component = (self.GATEWAY_COMPONENT or "").strip().lower()
+        return self._assembly_bundle_allowlist(
+            f"platform.services.{component}.bundles.allowed_bundle_ids"
+        )
+
     def plain(self, key: str, default: Any = None) -> Any:
         path, dotted_path = _parse_plain_key(key)
         token = _descriptor_cache_token(path)
