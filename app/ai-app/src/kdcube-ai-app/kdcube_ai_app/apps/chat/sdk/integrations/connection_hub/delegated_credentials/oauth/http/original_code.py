@@ -26,8 +26,10 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 
 
 LOGGER = logging.getLogger("kdcube.connection_hub.oauth")
-# A finite reason code (``original_exchange_candidate_mismatch``); free text may carry provider details.
-_REASON_CODE = re.compile(r"[a-z][a-z0-9_]{0,95}")
+# A finite reason code (``original_exchange_candidate_mismatch``): a known prefix, then letters-only
+# segments. Free text may carry provider details, and a bare lowercase token (hex, a key) must never
+# pass as a code, so digits and unknown prefixes are refused.
+_REASON_CODE = re.compile(r"(?:original_exchange|oauth|issuance|card)(?:_[a-z]{1,24}){1,8}")
 
 
 def _reason(exc: BaseException) -> str:

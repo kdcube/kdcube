@@ -133,6 +133,25 @@ async def test_a_host_reason_code_is_logged_but_never_free_text(caplog):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("secret", [
+    "a" + "0123456789abcdef" * 3 + "0123456789abcde",   # a 64-character lowercase hex token
+    "sk_live_" + "abcdefghij" * 4,                       # a key-shaped value
+    "original_exchange_" + "ab12cd34",                   # a known prefix with digits
+    "candidate_mismatch",                                # an unknown prefix
+])
+async def test_a_token_shaped_message_never_reaches_the_log(caplog, secret):
+    """claude-e-app's review of #410: a lowercase token passed the first reason filter."""
+    async def leaked(**kwargs):
+        raise RuntimeError(secret)
+
+    caplog.set_level("INFO", logger="kdcube.connection_hub.oauth")
+    response = await routes.token(request(lambda: handler(leaked)))
+    assert response.status_code == 503
+    assert "reason=RuntimeError" in caplog.text
+    assert secret not in caplog.text and secret.encode() not in response.body
+
+
+@pytest.mark.asyncio
 async def test_an_unbound_host_capability_names_its_reason(caplog):
     caplog.set_level("INFO", logger="kdcube.connection_hub.oauth")
     response = await routes.token(request(None))
