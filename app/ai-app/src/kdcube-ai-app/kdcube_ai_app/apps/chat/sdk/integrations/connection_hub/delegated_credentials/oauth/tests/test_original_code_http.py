@@ -109,6 +109,38 @@ async def test_provider_error_never_echoes_credentials_or_exception_details():
 
 
 @pytest.mark.asyncio
+async def test_a_host_reason_code_is_logged_but_never_free_text(caplog):
+    """W929: a host refusal raised as a bare reason code was answered 503 with nothing logged, so a
+    deterministic failure looked transient. The log names the class and the code, never other text."""
+    class HostUnavailable(RuntimeError):
+        pass
+
+    async def coded(**kwargs):
+        raise HostUnavailable("original_exchange_candidate_mismatch")
+
+    async def free_text(**kwargs):
+        raise KeyError("unit-canary-provider-detail")
+
+    caplog.set_level("INFO", logger="kdcube.connection_hub.oauth")
+    response = await routes.token(request(lambda: handler(coded)))
+    assert response.status_code == 503
+    assert "reason=HostUnavailable:original_exchange_candidate_mismatch" in caplog.text
+    caplog.clear()
+    response = await routes.token(request(lambda: handler(free_text)))
+    assert response.status_code == 503
+    assert "reason=KeyError" in caplog.text and "unit-canary" not in caplog.text
+    assert b"unit-canary" not in response.body
+
+
+@pytest.mark.asyncio
+async def test_an_unbound_host_capability_names_its_reason(caplog):
+    caplog.set_level("INFO", logger="kdcube.connection_hub.oauth")
+    response = await routes.token(request(None))
+    assert response.status_code == 503
+    assert "reason=original_exchange_not_bound" in caplog.text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("changes", [
     {"proof_fingerprint": "0" * 64}, {"access_expires_at": 1}, {"delivery_deadline": 1},
     {"access_expires_at": True}, {"refresh_token": ""}, {"access_token": "bad\nvalue"},

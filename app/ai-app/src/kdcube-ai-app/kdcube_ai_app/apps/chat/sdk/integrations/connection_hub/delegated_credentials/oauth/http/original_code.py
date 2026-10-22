@@ -11,6 +11,8 @@ nor authenticates caller-supplied plans or results.
 from __future__ import annotations
 
 import hmac
+import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Mapping, Any
@@ -21,6 +23,23 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.original_exchange import (
     CodeExchangeProof, OriginalExchangeRefused, hex_digest, text,
 )
+
+
+LOGGER = logging.getLogger("kdcube.connection_hub.oauth")
+# A finite reason code (``original_exchange_candidate_mismatch``); free text may carry provider details.
+_REASON_CODE = re.compile(r"[a-z][a-z0-9_]{0,95}")
+
+
+def _reason(exc: BaseException) -> str:
+    """The exception's class and, only when it is a bare reason code, its message; never free text."""
+    message = str(exc)
+    return type(exc).__name__ + (f":{message}" if _REASON_CODE.fullmatch(message) else "")
+
+
+def _unavailable(reason: str) -> JSONResponse:
+    """W929: every unavailable answer names its cause in the log, so a deterministic failure is visible."""
+    LOGGER.error("[connection-hub.oauth] original code exchange unavailable reason=%s", reason)
+    return _error("temporarily_unavailable", 503)
 
 
 def oauth_tenant_project(request: Any) -> tuple[str, str]:
@@ -107,24 +126,27 @@ async def original_authorization_code_response(request: Any, form: Mapping[str, 
     if not present:
         return None
     if not callable(factory):
-        return _error("temporarily_unavailable", 503)
+        # The host keeps its binding present and closed when it could not compose it (or it is None).
+        return _unavailable("original_exchange_not_bound")
     try:
         bound = factory()
         tenant, project = oauth_tenant_project(request)
         if (type(bound) is not OriginalCodeExchangeHandler or not callable(bound.exchange)
                 or bound.tenant != tenant or bound.project != project):
-            return _error("temporarily_unavailable", 503)
+            return _unavailable("original_exchange_handler_invalid")
         proof = CodeExchangeProof.from_request(
             tenant=tenant, project=project, code=form.get("code"), client_id=form.get("client_id"),
             redirect_uri=form.get("redirect_uri"), verifier=form.get("code_verifier"),
         )
         pair = await bound.exchange(proof=proof, code=form.get("code"))
         if type(pair) is not OriginalTokenPair:
-            return _error("temporarily_unavailable", 503)
+            return _unavailable("original_exchange_pair_invalid")
         return JSONResponse(pair.response(proof), headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
-    except OriginalExchangeRefused:
+    except OriginalExchangeRefused as exc:
+        LOGGER.warning("[connection-hub.oauth] original code exchange refused reason=%s", _reason(exc))
         return _error("invalid_grant", 400)
-    except Exception:
+    except Exception as exc:
         # Provider errors can contain secrets. Neither the response nor a
         # traceback/log receives their text; an uncertain result stays closed.
-        return _error("temporarily_unavailable", 503)
+        # The log names only the exception's class and a bare reason code.
+        return _unavailable(_reason(exc))
