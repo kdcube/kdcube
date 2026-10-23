@@ -41,8 +41,6 @@ VALUES = {
     HUB: "hub-value-1",
     PERSON: "person-value-1",
     PERSON_APP: "person-app-value-1",
-    COGNITO_PERSON: "cognito-person-value-1",
-    COGNITO_PERSON_APP: "cognito-person-app-value-1",
     DOTTED: "dotted-value-1",
 }
 
@@ -194,8 +192,6 @@ def test_the_cli_writes_what_the_runtime_reads_and_the_same_documents_the_runtim
         f"{PREFIX}/bundles/connection-hub@1-0/secrets",
         f"{PREFIX}/users/u-1/secrets",
         f"{PREFIX}/users/u-1/bundles/travel@1-0/secrets",
-        f"{PREFIX}/users/{COGNITO_SEGMENT}/secrets",
-        f"{PREFIX}/users/{COGNITO_SEGMENT}/bundles/travel@1-0/secrets",
     }
     assert by_cli[f"{PREFIX}/inventory"] == by_runtime[f"{PREFIX}/inventory"]
     for secret_id in by_cli:
@@ -218,6 +214,17 @@ def test_document_and_tail_are_the_runtime_ones(key):
     runtime = _runtime({})
     assert aws_sm.document_id(PREFIX, key) == runtime._secret_id(key)
     assert aws_sm.key_tail(key) == runtime._tail_for_key(key)
+
+
+def test_a_cognito_users_documents_are_named_as_the_runtime_names_them():
+    """W927: the runtime writes a cognito:<uuid> user's documents under an encoded name; the CLI names the same
+    documents. (The management user target does not accept ":" yet, so this user is not in the CLI round trip.)"""
+    data: dict[str, str] = {}
+    asyncio.run(_runtime(data).set_many({COGNITO_PERSON: "p", COGNITO_PERSON_APP: "pa"}))
+    assert {aws_sm.document_id(PREFIX, COGNITO_PERSON), aws_sm.document_id(PREFIX, COGNITO_PERSON_APP)} == {
+        f"{PREFIX}/users/{COGNITO_SEGMENT}/secrets",
+        f"{PREFIX}/users/{COGNITO_SEGMENT}/bundles/travel@1-0/secrets",
+    } == set(data) - {f"{PREFIX}/inventory"}
 
 
 # ── The plan and the write rules ──

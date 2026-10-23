@@ -45,9 +45,6 @@ _CHOICES = frozenset({"allow_once", "allow_always"})
 CONSENT_RECOVERY_REASONS = frozenset({"delegated_request_permit_required", "delegated_grant_required"})
 _SECRET_SCOPES = frozenset({"platform", "bundle", "user"})
 _SECRET_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,511}$")
-# A platform user id is one key segment; Cognito ids are cognito:<uuid> (W927). The AWS provider encodes it
-# for the document name, so ":" is allowed here, and "." (the key separator) still is not.
-_SECRET_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_@:-]{0,255}$")
 _MAX_SECRET_VALUE_BYTES = 64 * 1024
 
 
@@ -204,7 +201,8 @@ class ManagementSecretTarget:
         elif normalized_scope == "user":
             normalized_user = _text(user_id, maximum=256)
             if (
-                not _SECRET_USER_RE.fullmatch(normalized_user)
+                not _SECRET_KEY_RE.fullmatch(normalized_user)
+                or "." in normalized_user
                 or normalized_user in {"_", "__keys"}
             ):
                 raise ManagementCliError(
