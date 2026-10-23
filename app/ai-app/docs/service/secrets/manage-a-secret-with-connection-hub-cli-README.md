@@ -14,7 +14,9 @@ see_also:
 
 This page is the whole path for one person: a KDCube super-admin who wants to
 set, inspect, read or delete one platform or application secret on a KDCube
-deployment, from any machine, with no bearer token to copy around. The
+deployment, from any machine, with no bearer token to copy around. A user's own
+secret works the same way with `--scope user --user-id <user id>` (plus
+`--bundle-id` for a user secret of one application). The
 Connection Hub CLI holds the session; Connection Hub asks you, in the browser,
 before the first use of each secret.
 
@@ -46,15 +48,24 @@ Card never carries more than the person who approved it holds.
 
 ## 1. Install The CLI
 
+From PyPI, once `connection-hub-cli` 2026.10.23.1100 or later is published
+(it pulls `kdcube-cli` 2026.10.23.1100 or later, which understands the secret
+consent):
+
 ```bash
 uv tool install connection-hub-cli
 connection-hub --version
 ```
 
-Use `connection-hub-cli` 2026.10.23.1100 or later: it installs `kdcube-cli`
-2026.10.23.1100 or later, which understands the secret consent. To run a
-revision that is not on PyPI, run it from source at the revision your
-Connection Hub runs (see the Connection Hub CLI README).
+Until then, or to match a deployment exactly, run the CLI from source at the
+App Ecosystem revision your Connection Hub runs:
+
+```bash
+CH() { uvx --from "git+https://github.com/elenaviter/app-ecosystem@<commit>#subdirectory=products/connection-hub/packages/connection-hub-cli" connection-hub "$@"; }
+CH --version
+```
+
+Every `connection-hub` command below works the same as `CH`.
 
 ## 2. Select The Deployment
 
@@ -99,7 +110,8 @@ The page names the agent, the operation (for example
 
 1. Choose **Once** (this request only) or **Every time** (this operation on
    this secret from now on).
-2. Press the blue **Allow** button.
+2. Press the button that then reads **Allow `<operation>` once** (or
+   **Allow `<operation>` always** after choosing **Every time**).
 
 Nothing else on the page needs to change. Then go back to the terminal and
 press Enter. The CLI retries the identical request once and prints a receipt
@@ -107,9 +119,9 @@ without the value.
 
 Each operation is approved separately: `set`, `metadata`, `get` and `delete`
 on the same secret each ask once, unless you chose **Every time** for that
-operation. You can also grant a key, a namespace (for example
-`platform.services.brave.*`, **Every time** only) or a whole scope in advance
-in Connection Hub's Card editor (Delegated by KDCube).
+operation. Use this consent for the CLI's Card: saving a secret on that Card
+in Connection Hub's Card editor is currently refused
+(`oauth_client_resource_unreachable`, see Troubleshooting).
 
 **Agents and automation** pass `--no-open --no-wait`. The CLI then returns the
 consent as `recovery.authorization_url` instead of waiting at a prompt; the
@@ -136,7 +148,8 @@ whether a value existed.
 | --- | --- | --- |
 | `oauth_issuer_mismatch` at `host authorize` | The selected address is not the one the deployment's OAuth issuer is configured for, typically `localhost` or a local workdir on a deployment with a public issuer. | Run `connection-hub setup --endpoint https://<public address>` and authorize again. |
 | `service_resource_not_registered` | The deployment's Connection Hub does not register the secret resources for the management service. | A deployment operator adds `urn:kdcube:management:secret:*:*:*:*:*` to the `kdcube-management` service's resources and reloads Connection Hub. |
-| `forbidden` with `delegated credential resource mismatch` | The Card does not hold the secret, and the deployment's Connection Hub predates the secret consent, so no consent was offered. | Update and reload Connection Hub. Until then, grant the secret in the Card editor first, then rerun. |
+| `forbidden` with `delegated credential resource mismatch` | The Card does not hold the secret, and the deployment's Connection Hub predates the secret consent, so no consent was offered. | Update and reload Connection Hub, then rerun. |
+| `oauth_client_resource_unreachable` when saving the CLI's Card in the Card editor | The CLI's Card is an OAuth Card entered through the deployment resource; the editor cannot add a secret to it yet. | Use the consent from the CLI instead (steps 4 and 5). |
 | `resource_not_consented` | Expected on the first use of a secret: the Card does not hold it yet. The answer carries the consent. | Approve on the consent page (step 5). With `--no-open --no-wait`, open `recovery.authorization_url`, approve, and rerun with the same `--invocation-id`. |
 | `management_recovery_invalid` | The CLI refused the consent it was given, usually because the installed `kdcube-cli` is older than 2026.10.23.1100 and does not know the secret consent. | `uv tool upgrade connection-hub-cli` (or reinstall at 2026.10.23.1100 or later) and rerun. |
 | `invalid_grant` with `card_resource_not_covered` | The CLI's session could not be refreshed. On a platform before 2026.10.23.1100, every session made by `host authorize` failed at its first refresh this way. It also happens when the CLI's Card was revoked or no longer holds the deployment resource. | Update the platform; meanwhile run `connection-hub host authorize` again. |
