@@ -40,6 +40,9 @@ MANAGEMENT_ERROR_SCHEMA = "kdcube.management.error.v1"
 _ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _HEX_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _CHOICES = frozenset({"allow_once", "allow_always"})
+# A request-bound permit (application reload), or a Card grant (Once/Always) for a resource or operation the
+# Card does not hold yet (secret operations, W929). Both open the same Connection Hub consent page.
+CONSENT_RECOVERY_REASONS = frozenset({"delegated_request_permit_required", "delegated_grant_required"})
 _SECRET_SCOPES = frozenset({"platform", "bundle", "user"})
 _SECRET_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,511}$")
 _MAX_SECRET_VALUE_BYTES = 64 * 1024
@@ -665,6 +668,7 @@ class ConsentRecovery:
     catalog_version: str
     expires_at: int
     choices: tuple[str, ...]
+    reason: str = "delegated_request_permit_required"
 
     @classmethod
     def from_mapping(
@@ -673,8 +677,8 @@ class ConsentRecovery:
         *,
         request: ManagementRequest,
     ) -> ConsentRecovery:
-        if value.get("type") != "consent_required" or value.get("reason") != (
-            "delegated_request_permit_required"
+        if value.get("type") != "consent_required" or value.get("reason") not in (
+            CONSENT_RECOVERY_REASONS
         ):
             raise ManagementCliError(
                 "management_recovery_invalid",
@@ -721,9 +725,15 @@ class ConsentRecovery:
             invocation_id=_text(value.get("invocation_id"), maximum=256),
             request_digest=_text(value.get("request_digest"), maximum=64),
             card_revision=card_revision,
-            catalog_version=_text(value.get("catalog_version"), maximum=256),
+            # A request permit is bound to the catalog it was approved under; a Card grant (W929) is not.
+            catalog_version=(
+                _text(value.get("catalog_version"), maximum=256)
+                if value.get("reason") == "delegated_request_permit_required" or value.get("catalog_version")
+                else ""
+            ),
             expires_at=expires_at,
             choices=choices,
+            reason=str(value.get("reason")),
         )
         digest_matches = (
             request.operation in KEYED_DIGEST_OPERATIONS

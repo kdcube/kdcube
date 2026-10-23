@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -297,8 +298,13 @@ async def test_request_bound_denial_preserves_exact_browser_recovery() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_request_bound_denial_has_no_browser_recovery() -> None:
-    class _OrdinaryConsentAdmission(_Admission):
+async def test_a_card_grant_consent_becomes_a_recovery_bound_to_this_request() -> None:
+    """W929 (operator: "i want this work normally. via CLI."): a Card grant consent (Once/Always, for a resource
+    or operation the Card does not hold, as for a secret) reaches the CLI as a recovery, like a request permit.
+    The Hub does not bind a grant to one request, so this management request does: the CLI's retry is the
+    identical request, and the consent stays open for a bounded time. This replaces the earlier rule that a
+    non-request-bound consent had no recovery."""
+    class _GrantConsentAdmission(_Admission):
         async def evaluate(self, **kwargs: Any) -> AdmissionDecision:
             self.calls.append(kwargs)
             return AdmissionDecision(
@@ -306,25 +312,57 @@ async def test_non_request_bound_denial_has_no_browser_recovery() -> None:
                 {
                     "allowed": False,
                     "error": {
-                        "code": "delegated_operation_not_granted",
-                        "message": "The live card does not grant this operation.",
+                        "code": "resource_not_consented",
+                        "message": "Grant it on the Card in Connection Hub, then retry the same request.",
                         "retryable": False,
                     },
+                    "ret": {"details": {"card_revision": 7}},
                     "consent": {
                         "kind": "delegated_agent_grant",
-                        "connection_hub_url": "https://runtime.example/approve?request=1",
+                        "reason": "resource_not_consented",
+                        "connection_hub_url": "https://runtime.example/approve?grant=1",
+                        "access_id": "access-1",
+                        "resource": kwargs["resource"],
+                        "outer_operation": kwargs["operation"],
+                        "invocation_change_id": kwargs["invocation_id"],
+                        "available_choices": ["allow_once", "allow_always"],
                     },
                 },
             )
 
-    response = await _service(
-        _OrdinaryConsentAdmission(), _Ledger(), _Runtime()
-    ).execute(
+    admission = _GrantConsentAdmission()
+    before = int(time.time())
+    response = await _service(admission, _Ledger(), _Runtime()).execute(
         operation=INSPECT_OPERATION,
         delegated_bearer="opaque-bearer",
         invocation_id="inspect-1",
     )
 
+    assert response.status_code == 403
+    recovery = response.payload["recovery"]
+    assert recovery["type"] == "consent_required"
+    assert recovery["reason"] == "delegated_grant_required"
+    assert recovery["authorization_url"] == "https://runtime.example/approve?grant=1"
+    assert recovery["invocation_id"] == "inspect-1"
+    assert recovery["request_digest"] == admission.calls[0]["request_digest"]
+    assert recovery["card_revision"] == 7
+    assert before + 600 <= recovery["expires_at"] <= int(time.time()) + 600
+    assert recovery["choices"] == ["allow_once", "allow_always"]
+
+
+@pytest.mark.asyncio
+async def test_a_consent_of_an_unknown_kind_has_no_browser_recovery() -> None:
+    class _UnknownConsentAdmission(_Admission):
+        async def evaluate(self, **kwargs: Any) -> AdmissionDecision:
+            self.calls.append(kwargs)
+            return AdmissionDecision(403, {
+                "allowed": False,
+                "error": {"code": "delegated_operation_not_granted", "message": "Denied.", "retryable": False},
+                "consent": {"kind": "something_else", "connection_hub_url": "https://runtime.example/approve?x=1"},
+            })
+
+    response = await _service(_UnknownConsentAdmission(), _Ledger(), _Runtime()).execute(
+        operation=INSPECT_OPERATION, delegated_bearer="opaque-bearer", invocation_id="inspect-2")
     assert response.status_code == 403
     assert "recovery" not in response.payload
 
