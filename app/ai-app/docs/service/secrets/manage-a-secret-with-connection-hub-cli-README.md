@@ -138,8 +138,9 @@ connection-hub secrets host delete <key> --scope bundle --bundle-id <application
 ```
 
 `metadata` reports whether the secret exists and which provider holds it,
-never the value. `get` writes the value to a new private file (`0600` on
-POSIX); an existing file is replaced only with `--replace`. `delete` reports
+never the value. `get` requires `--output` and writes the value to a new
+private file (`0600` on POSIX), never to the terminal; an existing file is
+replaced only with `--replace`. `delete` reports
 whether a value existed.
 
 ## Troubleshooting
