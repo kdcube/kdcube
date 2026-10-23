@@ -70,6 +70,11 @@ CH() { uvx \
 CH --version
 ```
 
+Pick a KDCube commit whose `kdcube_cli` version meets the `kdcube-cli`
+requirement of the `connection-hub-cli` at your App Ecosystem commit (from
+2026.10.23.1100 on, a KDCube commit at or after the 2026.10.23.1100 release);
+otherwise `uv` refuses to resolve the two together.
+
 Every `connection-hub` command below works the same as `CH`.
 
 ## 2. Select The Deployment
