@@ -551,6 +551,74 @@ def test_aws_sm_secret_path_uses_grouped_documents():
     assert manager._inventory_secret_id() == "kdcube/demo/demo-march/inventory"
 
 
+_AWS_SM_NAME = __import__("re").compile(r"^[A-Za-z0-9/_+=.@!-]+$")
+COGNITO_USER = "cognito:3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
+
+
+class _AwsNamingClient(_FakeAwsSecretsClient):
+    """Refuses names AWS Secrets Manager refuses (ValidationException: letters, digits and -/_+=.@!)."""
+
+    async def get_secret_value(self, *, SecretId: str):
+        if not _AWS_SM_NAME.match(SecretId):
+            raise _FakeAwsClientError("ValidationException")
+        return await super().get_secret_value(SecretId=SecretId)
+
+    async def create_secret(self, *, Name: str, SecretString: str, Tags=None, ClientRequestToken=None):
+        if not _AWS_SM_NAME.match(Name):
+            raise _FakeAwsClientError("ValidationException")
+        return await super().create_secret(
+            Name=Name, SecretString=SecretString, Tags=Tags, ClientRequestToken=ClientRequestToken)
+
+
+def test_aws_sm_user_segment_is_a_valid_reversible_name():
+    """W927: aipb.io platform user ids are cognito:<uuid>, and ":" is not a valid AWS secret name character."""
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(provider="aws-sm", component="proc", aws_sm_prefix="kdcube/demo/demo-march")
+    )
+    assert (
+        manager._secret_id(f"users.{COGNITO_USER}.bundles.problem-board@1-0.secrets.github.token")
+        == "kdcube/demo/demo-march/users/cognito!3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
+        "/bundles/problem-board@1-0/secrets"
+    )
+    assert (
+        manager._secret_id(f"users.{COGNITO_USER}.secrets.github.token")
+        == "kdcube/demo/demo-march/users/cognito!3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f/secrets"
+    )
+    # An id with only the characters AWS allows keeps its existing name.
+    assert manager._secret_id("users.user-1.secrets.github.token") == "kdcube/demo/demo-march/users/user-1/secrets"
+
+    ids = [COGNITO_USER, "user-1", "a!b", "a!21b", "a/b", "a:b", "a%3Ab", "a!3Ab", "ünï", "a b", "@x+y=z_"]
+    segments = [secrets_manager_module.aws_sm_name_segment(user_id) for user_id in ids]
+    assert len(set(segments)) == len(ids)
+    for user_id, segment in zip(ids, segments):
+        assert _AWS_SM_NAME.match(segment) and "/" not in segment
+        assert secrets_manager_module.aws_sm_name_segment_value(segment) == user_id
+
+
+@pytest.mark.parametrize("segment", ["a!3", "a!3a", "a!ZZ", "a:b", "a/b", "!FF"])
+def test_a_malformed_aws_name_segment_is_refused_by_name(segment):
+    with pytest.raises(SecretsManagerError, match="AWS secret name segment"):
+        secrets_manager_module.aws_sm_name_segment_value(segment)
+
+
+@pytest.mark.asyncio
+async def test_aws_sm_stores_and_reads_a_cognito_users_secret():
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(provider="aws-sm", component="proc", aws_sm_prefix="kdcube/demo/demo-march")
+    )
+    client = _AwsNamingClient({})
+    manager._session = _FakeAwsSession(client)
+    key = f"users.{COGNITO_USER}.bundles.problem-board@1-0.secrets.github.token"
+
+    await manager.set_secret(key, "token-value")
+
+    assert await manager.get_secret(key) == "token-value"
+    name = "kdcube/demo/demo-march/users/cognito!3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f/bundles/problem-board@1-0/secrets"
+    assert json.loads(client.data[name]) == {"github": {"token": "token-value"}}
+    # Logical keys and the inventory keep the platform user id as it is.
+    assert key in json.loads(client.data["kdcube/demo/demo-march/inventory"])["keys"]
+
+
 @pytest.mark.asyncio
 async def test_aws_sm_manager_reads_grouped_documents_and_virtual_metadata():
     manager = AwsSecretsManagerSecretsManager(
