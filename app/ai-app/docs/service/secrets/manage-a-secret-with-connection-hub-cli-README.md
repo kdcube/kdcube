@@ -58,10 +58,15 @@ connection-hub --version
 ```
 
 Until then, or to match a deployment exactly, run the CLI from source at the
-App Ecosystem revision your Connection Hub runs:
+App Ecosystem and KDCube revisions your deployment runs. Both packages come
+from source: the secret consent is handled in `kdcube-cli`, and the
+`kdcube-cli` on PyPI before 2026.10.23.1100 does not have it.
 
 ```bash
-CH() { uvx --from "git+https://github.com/elenaviter/app-ecosystem@<commit>#subdirectory=products/connection-hub/packages/connection-hub-cli" connection-hub "$@"; }
+CH() { uvx \
+  --from "git+https://github.com/elenaviter/app-ecosystem@<app-ecosystem commit>#subdirectory=products/connection-hub/packages/connection-hub-cli" \
+  --with "git+https://github.com/kdcube/kdcube@<kdcube commit>#subdirectory=app/ai-app/src/kdcube-ai-app/kdcube_cli" \
+  connection-hub "$@"; }
 CH --version
 ```
 
