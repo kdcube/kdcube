@@ -202,8 +202,22 @@ to their explicit scope. Unqualified legacy platform names are rejected.
 
 ## Demand-Driven Consent
 
-An absent exact grant returns a structured denial with a same-origin consent
-URL. The request includes an invocation id and is default-closed.
+Secret operations are not request-bound. They use the Card's `Once`/`Always`
+invocation policy on exact or broad secret resources (see
+[delegated management service](../cicd/delegated-management-service-README.md)).
+Grant the secret resource on the calling Card first, in Connection Hub's
+Delegated by KDCube tab, with the operations you need, for example
+`kdcube.management.secret.value.write` and
+`kdcube.management.secret.metadata.read`. A Card that does not hold the
+requested secret resource is refused with `resource_not_consented`, which
+names that step. A credential authorized for the deployment resource only, as
+`connection-hub host authorize` creates it, starts in that state. The Card is
+the live authority, so a grant added later applies to the next request without
+a new authorization.
+
+A request-bound operation (application reload) whose grant is absent returns a
+structured denial with a same-origin consent URL. The request includes an
+invocation id and is default-closed.
 
 ```json
 {
