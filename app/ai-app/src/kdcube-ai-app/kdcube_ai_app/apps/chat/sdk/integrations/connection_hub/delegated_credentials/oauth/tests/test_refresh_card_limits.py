@@ -442,3 +442,58 @@ async def test_an_original_exchange_family_is_refused_when_the_card_dropped_its_
     assert response.json()["error"] == "invalid_grant"
     assert "reason=card_resource_not_covered" in caplog.text
     assert issued == []
+
+
+@pytest.mark.asyncio
+async def test_an_original_exchange_session_refreshes_twice_across_a_consent_that_adds_a_secret(ctx, monkeypatch):
+    """W929: the first refresh rotated the family to resource "" and dropped its resources; the second was refused."""
+    client, store, issued = ctx
+    selector = "urn:kdcube:management:deployment:*:*"
+    entry = "urn:kdcube:management:deployment:demo-tenant:demo-project"
+    secret = "urn:kdcube:management:secret:demo-tenant:demo-project:bundle:connection-hub@1-0:connections.signing_key"
+    grants = {selector: ("kdcube.management.deployment.inspect",)}
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card(dict(grants), entry_resource=entry)
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    token = await _seed_original_exchange_family(store, [selector])
+
+    first = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+    assert first.status_code == 200, first.json()
+    rotated = json.loads(store.redis.values[store._key("refresh", first.json()["refresh_token"])])
+    assert rotated["resource"] == entry, "the rotated family records its session's own resource"
+
+    grants[secret] = ("kdcube.management.secret.value.write",)  # a consent adds one exact secret
+    second = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": first.json()["refresh_token"], "client_id": "client",
+    })
+    assert second.status_code == 200, second.json()
+    assert issued[1]["resource"] == entry
+
+
+@pytest.mark.asyncio
+async def test_a_family_rotated_before_the_fix_refreshes_on_the_cards_entry_resource(ctx, monkeypatch):
+    """A family already rotated to resource "" with no resources (live on 23 Oct) recovers without a data change."""
+    client, store, issued = ctx
+    entry = "urn:kdcube:management:deployment:demo-tenant:demo-project"
+    token = await _seed_original_exchange_family(store, [])
+    key = store._key("refresh", token)
+    record = json.loads(store.redis.values[key])
+    record.pop("resources")
+    record["resource"] = ""
+    store.redis.values[key] = json.dumps(record)
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card({"urn:kdcube:management:deployment:*:*": ("kdcube.management.deployment.inspect",)},
+                               entry_resource=entry)
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+
+    assert response.status_code == 200, response.json()
+    assert issued[0]["resource"] == entry
