@@ -4,6 +4,7 @@
 """Trusted live Card limits reach the portable rotation boundary before mint."""
 from __future__ import annotations
 
+import json
 import time
 from functools import wraps
 from types import SimpleNamespace
@@ -375,3 +376,65 @@ async def test_package_without_typed_conflict_seam_refuses_before_rotation(ctx, 
     assert rotations == []
     assert issued == []
     assert await store.validate_refresh_token(token) is not None
+
+
+async def _seed_original_exchange_family(store, resources):
+    """A family shaped like the original exchange's record: ``resources``, no ``resource``."""
+    token = await store.create_refresh_token(
+        client_id="client", sub="human", scopes=["records:read"],
+        operations=["records_export"], registry_access_id="trusted-card",
+        card_kind="connector", resource="",
+    )
+    key = store._key("refresh", token)
+    record = json.loads(store.redis.values[key])
+    record.pop("resource")
+    record["resources"] = list(resources)
+    store.redis.values[key] = json.dumps(record)
+    return token
+
+
+def _connector_card(resource_grants):
+    return CardAuthority(
+        access_id="trusted-card", client_id="client", grantor_subject="human",
+        delegate_subject="", source="oauth", card_kind="connector",
+        card_revision=8, expires_at=0,
+        operations=("records_export",), resource_grants=resource_grants,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_original_exchange_family_refreshes_on_its_own_resources(ctx, monkeypatch):
+    client, store, issued = ctx
+    selector = "urn:kdcube:management:deployment:*:*"
+    token = await _seed_original_exchange_family(store, [selector])
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card({selector: ("kdcube.management.deployment.inspect",)})
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+
+    assert response.status_code == 200, response.json()
+    assert issued[0]["scopes"] == ["kdcube.management.deployment.inspect"]
+
+
+@pytest.mark.asyncio
+async def test_an_original_exchange_family_is_refused_when_the_card_dropped_its_resources(ctx, monkeypatch, caplog):
+    client, store, issued = ctx
+    token = await _seed_original_exchange_family(store, ["urn:kdcube:management:deployment:*:*"])
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card({"urn:other:resource": ("records:read",)})
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    with caplog.at_level("WARNING"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+        })
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_grant"
+    assert "reason=card_resource_not_covered" in caplog.text
+    assert issued == []
