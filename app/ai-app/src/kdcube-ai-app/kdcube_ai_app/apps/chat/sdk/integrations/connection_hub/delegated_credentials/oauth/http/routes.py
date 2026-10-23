@@ -2964,13 +2964,17 @@ def _refresh_refused(reason: str, client_id: str, description: str) -> JSONRespo
     return _token_error("invalid_grant", description)
 
 
-def _refresh_family_resources(rec: Mapping[str, Any]) -> tuple[str, ...]:
+def _refresh_family_resources(rec: Mapping[str, Any], *, entry_resource: str = "") -> tuple[str, ...]:
     """The resources a refresh family was issued for.
 
     A family issued here records its one ``resource``. A family issued by the
     original exchange (W676) records its plan's Card selectors as
     ``resources`` and no ``resource``; reading only ``resource`` refused every
     such connector session at its first refresh (W929, 2026-10-23).
+
+    A family rotated before the rotation kept its resource has neither; its
+    session's own resource is then the live Card's ``entry_resource``
+    (W929, 2026-10-23: the second refresh of a CLI session).
     """
 
     resource = str(rec.get("resource") or "").strip()
@@ -2981,7 +2985,10 @@ def _refresh_family_resources(rec: Mapping[str, Any]) -> tuple[str, ...]:
         for text in (str(value or "").strip() for value in rec.get("resources") or ())
         if text
     )
-    return resources or ("*",)
+    if resources:
+        return resources
+    entry = str(entry_resource or "").strip()
+    return (entry,) if entry else ("*",)
 
 
 def _live_grants_for_refresh_family(
@@ -2992,7 +2999,8 @@ def _live_grants_for_refresh_family(
 
     matched = False
     grants: list[str] = []
-    for resource in _refresh_family_resources(rec):
+    entry_resource = str(getattr(card, "entry_resource", "") or "")
+    for resource in _refresh_family_resources(rec, entry_resource=entry_resource):
         live = live_grants_for_resource(card, resource)
         if live is None:
             continue
@@ -3825,10 +3833,14 @@ async def token(request: Request) -> Response:
                 operations=list(operations),
                 resource_grants=resource_grants,
                 resource_operations=resource_operations,
+                # A connector family records its session's own resource, so a
+                # later refresh still finds it covered (W929: the rotation kept
+                # only "resource" and dropped an original-exchange family's
+                # "resources", and the second refresh was refused).
                 resource=(
                     ""
                     if refresh_card_kind in {CARD_KIND_AGENT, CARD_KIND_AUTOMATION}
-                    else None
+                    else (refresh_resource or None)
                 ),
                 card_kind=refresh_card_kind or None,
                 state=refresh_state,
