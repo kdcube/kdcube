@@ -28,6 +28,10 @@ APP = "bundles.travel@1-0.secrets.openai.api_key"
 HUB = "bundles.connection-hub@1-0.secrets.google.client_secret"
 PERSON = "users.u-1.secrets.github.token"
 PERSON_APP = "users.u-1.bundles.travel@1-0.secrets.calendar.refresh_token"
+COGNITO = "cognito:3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
+COGNITO_PERSON = f"users.{COGNITO}.secrets.github.token"
+COGNITO_PERSON_APP = f"users.{COGNITO}.bundles.travel@1-0.secrets.calendar.refresh_token"
+COGNITO_SEGMENT = "cognito!3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
 DOTTED = "bundles.travel@1-0.secrets.providers.maps.v2.key"
 PLATFORM = "platform.services.anthropic.api_key"
 AGGREGATE = f"{PREFIX}/bundles/secrets"
@@ -37,6 +41,8 @@ VALUES = {
     HUB: "hub-value-1",
     PERSON: "person-value-1",
     PERSON_APP: "person-app-value-1",
+    COGNITO_PERSON: "cognito-person-value-1",
+    COGNITO_PERSON_APP: "cognito-person-app-value-1",
     DOTTED: "dotted-value-1",
 }
 
@@ -188,6 +194,8 @@ def test_the_cli_writes_what_the_runtime_reads_and_the_same_documents_the_runtim
         f"{PREFIX}/bundles/connection-hub@1-0/secrets",
         f"{PREFIX}/users/u-1/secrets",
         f"{PREFIX}/users/u-1/bundles/travel@1-0/secrets",
+        f"{PREFIX}/users/{COGNITO_SEGMENT}/secrets",
+        f"{PREFIX}/users/{COGNITO_SEGMENT}/bundles/travel@1-0/secrets",
     }
     assert by_cli[f"{PREFIX}/inventory"] == by_runtime[f"{PREFIX}/inventory"]
     for secret_id in by_cli:
@@ -205,7 +213,7 @@ def test_an_import_keeps_the_runtime_values_it_does_not_name():
     assert asyncio.run(runtime.list_all_secret_keys()) == sorted([APP, PLATFORM, DOTTED])
 
 
-@pytest.mark.parametrize("key", [APP, HUB, PERSON, PERSON_APP, DOTTED, PLATFORM])
+@pytest.mark.parametrize("key", [APP, HUB, PERSON, PERSON_APP, COGNITO_PERSON, COGNITO_PERSON_APP, DOTTED, PLATFORM])
 def test_document_and_tail_are_the_runtime_ones(key):
     runtime = _runtime({})
     assert aws_sm.document_id(PREFIX, key) == runtime._secret_id(key)

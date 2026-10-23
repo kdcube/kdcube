@@ -594,12 +594,20 @@ def aws_sm_name_segment_value(segment: str) -> str:
     while index < len(segment):
         char = segment[index]
         if char == "!":
-            raw.append(int(segment[index + 1:index + 3], 16))
+            digits = segment[index + 1:index + 3]
+            if len(digits) != 2 or any(digit not in "0123456789ABCDEF" for digit in digits):
+                raise SecretsManagerError(f"AWS secret name segment {segment!r} has a malformed escape")
+            raw.append(int(digits, 16))
             index += 3
-        else:
+        elif char in _AWS_SM_SEGMENT_PLAIN:
             raw.extend(char.encode("utf-8"))
             index += 1
-    return raw.decode("utf-8")
+        else:
+            raise SecretsManagerError(f"AWS secret name segment {segment!r} has an unencoded character")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SecretsManagerError(f"AWS secret name segment {segment!r} is not UTF-8") from None
 
 
 def _split_user_secret_key(key: str) -> tuple[str, str | None, str] | None:

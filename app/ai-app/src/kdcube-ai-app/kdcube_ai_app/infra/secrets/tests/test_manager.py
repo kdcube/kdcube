@@ -595,6 +595,12 @@ def test_aws_sm_user_segment_is_a_valid_reversible_name():
         assert secrets_manager_module.aws_sm_name_segment_value(segment) == user_id
 
 
+@pytest.mark.parametrize("segment", ["a!3", "a!3a", "a!ZZ", "a:b", "a/b", "!FF"])
+def test_a_malformed_aws_name_segment_is_refused_by_name(segment):
+    with pytest.raises(SecretsManagerError, match="AWS secret name segment"):
+        secrets_manager_module.aws_sm_name_segment_value(segment)
+
+
 @pytest.mark.asyncio
 async def test_aws_sm_stores_and_reads_a_cognito_users_secret():
     manager = AwsSecretsManagerSecretsManager(
