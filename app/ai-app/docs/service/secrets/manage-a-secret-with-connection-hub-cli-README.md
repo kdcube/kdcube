@@ -124,9 +124,16 @@ without the value.
 
 Each operation is approved separately: `set`, `metadata`, `get` and `delete`
 on the same secret each ask once, unless you chose **Every time** for that
-operation. Use this consent for the CLI's Card: saving a secret on that Card
-in Connection Hub's Card editor is currently refused
-(`oauth_client_resource_unreachable`, see Troubleshooting).
+operation.
+
+A platform admin can also add an exact secret to the CLI's Card in advance,
+in Connection Hub's Card editor (Delegated by KDCube): open the Card, add the
+secret with its operations and **Once** or **Every time**, and save. This
+works for a Card entered through the deployment door, which is what
+`connection-hub host authorize` creates, and for a Card that already holds
+one exact secret. The editor adds exact secrets only. A secret selector (a `*`
+scope or key) on such a Card is refused, and so is a secret on a Card entered
+through any other door.
 
 **Agents and automation** pass `--no-open --no-wait`. The CLI then returns the
 consent as `recovery.authorization_url` instead of waiting at a prompt; the
@@ -154,8 +161,8 @@ whether a value existed.
 | --- | --- | --- |
 | `oauth_issuer_mismatch` at `host authorize` | The selected address is not the one the deployment's OAuth issuer is configured for, typically `localhost` or a local workdir on a deployment with a public issuer. | Run `connection-hub setup --endpoint https://<public address>` and authorize again. |
 | `service_resource_not_registered` | The deployment's Connection Hub does not register the secret resources for the management service. | A deployment operator adds `urn:kdcube:management:secret:*:*:*:*:*` to the `kdcube-management` service's resources and reloads Connection Hub. |
-| `forbidden` with `delegated credential resource mismatch` | The Card does not hold the secret, and the deployment's Connection Hub predates the secret consent, so no consent was offered. | Update and reload Connection Hub, then rerun. |
-| `oauth_client_resource_unreachable` when saving the CLI's Card in the Card editor | The CLI's Card is an OAuth Card entered through the deployment resource; the editor cannot add a secret to it yet. | Use the consent from the CLI instead (steps 4 and 5). |
+| `forbidden` with `delegated credential resource mismatch` | The Card does not hold the secret, and the deployment's Connection Hub predates the secret consent, so no consent was offered. | Update and reload Connection Hub, then rerun, or add the exact secret in the Card editor first. |
+| `oauth_client_resource_unreachable` when saving a secret in the Card editor | The secret is a selector (a `*` scope or key) or belongs to another deployment; the Card was entered through a door other than the deployment door or one exact secret; or the deployment's Connection Hub predates the editor fix for the CLI's Card. | Add one exact secret of this deployment, to the CLI's Card. On an older Connection Hub, use the consent from the CLI (steps 4 and 5). |
 | `resource_not_consented` | Expected on the first use of a secret: the Card does not hold it yet. The answer carries the consent. | Approve on the consent page (step 5). With `--no-open --no-wait`, open `recovery.authorization_url`, approve, and rerun with the same `--invocation-id`. |
 | `management_recovery_invalid` | The CLI refused the consent it was given, usually because the installed `kdcube-cli` is older than 2026.10.23.1100 and does not know the secret consent. | `uv tool upgrade connection-hub-cli` (or reinstall at 2026.10.23.1100 or later) and rerun. |
 | `invalid_grant` with `card_resource_not_covered` | The CLI's session could not be refreshed. On a platform before 2026.10.23.1100, every session made by `host authorize` failed at its first refresh this way. It also happens when the CLI's Card was revoked or no longer holds the deployment resource. | Update the platform; meanwhile run `connection-hub host authorize` again. |
