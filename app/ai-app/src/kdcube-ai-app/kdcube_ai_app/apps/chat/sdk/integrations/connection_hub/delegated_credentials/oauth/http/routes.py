@@ -76,6 +76,7 @@ from connection_hub.delegated_credentials.caller_writer_gate import CallerWriteR
 from connection_hub.delegated_credentials.cards.identity import (
     CARD_KIND_AGENT,
     CARD_KIND_AUTOMATION,
+    CARD_KIND_CONNECTOR,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
     delegated_card_store,
@@ -2964,7 +2965,9 @@ def _refresh_refused(reason: str, client_id: str, description: str) -> JSONRespo
     return _token_error("invalid_grant", description)
 
 
-def _refresh_family_resources(rec: Mapping[str, Any], *, entry_resource: str = "") -> tuple[str, ...]:
+def _refresh_family_resources(
+    rec: Mapping[str, Any], *, entry_resource: str = "", card_kind: str = ""
+) -> tuple[str, ...]:
     """The resources a refresh family was issued for.
 
     A family issued here records its one ``resource``. A family issued by the
@@ -2975,6 +2978,10 @@ def _refresh_family_resources(rec: Mapping[str, Any], *, entry_resource: str = "
     A family rotated before the rotation kept its resource has neither; its
     session's own resource is then the live Card's ``entry_resource``
     (W929, 2026-10-23: the second refresh of a CLI session).
+
+    A connector Card's family never falls back to every resource (W937): a
+    connector belongs to one entry, and an entry-bound row must not widen to
+    its pattern. Without its entry such a family holds nothing.
     """
 
     # The selectors first: once a rotation also records the session's entry
@@ -2991,7 +2998,9 @@ def _refresh_family_resources(rec: Mapping[str, Any], *, entry_resource: str = "
     if resource:
         return (resource,)
     entry = str(entry_resource or "").strip()
-    return (entry,) if entry else ("*",)
+    if entry:
+        return (entry,)
+    return () if str(card_kind or "").strip() == CARD_KIND_CONNECTOR else ("*",)
 
 
 def _live_grants_for_refresh_family(
@@ -3003,7 +3012,8 @@ def _live_grants_for_refresh_family(
     matched = False
     grants: list[str] = []
     entry_resource = str(getattr(card, "entry_resource", "") or "")
-    for resource in _refresh_family_resources(rec, entry_resource=entry_resource):
+    card_kind = str(getattr(card, "card_kind", "") or "")
+    for resource in _refresh_family_resources(rec, entry_resource=entry_resource, card_kind=card_kind):
         live = live_grants_for_resource(card, resource)
         if live is None:
             continue

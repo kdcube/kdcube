@@ -44,6 +44,7 @@ from connection_hub.delegated_credentials.oauth.surface_policy import (
 )
 
 from connection_hub.authority_registry import CredentialEnvelope
+from connection_hub.delegated_to_kdcube.public_base import connection_hub_public_base_url
 from connection_hub.delegated_credentials.credential_view import (
     DelegatedCredentialView,
     normalize_resource,
@@ -728,6 +729,9 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
     # the catalog generation its selection was saved against.
     resolved["card_revision"] = int(card.card_revision or 0)
     resolved["catalog_version"] = str(card.catalog_version or "")
+    # The entry binding (W937) reads both; never writable from a request.
+    resolved["card_kind"] = str(getattr(card, "card_kind", "") or "")
+    resolved["entry_resource"] = str(getattr(card, "entry_resource", "") or "")
     resolved["properties"] = dict(getattr(card, "properties", None) or {})
     return resolved
 
@@ -955,6 +959,11 @@ def _delegated_runtime_projection(
     }
     if delegated_resource:
         runtime["delegated_resource"] = delegated_resource
+    # W937: the concrete URL the Card's grant named, read-only, for an app's defence-in-depth
+    # check. The binding itself is the boundary's (entry_bound rows).
+    entry_resource = str(grant_record.get("entry_resource") or "").strip()
+    if entry_resource:
+        runtime["entry_resource"] = entry_resource
     return runtime
 
 
@@ -1048,6 +1057,7 @@ async def delegated_platform_admin_runtime_projection(
         return {}
     envelope = _grant_record_credential(grant_record)
     request_resource = _request_resource(request)
+    catalog, _unavailable = await _active_catalog(request)
     boundary = authorize_credential_boundary(
         authority_id=authority_id,
         required_roles=(),
@@ -1057,6 +1067,8 @@ async def delegated_platform_admin_runtime_projection(
         envelope=envelope,
         grant_record=grant_record,
         request_resource=request_resource,
+        catalog=catalog,
+        public_base=connection_hub_public_base_url(),
     )
     if not boundary.allowed:
         return {}
@@ -1250,6 +1262,22 @@ async def _authorize_delegated_managed_request(
     except Exception:
         pass
 
+    # The boundary reads each matched row's entry binding from the active catalog (W937), so
+    # it is loaded first; without it the request is refused as the MCP and REST guards do.
+    catalog, catalog_unavailable = await _active_catalog(request)
+    if catalog is None:
+        logger.info(
+            "[connection-hub.oauth.%s_guard] denied reason=catalog_%s resource=%s",
+            surface_label,
+            catalog_unavailable,
+            effective_resource,
+        )
+        return (
+            _catalog_unavailable_response(catalog_unavailable),
+            user,
+            envelope,
+            grant_record or {},
+        )
     if match_request_resource:
         boundary = authorize_credential_boundary(
             authority_id=authority_id,
@@ -1260,6 +1288,8 @@ async def _authorize_delegated_managed_request(
             envelope=envelope,
             grant_record=grant_record,
             request_resource=effective_resource,
+            catalog=catalog,
+            public_base=connection_hub_public_base_url(),
         )
     else:
         boundary = authorize_credential_identity_boundary(
@@ -1270,6 +1300,7 @@ async def _authorize_delegated_managed_request(
             user_permissions=user.get("permissions") or (),
             envelope=envelope,
             grant_record=grant_record,
+            catalog=catalog,
         )
     if not boundary.allowed:
         assert boundary.denial is not None
@@ -1460,6 +1491,8 @@ async def authorize_delegated_mcp_request(
         envelope=envelope,
         grant_record=grant_record,
         request_resource=request_resource,
+        catalog=catalog,
+        public_base=connection_hub_public_base_url(),
     )
     tool_calls = extract_mcp_tool_calls(body)
     decision = authorize_mcp_capabilities(
@@ -1628,6 +1661,8 @@ async def evaluate_delegated_rest_admission(
         envelope=envelope,
         grant_record=grant_record,
         request_resource=effective_resource,
+        catalog=catalog,
+        public_base=connection_hub_public_base_url(),
     )
     decision = authorize_rest_capabilities(
         boundary=boundary,
