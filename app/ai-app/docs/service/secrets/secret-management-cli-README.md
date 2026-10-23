@@ -215,7 +215,7 @@ names that step. A credential authorized for the deployment resource only, as
 the live authority, so a grant added later applies to the next request without
 a new authorization.
 
-A request-bound operation (application reload) whose grant is absent returns a
+A request-bound operation (for example application reload) whose grant is absent returns a
 structured denial with a same-origin consent URL. The request includes an
 invocation id and is default-closed.
 
