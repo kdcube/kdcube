@@ -2977,9 +2977,9 @@ def _refresh_family_resources(rec: Mapping[str, Any], *, entry_resource: str = "
     (W929, 2026-10-23: the second refresh of a CLI session).
     """
 
-    resource = str(rec.get("resource") or "").strip()
-    if resource:
-        return (resource,)
+    # The selectors first: once a rotation also records the session's entry
+    # resource (#420), reading "resource" first would drop every other selector
+    # the original exchange granted (W929 review G1).
     resources = tuple(
         text
         for text in (str(value or "").strip() for value in rec.get("resources") or ())
@@ -2987,6 +2987,9 @@ def _refresh_family_resources(rec: Mapping[str, Any], *, entry_resource: str = "
     )
     if resources:
         return resources
+    resource = str(rec.get("resource") or "").strip()
+    if resource:
+        return (resource,)
     entry = str(entry_resource or "").strip()
     return (entry,) if entry else ("*",)
 
