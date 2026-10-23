@@ -206,6 +206,12 @@ For bundle deployment state in `aws-sm`, the grouped documents are:
 | `<prefix>/users/<user_id>/secrets` | direct user secrets |
 | `<prefix>/users/<user_id>/bundles/<bundle_id>/secrets` | user-bundle secrets |
 
+`<user_id>` in an AWS name is the platform user id written so that AWS accepts it. AWS secret names allow
+only letters, digits and `-/_+=.@!`. Those characters stay as they are, except `!` and `/`. Every other
+UTF-8 byte is written as `!` followed by two uppercase hex digits, and `!` itself is `!21`. So
+`cognito:3f1c…` becomes `cognito!3A3f1c…`, while `user-1` is unchanged. The mapping can be reversed, and
+two user ids never share a name. Logical keys and the inventory keep the platform user id unchanged.
+
 Logical reads always use canonical keys. The AWS provider maps those keys to
 the grouped documents above and maintains inventory only after successful
 document writes.
