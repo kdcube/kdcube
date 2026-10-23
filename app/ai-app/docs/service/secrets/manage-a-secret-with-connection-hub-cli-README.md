@@ -130,8 +130,8 @@ A platform admin can also add an exact secret to the CLI's Card in advance,
 in Connection Hub's Card editor (Delegated by KDCube): open the Card, add the
 secret with its operations and **Once** or **Every time**, and save. This
 works for a Card entered through the deployment door, which is what
-`connection-hub host authorize` creates, and for a Card that already holds
-one exact secret. The editor adds exact secrets only. A secret selector (a `*`
+`connection-hub host authorize` creates, and for a Card entered through one
+exact secret. The editor adds exact secrets only. A secret selector (a `*`
 scope or key) on such a Card is refused, and so is a secret on a Card entered
 through any other door.
 
