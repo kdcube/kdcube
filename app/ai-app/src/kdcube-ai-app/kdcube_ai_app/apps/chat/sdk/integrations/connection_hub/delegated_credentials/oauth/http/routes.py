@@ -2964,6 +2964,45 @@ def _refresh_refused(reason: str, client_id: str, description: str) -> JSONRespo
     return _token_error("invalid_grant", description)
 
 
+def _refresh_family_resources(rec: Mapping[str, Any]) -> tuple[str, ...]:
+    """The resources a refresh family was issued for.
+
+    A family issued here records its one ``resource``. A family issued by the
+    original exchange (W676) records its plan's Card selectors as
+    ``resources`` and no ``resource``; reading only ``resource`` refused every
+    such connector session at its first refresh (W929, 2026-10-23).
+    """
+
+    resource = str(rec.get("resource") or "").strip()
+    if resource:
+        return (resource,)
+    resources = tuple(
+        text
+        for text in (str(value or "").strip() for value in rec.get("resources") or ())
+        if text
+    )
+    return resources or ("*",)
+
+
+def _live_grants_for_refresh_family(
+    card: Any,
+    rec: Mapping[str, Any],
+) -> tuple[str, ...] | None:
+    """Live grants of the resources this family still holds on the Card."""
+
+    matched = False
+    grants: list[str] = []
+    for resource in _refresh_family_resources(rec):
+        live = live_grants_for_resource(card, resource)
+        if live is None:
+            continue
+        matched = True
+        for grant in live:
+            if grant not in grants:
+                grants.append(grant)
+    return tuple(grants) if matched else None
+
+
 async def _restore_failed_refresh_rotation(
     store,
     *,
@@ -3740,10 +3779,7 @@ async def token(request: Request) -> Response:
             live_scopes = (
                 whole_card_grants(card)
                 if whole_card
-                else live_grants_for_resource(
-                    card,
-                    str(rec.get("resource") or "") or "*",
-                )
+                else _live_grants_for_refresh_family(card, rec)
             )
             if live_scopes is None:
                 return _refresh_refused(
