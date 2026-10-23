@@ -393,11 +393,11 @@ async def _seed_original_exchange_family(store, resources):
     return token
 
 
-def _connector_card(resource_grants):
+def _connector_card(resource_grants, entry_resource=""):
     return CardAuthority(
         access_id="trusted-card", client_id="client", grantor_subject="human",
         delegate_subject="", source="oauth", card_kind="connector",
-        card_revision=8, expires_at=0,
+        card_revision=8, expires_at=0, entry_resource=entry_resource,
         operations=("records_export",), resource_grants=resource_grants,
     )
 
@@ -408,8 +408,10 @@ async def test_an_original_exchange_family_refreshes_on_its_own_resources(ctx, m
     selector = "urn:kdcube:management:deployment:*:*"
     token = await _seed_original_exchange_family(store, [selector])
 
+    entry = "urn:kdcube:management:deployment:demo-tenant:demo-project"
+
     async def resolve(_redis, **_kwargs):
-        return _connector_card({selector: ("kdcube.management.deployment.inspect",)})
+        return _connector_card({selector: ("kdcube.management.deployment.inspect",)}, entry_resource=entry)
 
     monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
     response = client.post("/oauth/token", data={
@@ -418,6 +420,8 @@ async def test_an_original_exchange_family_refreshes_on_its_own_resources(ctx, m
 
     assert response.status_code == 200, response.json()
     assert issued[0]["scopes"] == ["kdcube.management.deployment.inspect"]
+    # The reissue names the session's own resource: a connector Card refuses an empty entry resource (W929).
+    assert issued[0]["resource"] == entry
 
 
 @pytest.mark.asyncio

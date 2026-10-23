@@ -3721,6 +3721,10 @@ async def token(request: Request) -> Response:
         account_scope: Mapping[str, Mapping[str, list[str] | tuple[str, ...]]] | None = None
         card_pointer = str(rec.get("registry_access_id") or "").strip()
         refresh_card_kind = str(rec.get("card_kind") or "").strip()
+        # The resource the reissued credential names. A family issued by the
+        # original exchange (W676) records no resource; the live Card's entry
+        # resource is that session's own (W929).
+        refresh_resource = str(rec.get("resource") or "").strip()
         rotation_limits = {}
         if card_pointer:
             tenant, project = oauth_tenant_project(request)
@@ -3772,6 +3776,9 @@ async def token(request: Request) -> Response:
                     "delegated consent was revoked",
                 )
             refresh_card_kind = card.card_kind
+            refresh_resource = refresh_resource or str(
+                getattr(card, "entry_resource", "") or ""
+            ).strip()
             whole_card = refresh_card_kind in {
                 CARD_KIND_AGENT,
                 CARD_KIND_AUTOMATION,
@@ -3863,7 +3870,7 @@ async def token(request: Request) -> Response:
                 operations=operations,
                 resource_grants=resource_grants,
                 resource_operations=resource_operations,
-                resource=rec.get("resource"),
+                resource=refresh_resource or rec.get("resource"),
                 registry_access_id=card_pointer,
                 card_kind=refresh_card_kind,
                 identity_scope=rec.get("identity_scope") or "",
