@@ -196,6 +196,9 @@ async def test_live_grant_lookup_failure_is_not_a_snapshot_fallback():
             "cached_card_invalid",
         ),
     ],
+    # Explicit ids: the last payload embeds _authority(), whose expires_at is
+    # wall-clock based, so derived ids differed between xdist workers.
+    ids=["truncated_json", "json_list", "wrong_schema", "operations_not_a_list"],
 )
 async def test_live_grant_unusable_projection_is_unavailable_not_denial(payload, reason):
     """Damaged cache data must not read as a revoked card.
