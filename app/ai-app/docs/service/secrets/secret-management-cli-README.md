@@ -202,43 +202,47 @@ to their explicit scope. Unqualified legacy platform names are rejected.
 
 ## Demand-Driven Consent
 
-Secret operations are not request-bound. They use the Card's `Once`/`Always`
-invocation policy on exact or broad secret resources (see
-[delegated management service](../cicd/delegated-management-service-README.md)).
-Grant the secret resource on the calling Card first, in Connection Hub's
-Delegated by KDCube tab, with the operations you need, for example
-`kdcube.management.secret.value.write` and
-`kdcube.management.secret.metadata.read`. A Card that does not hold the
-requested secret resource is refused with `resource_not_consented`, which
-names that step. A credential authorized for the deployment resource only, as
-`connection-hub host authorize` creates it, starts in that state. The Card is
-the live authority, so a grant added later applies to the next request without
-a new authorization.
+A request whose grant is absent returns a structured denial with a
+same-origin consent URL. The request includes an invocation id and is
+default-closed. There are two kinds:
 
-A request-bound operation (for example application reload) whose grant is absent returns a
-structured denial with a same-origin consent URL. The request includes an
-invocation id and is default-closed.
+- **Card grant** (`delegated_grant_required`), for secret operations. Secrets
+  are not request-bound; they use the Card's `Once`/`Always` invocation policy
+  on exact or broad secret resources (see
+  [delegated management service](../cicd/delegated-management-service-README.md)).
+  When the calling Card does not hold the requested secret resource
+  (`resource_not_consented`) or operation, the consent page adds it to the
+  Card. A credential authorized for the deployment resource only, as
+  `connection-hub host authorize` creates it, meets this on its first request
+  for each key. The Card is the live authority, so the grant applies to the
+  retry without a new authorization.
+- **Request permit** (`delegated_request_permit_required`), for a request-bound
+  operation (for example application reload): an approval of this exact
+  request, bound to the catalog it was approved under.
 
 ```json
 {
   "ok": false,
   "status": 403,
   "error": {
-    "code": "missing_operation_grant",
+    "code": "resource_not_consented",
     "retryable": false
   },
   "recovery": {
     "type": "consent_required",
+    "reason": "delegated_grant_required",
     "choices": ["allow_once", "allow_always"]
   }
 }
 ```
 
-In an interactive terminal the CLI opens the consent page, waits for the user,
-and retries the identical request once. `--no-open --no-wait --json` is the
-agent-oriented mode: the agent presents the returned URL to the user, then
-retries with the same explicit `--invocation-id`. A new invocation id is a new
-operation attempt.
+In an interactive terminal the CLI opens the consent page, waits for the user
+to press Enter (on the controlling terminal when a secret value arrives on
+standard input), and retries the identical request once. `--no-open --no-wait
+--json` is the agent-oriented mode: the agent presents the returned URL to the
+user, then retries with the same explicit `--invocation-id`. A new invocation
+id is a new operation attempt. An administrator can also grant a key,
+namespace or scope in advance from the Card editor.
 
 ## Human-Only Export
 

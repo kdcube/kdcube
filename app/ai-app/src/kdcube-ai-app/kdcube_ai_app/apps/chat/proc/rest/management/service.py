@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -146,12 +147,29 @@ def _authority_evidence(payload: Mapping[str, Any]) -> dict[str, Any]:
     return evidence
 
 
-def _admission_recovery(payload: Mapping[str, Any]) -> dict[str, Any]:
+# W929: how long a Card-grant consent stays open in the CLI (the request-permit TTL).
+GRANT_RECOVERY_TTL_SECONDS = 600
+_RECOVERY_REASONS = {
+    # A request-bound operation's exact permit (application reload).
+    "delegated_request_permit": "delegated_request_permit_required",
+    # A Card grant (Once/Always) for a resource or operation the Card does not hold yet: secret operations.
+    "delegated_agent_grant": "delegated_grant_required",
+}
+
+
+def _admission_recovery(
+    payload: Mapping[str, Any],
+    *,
+    invocation_id: str = "",
+    request_digest: str = "",
+    now: float | None = None,
+) -> dict[str, Any]:
+    details = _mapping(_mapping(payload.get("ret")).get("details"))
     consent = _mapping(payload.get("consent"))
     if not consent:
-        details = _mapping(_mapping(payload.get("ret")).get("details"))
         consent = _mapping(details.get("recovery"))
-    if consent.get("kind") != "delegated_request_permit":
+    reason = _RECOVERY_REASONS.get(str(consent.get("kind") or ""))
+    if reason is None:
         return {}
     authorization_url = str(
         consent.get("connection_hub_url") or consent.get("authorization_url") or ""
@@ -161,7 +179,7 @@ def _admission_recovery(payload: Mapping[str, Any]) -> dict[str, Any]:
     context = _mapping(consent.get("approval_context"))
     recovery: dict[str, Any] = {
         "type": "consent_required",
-        "reason": "delegated_request_permit_required",
+        "reason": reason,
         "authorization_url": authorization_url,
     }
     values = {
@@ -177,6 +195,18 @@ def _admission_recovery(payload: Mapping[str, Any]) -> dict[str, Any]:
         "expires_at": consent.get("expires_at"),
         "choices": consent.get("available_choices") or consent.get("choices"),
     }
+    if reason == "delegated_grant_required":
+        # A Card grant is not bound to one request by the Hub; this management request binds it: the CLI's
+        # retry is the identical request (same invocation and digest), and the consent stays open for a bounded
+        # time. The Card revision is the admission's own detail.
+        values["invocation_id"] = (
+            values["invocation_id"] or consent.get("invocation_change_id") or invocation_id
+        )
+        values["request_digest"] = values["request_digest"] or request_digest
+        values["card_revision"] = values["card_revision"] or details.get("card_revision")
+        values["expires_at"] = values["expires_at"] or int(
+            (time.time() if now is None else now) + GRANT_RECOVERY_TTL_SECONDS
+        )
     for key, value in values.items():
         if value not in (None, "", 0, [], ()):
             recovery[key] = value
@@ -339,7 +369,11 @@ class DelegatedManagementService:
                 message=message,
                 status_code=status_code,
                 retryable=retryable,
-                recovery=_admission_recovery(decision.payload),
+                recovery=_admission_recovery(
+                    decision.payload,
+                    invocation_id=invocation_id,
+                    request_digest=request_digest,
+                ),
                 resource=effective_resource,
             )
 

@@ -54,7 +54,7 @@ def management_view(
         recovery = result.recovery
         value["recovery"] = {
             "type": "consent_required",
-            "reason": "delegated_request_permit_required",
+            "reason": recovery.reason,
             "authorization_url": recovery.authorization_url,
             "access_id": recovery.access_id,
             "resource": recovery.resource,
