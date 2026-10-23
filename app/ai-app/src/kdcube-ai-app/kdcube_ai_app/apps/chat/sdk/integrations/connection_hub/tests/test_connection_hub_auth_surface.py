@@ -652,8 +652,15 @@ async def test_data_bus_admission_reads_postgresql_selected_grant_store(
         session_factory=session_factory,
     )
     resolver._connection_hub_surface = surface
+    # The ingress app carries the serving resolvers; the guard reads the active catalog (W937).
+    app = SimpleNamespace(state=SimpleNamespace())
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import (
+        bind_delegated_catalog,
+    )
+
+    bind_delegated_catalog(app, MCP_CONNECTIONS)
     admission = await admit_delegated_data_bus_bearer(
-        app=SimpleNamespace(state=SimpleNamespace()),
+        app=app,
         gateway_adapter=SimpleNamespace(request_auth_resolver=resolver),
         tenant="demo-tenant",
         project="demo-project",
@@ -803,7 +810,7 @@ async def test_connection_hub_surface_accepts_admin_delegated_bearer_for_all_res
         _request(
             {"Authorization": "Bearer automation-token"},
             path="/api/integrations/bundles/demo/project/news@2026-05-20-12-05/operations/kdcube_news_admin_upload_issue",
-            app=_App(grant_record),
+            app=_App(grant_record, connections={"delegated_credentials": {"oauth": {"enabled": True, "resources": [{"resource": "*", "admin_only": True, "grants": ["kdcube:role:super-admin"]}]}}}),
         ),
         RequestContext(
             client_ip="127.0.0.1",

@@ -553,6 +553,7 @@ def _proxy_client(monkeypatch, *, grant_record, auth=None):
     app = FastAPI()
     app.state.oauth_grant_store = _GrantStore(grant_record)
     app.state.oauth_delegated_config = {"tenant": "home", "project": "demo"}
+    bind_delegated_catalog(app, GUARD_CONNECTIONS)
     auth = auth or {
         "mode": "delegated_proxy",
         "authority_id": "delegated_client",
