@@ -41,6 +41,28 @@ MCP_RESOURCE = (
 MCP_PATH = "/api/integrations/bundles/demo/project/records@1-0/public/mcp/records"
 
 
+def _native_grantor(monkeypatch, roles, permissions=()):
+    """The grantor's current platform record, read at admission (KDCube 802405fa).
+
+    A grant record's captured ``grantor_authority`` is never authority: the
+    surface casts the Card edge to the native platform user and takes roles and
+    permissions from that record. Tests name it explicitly.
+    """
+    from kdcube_ai_app.apps.chat.sdk.identity_authority import NativePlatformIdentity
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth import (
+        current_grantor,
+    )
+
+    async def resolve(**kwargs):
+        return NativePlatformIdentity(
+            authority_id="kdcube.platform", user_id=kwargs["platform_user_id"],
+            roles=tuple(roles), permissions=tuple(permissions),
+            source="bundle_session_native_user", updated_at=100,
+        )
+
+    monkeypatch.setattr(current_grantor, "resolve_native_platform_identity", resolve)
+
+
 class _GrantStore:
     def __init__(self, record=None):
         self.record = record
@@ -216,6 +238,7 @@ async def test_connection_hub_surface_projects_identity_authority_to_session():
 
 
 async def test_connection_hub_surface_accepts_delegated_bearer_for_platform_resource(monkeypatch):
+    _native_grantor(monkeypatch, ["kdcube:role:registered", "kdcube:role:super-admin"], ["devops:deploy"])
     async def fake_authenticate(token: str):
         if token != "automation-token":
             return None
@@ -288,14 +311,18 @@ async def test_connection_hub_surface_accepts_delegated_bearer_for_platform_reso
 
     assert session is not None
     assert session.user_id == "platform-user-1"
-    assert session.user_type == UserType.PRIVILEGED
-    assert session.roles == ["kdcube:role:super-admin"]
+    # The Card selects no role for this resource, so the session keeps only the
+    # grantor's non-privileged native roles; the Card's grant is the permission
+    # (delegation-edges docs, step 5). Admin tier needs a selected role.
+    assert session.user_type == UserType.REGISTERED
+    assert session.roles == ["kdcube:role:registered"]
     assert session.permissions == ["devops:deploy"]
     assert session.identity_authority["delegate_identity"] == "integration:automation:platform-user-1"
     assert session.identity_authority["resource_grants"] == {PLATFORM_RESOURCE_PATTERN: ["devops:deploy"]}
 
 
 async def test_delegated_bearer_slice_projects_card_principal_and_grantor_role(monkeypatch):
+    _native_grantor(monkeypatch, ["kdcube:role:registered", "kdcube:role:paid"], ["records:read"])
     access_id = "oauth-7211bfadcbe1e3b8"
 
     async def fake_authenticate(token: str):
@@ -509,6 +536,7 @@ async def test_non_http_adapter_authenticates_card_for_selected_resource(monkeyp
 async def test_data_bus_admission_reads_postgresql_selected_grant_store(
     monkeypatch,
 ):
+    _native_grantor(monkeypatch, ["kdcube:role:registered"], ["work:relay"])
     resource = (
         "https://board.example/api/integrations/bundles/demo-tenant/"
         "demo-project/problem-board@1-0/public/mcp/problem_board"
@@ -624,8 +652,15 @@ async def test_data_bus_admission_reads_postgresql_selected_grant_store(
         session_factory=session_factory,
     )
     resolver._connection_hub_surface = surface
+    # The ingress app carries the serving resolvers; the guard reads the active catalog (W937).
+    app = SimpleNamespace(state=SimpleNamespace())
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.oauth.tests.helpers import (
+        bind_delegated_catalog,
+    )
+
+    bind_delegated_catalog(app, MCP_CONNECTIONS)
     admission = await admit_delegated_data_bus_bearer(
-        app=SimpleNamespace(state=SimpleNamespace()),
+        app=app,
         gateway_adapter=SimpleNamespace(request_auth_resolver=resolver),
         tenant="demo-tenant",
         project="demo-project",
@@ -712,6 +747,7 @@ async def test_data_bus_admission_names_unavailable_postgresql_authority(
 
 
 async def test_connection_hub_surface_accepts_admin_delegated_bearer_for_all_resources(monkeypatch):
+    _native_grantor(monkeypatch, ["kdcube:role:registered", "kdcube:role:super-admin"])
     async def fake_authenticate(token: str):
         if token != "automation-token":
             return None
@@ -774,7 +810,7 @@ async def test_connection_hub_surface_accepts_admin_delegated_bearer_for_all_res
         _request(
             {"Authorization": "Bearer automation-token"},
             path="/api/integrations/bundles/demo/project/news@2026-05-20-12-05/operations/kdcube_news_admin_upload_issue",
-            app=_App(grant_record),
+            app=_App(grant_record, connections={"delegated_credentials": {"oauth": {"enabled": True, "resources": [{"resource": "*", "admin_only": True, "grants": ["kdcube:role:super-admin"]}]}}}),
         ),
         RequestContext(
             client_ip="127.0.0.1",
@@ -794,6 +830,7 @@ async def test_connection_hub_surface_accepts_admin_delegated_bearer_for_all_res
 
 
 async def test_connection_hub_surface_rejects_all_resources_delegated_bearer_without_admin(monkeypatch):
+    _native_grantor(monkeypatch, ["kdcube:role:registered"])
     async def fake_authenticate(token: str):
         if token != "automation-token":
             return None

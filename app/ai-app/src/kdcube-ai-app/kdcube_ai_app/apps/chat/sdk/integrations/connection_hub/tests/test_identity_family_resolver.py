@@ -160,10 +160,11 @@ def test_delegated_identity_scope_grantor_family_expands_linked_identities():
     assert result["delegation"]["client_id"] == "claude"
     assert result["economics"]["user_id"] == "a1b2c3d4"
     assert result["economics"]["charge_to"] == "grantor"
-    assert result["economics"]["roles"] == ["kdcube:role:super-admin"]
-    assert result["economics"]["permissions"] == ["memories:read"]
-    assert result["economics"]["budget_bypass"] is True
-    assert "user_type" not in result["economics"]
+    # A passed grantor_authority mapping is not entitlement (App Ecosystem
+    # c1648fd2): managed admission supplies roles, permissions and budget
+    # bypass from the grantor's current platform record, never this resolver.
+    for captured in ("roles", "permissions", "budget_bypass", "user_type"):
+        assert captured not in result["economics"]
 
 
 def test_delegated_identity_scope_grantor_only_does_not_expand_family():

@@ -9,7 +9,7 @@ provider reads and writes (``kdcube_ai_app.infra.secrets.manager.AwsSecretsManag
 - ``<prefix>/inventory`` lists every key (schema ``kdcube.aws_secret_inventory.v1``);
 - ``<prefix>/platform/secrets``, ``<prefix>/bundles/<id>/secrets``,
   ``<prefix>/users/<uid>/secrets`` and ``<prefix>/users/<uid>/bundles/<id>/secrets``
-  each hold one JSON document, nested by the key tail.
+  each hold one JSON document, nested by the key tail (``<uid>`` written as AWS names allow, below).
 
 Values travel only over the ``aws`` CLI's stdin and stdout: never in its arguments, never on
 screen, never in an error.
@@ -149,6 +149,19 @@ def validate_key(key: str) -> str:
     return key
 
 
+# The runtime provider's aws_sm_name_segment (kdcube_ai_app.infra.secrets.manager, W927): AWS secret names
+# allow only letters, digits and -/_+=.@!; a user id such as cognito:<uuid> is written with every other UTF-8
+# byte, and "!" itself, as "!" plus two hex digits. A plain id is unchanged.
+_AWS_SM_SEGMENT_PLAIN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_+=.@")
+
+
+def aws_sm_name_segment(value: str) -> str:
+    return "".join(
+        char if char in _AWS_SM_SEGMENT_PLAIN else "".join(f"!{byte:02X}" for byte in char.encode("utf-8"))
+        for char in value
+    )
+
+
 def document_id(prefix: str, key: str) -> str:
     """The provider's ``_secret_id``: which grouped document holds ``key``."""
     key = validate_key(key)
@@ -158,9 +171,10 @@ def document_id(prefix: str, key: str) -> str:
     user = _split_user_key(key)
     if user:
         user_id, bundle_id, _tail = user
+        user_segment = aws_sm_name_segment(user_id)
         if bundle_id:
-            return f"{prefix}/users/{user_id}/bundles/{bundle_id}/secrets"
-        return f"{prefix}/users/{user_id}/secrets"
+            return f"{prefix}/users/{user_segment}/bundles/{bundle_id}/secrets"
+        return f"{prefix}/users/{user_segment}/secrets"
     return f"{prefix}/platform/secrets"
 
 

@@ -4,6 +4,7 @@
 """Trusted live Card limits reach the portable rotation boundary before mint."""
 from __future__ import annotations
 
+import json
 import time
 from functools import wraps
 from types import SimpleNamespace
@@ -375,3 +376,152 @@ async def test_package_without_typed_conflict_seam_refuses_before_rotation(ctx, 
     assert rotations == []
     assert issued == []
     assert await store.validate_refresh_token(token) is not None
+
+
+async def _seed_original_exchange_family(store, resources):
+    """A family shaped like the original exchange's record: ``resources``, no ``resource``."""
+    token = await store.create_refresh_token(
+        client_id="client", sub="human", scopes=["records:read"],
+        operations=["records_export"], registry_access_id="trusted-card",
+        card_kind="connector", resource="",
+    )
+    key = store._key("refresh", token)
+    record = json.loads(store.redis.values[key])
+    record.pop("resource")
+    record["resources"] = list(resources)
+    store.redis.values[key] = json.dumps(record)
+    return token
+
+
+def _connector_card(resource_grants, entry_resource=""):
+    return CardAuthority(
+        access_id="trusted-card", client_id="client", grantor_subject="human",
+        delegate_subject="", source="oauth", card_kind="connector",
+        card_revision=8, expires_at=0, entry_resource=entry_resource,
+        operations=("records_export",), resource_grants=resource_grants,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_original_exchange_family_refreshes_on_its_own_resources(ctx, monkeypatch):
+    client, store, issued = ctx
+    selector = "urn:kdcube:management:deployment:*:*"
+    token = await _seed_original_exchange_family(store, [selector])
+
+    entry = "urn:kdcube:management:deployment:demo-tenant:demo-project"
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card({selector: ("kdcube.management.deployment.inspect",)}, entry_resource=entry)
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+
+    assert response.status_code == 200, response.json()
+    assert issued[0]["scopes"] == ["kdcube.management.deployment.inspect"]
+    # The reissue names the session's own resource: a connector Card refuses an empty entry resource (W929).
+    assert issued[0]["resource"] == entry
+
+
+@pytest.mark.asyncio
+async def test_an_original_exchange_family_is_refused_when_the_card_dropped_its_resources(ctx, monkeypatch, caplog):
+    client, store, issued = ctx
+    token = await _seed_original_exchange_family(store, ["urn:kdcube:management:deployment:*:*"])
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card({"urn:other:resource": ("records:read",)})
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    with caplog.at_level("WARNING"):
+        response = client.post("/oauth/token", data={
+            "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+        })
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_grant"
+    assert "reason=card_resource_not_covered" in caplog.text
+    assert issued == []
+
+
+@pytest.mark.asyncio
+async def test_an_original_exchange_session_refreshes_twice_across_a_consent_that_adds_a_secret(ctx, monkeypatch):
+    """W929: the first refresh rotated the family to resource "" and dropped its resources; the second was refused."""
+    client, store, issued = ctx
+    selector = "urn:kdcube:management:deployment:*:*"
+    entry = "urn:kdcube:management:deployment:demo-tenant:demo-project"
+    secret = "urn:kdcube:management:secret:demo-tenant:demo-project:bundle:connection-hub@1-0:connections.signing_key"
+    grants = {selector: ("kdcube.management.deployment.inspect",)}
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card(dict(grants), entry_resource=entry)
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    token = await _seed_original_exchange_family(store, [selector])
+
+    first = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+    assert first.status_code == 200, first.json()
+    rotated = json.loads(store.redis.values[store._key("refresh", first.json()["refresh_token"])])
+    assert rotated["resource"] == entry, "the rotated family records its session's own resource"
+
+    grants[secret] = ("kdcube.management.secret.value.write",)  # a consent adds one exact secret
+    second = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": first.json()["refresh_token"], "client_id": "client",
+    })
+    assert second.status_code == 200, second.json()
+    assert issued[1]["resource"] == entry
+
+
+@pytest.mark.asyncio
+async def test_a_family_rotated_before_the_fix_refreshes_on_the_cards_entry_resource(ctx, monkeypatch):
+    """A family already rotated to resource "" with no resources (live on 23 Oct) recovers without a data change."""
+    client, store, issued = ctx
+    entry = "urn:kdcube:management:deployment:demo-tenant:demo-project"
+    token = await _seed_original_exchange_family(store, [])
+    key = store._key("refresh", token)
+    record = json.loads(store.redis.values[key])
+    record.pop("resources")
+    record["resource"] = ""
+    store.redis.values[key] = json.dumps(record)
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card({"urn:kdcube:management:deployment:*:*": ("kdcube.management.deployment.inspect",)},
+                               entry_resource=entry)
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+
+    assert response.status_code == 200, response.json()
+    assert issued[0]["resource"] == entry
+
+
+@pytest.mark.asyncio
+async def test_a_two_selector_family_keeps_both_selectors_through_two_refreshes(ctx, monkeypatch):
+    """W929 G1: after a rotation records the entry resource (#420) and keeps the selectors (app-ecosystem #886),
+    the refresh reads the selectors first, so no selector's grants are dropped."""
+    client, store, issued = ctx
+    deployment = "urn:kdcube:management:deployment:*:*"
+    secrets = "urn:kdcube:management:secret:*:*:*:*:*"
+    entry = "urn:kdcube:management:deployment:demo-tenant:demo-project"
+    token = await _seed_original_exchange_family(store, [deployment, secrets])
+    key = store._key("refresh", token)
+    record = json.loads(store.redis.values[key])
+    record["resource"] = entry  # as a rotation after #420 and #886 leaves it
+    store.redis.values[key] = json.dumps(record)
+
+    async def resolve(_redis, **_kwargs):
+        return _connector_card({deployment: ("kdcube.management.deployment.inspect",),
+                                secrets: ("kdcube.management.secret.value.write",)}, entry_resource=entry)
+
+    monkeypatch.setattr(routes, "resolve_live_grant_card", resolve)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token", "refresh_token": token, "client_id": "client",
+    })
+
+    assert response.status_code == 200, response.json()
+    assert sorted(issued[0]["scopes"]) == ["kdcube.management.deployment.inspect",
+                                           "kdcube.management.secret.value.write"]

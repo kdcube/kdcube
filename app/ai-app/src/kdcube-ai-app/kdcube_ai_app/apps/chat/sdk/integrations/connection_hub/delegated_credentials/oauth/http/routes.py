@@ -76,6 +76,7 @@ from connection_hub.delegated_credentials.caller_writer_gate import CallerWriteR
 from connection_hub.delegated_credentials.cards.identity import (
     CARD_KIND_AGENT,
     CARD_KIND_AUTOMATION,
+    CARD_KIND_CONNECTOR,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.serving import (
     delegated_card_store,
@@ -2964,6 +2965,65 @@ def _refresh_refused(reason: str, client_id: str, description: str) -> JSONRespo
     return _token_error("invalid_grant", description)
 
 
+def _refresh_family_resources(
+    rec: Mapping[str, Any], *, entry_resource: str = "", card_kind: str = ""
+) -> tuple[str, ...]:
+    """The resources a refresh family was issued for.
+
+    A family issued here records its one ``resource``. A family issued by the
+    original exchange (W676) records its plan's Card selectors as
+    ``resources`` and no ``resource``; reading only ``resource`` refused every
+    such connector session at its first refresh (W929, 2026-10-23).
+
+    A family rotated before the rotation kept its resource has neither; its
+    session's own resource is then the live Card's ``entry_resource``
+    (W929, 2026-10-23: the second refresh of a CLI session).
+
+    A connector Card's family never falls back to every resource (W937): a
+    connector belongs to one entry, and an entry-bound row must not widen to
+    its pattern. Without its entry such a family holds nothing.
+    """
+
+    # The selectors first: once a rotation also records the session's entry
+    # resource (#420), reading "resource" first would drop every other selector
+    # the original exchange granted (W929 review G1).
+    resources = tuple(
+        text
+        for text in (str(value or "").strip() for value in rec.get("resources") or ())
+        if text
+    )
+    if resources:
+        return resources
+    resource = str(rec.get("resource") or "").strip()
+    if resource:
+        return (resource,)
+    entry = str(entry_resource or "").strip()
+    if entry:
+        return (entry,)
+    return () if str(card_kind or "").strip() == CARD_KIND_CONNECTOR else ("*",)
+
+
+def _live_grants_for_refresh_family(
+    card: Any,
+    rec: Mapping[str, Any],
+) -> tuple[str, ...] | None:
+    """Live grants of the resources this family still holds on the Card."""
+
+    matched = False
+    grants: list[str] = []
+    entry_resource = str(getattr(card, "entry_resource", "") or "")
+    card_kind = str(getattr(card, "card_kind", "") or "")
+    for resource in _refresh_family_resources(rec, entry_resource=entry_resource, card_kind=card_kind):
+        live = live_grants_for_resource(card, resource)
+        if live is None:
+            continue
+        matched = True
+        for grant in live:
+            if grant not in grants:
+                grants.append(grant)
+    return tuple(grants) if matched else None
+
+
 async def _restore_failed_refresh_rotation(
     store,
     *,
@@ -3682,6 +3742,10 @@ async def token(request: Request) -> Response:
         account_scope: Mapping[str, Mapping[str, list[str] | tuple[str, ...]]] | None = None
         card_pointer = str(rec.get("registry_access_id") or "").strip()
         refresh_card_kind = str(rec.get("card_kind") or "").strip()
+        # The resource the reissued credential names. A family issued by the
+        # original exchange (W676) records no resource; the live Card's entry
+        # resource is that session's own (W929).
+        refresh_resource = str(rec.get("resource") or "").strip()
         rotation_limits = {}
         if card_pointer:
             tenant, project = oauth_tenant_project(request)
@@ -3733,6 +3797,9 @@ async def token(request: Request) -> Response:
                     "delegated consent was revoked",
                 )
             refresh_card_kind = card.card_kind
+            refresh_resource = refresh_resource or str(
+                getattr(card, "entry_resource", "") or ""
+            ).strip()
             whole_card = refresh_card_kind in {
                 CARD_KIND_AGENT,
                 CARD_KIND_AUTOMATION,
@@ -3740,10 +3807,7 @@ async def token(request: Request) -> Response:
             live_scopes = (
                 whole_card_grants(card)
                 if whole_card
-                else live_grants_for_resource(
-                    card,
-                    str(rec.get("resource") or "") or "*",
-                )
+                else _live_grants_for_refresh_family(card, rec)
             )
             if live_scopes is None:
                 return _refresh_refused(
@@ -3782,10 +3846,14 @@ async def token(request: Request) -> Response:
                 operations=list(operations),
                 resource_grants=resource_grants,
                 resource_operations=resource_operations,
+                # A connector family records its session's own resource, so a
+                # later refresh still finds it covered (W929: the rotation kept
+                # only "resource" and dropped an original-exchange family's
+                # "resources", and the second refresh was refused).
                 resource=(
                     ""
                     if refresh_card_kind in {CARD_KIND_AGENT, CARD_KIND_AUTOMATION}
-                    else None
+                    else (refresh_resource or None)
                 ),
                 card_kind=refresh_card_kind or None,
                 state=refresh_state,
@@ -3827,7 +3895,7 @@ async def token(request: Request) -> Response:
                 operations=operations,
                 resource_grants=resource_grants,
                 resource_operations=resource_operations,
-                resource=rec.get("resource"),
+                resource=refresh_resource or rec.get("resource"),
                 registry_access_id=card_pointer,
                 card_kind=refresh_card_kind,
                 identity_scope=rec.get("identity_scope") or "",

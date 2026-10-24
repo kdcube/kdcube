@@ -574,6 +574,42 @@ def build_user_secret_metadata_key(*, user_id: str, bundle_id: str | None = None
     return build_user_secret_key(user_id=user_id, key="__keys", bundle_id=bundle_id)
 
 
+# AWS Secrets Manager names allow only letters, digits and -/_+=.@! (W927: aipb.io user ids are
+# cognito:<uuid>). One path segment keeps the characters AWS allows except "!" and "/", and writes every
+# other UTF-8 byte as "!" plus two hex digits; "!" itself is "!21". A plain id is unchanged, the mapping is
+# reversible, and two ids never share a segment.
+_AWS_SM_SEGMENT_PLAIN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_+=.@")
+
+
+def aws_sm_name_segment(value: str) -> str:
+    return "".join(
+        char if char in _AWS_SM_SEGMENT_PLAIN else "".join(f"!{byte:02X}" for byte in char.encode("utf-8"))
+        for char in value
+    )
+
+
+def aws_sm_name_segment_value(segment: str) -> str:
+    raw = bytearray()
+    index = 0
+    while index < len(segment):
+        char = segment[index]
+        if char == "!":
+            digits = segment[index + 1:index + 3]
+            if len(digits) != 2 or any(digit not in "0123456789ABCDEF" for digit in digits):
+                raise SecretsManagerError(f"AWS secret name segment {segment!r} has a malformed escape")
+            raw.append(int(digits, 16))
+            index += 3
+        elif char in _AWS_SM_SEGMENT_PLAIN:
+            raw.extend(char.encode("utf-8"))
+            index += 1
+        else:
+            raise SecretsManagerError(f"AWS secret name segment {segment!r} has an unencoded character")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SecretsManagerError(f"AWS secret name segment {segment!r} is not UTF-8") from None
+
+
 def _split_user_secret_key(key: str) -> tuple[str, str | None, str] | None:
     prefix = "users."
     marker_bundle = ".bundles."
@@ -1922,9 +1958,10 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         user_match = _split_user_secret_key(key)
         if user_match:
             user_id, bundle_id, _tail = user_match
+            user_segment = aws_sm_name_segment(user_id)
             if bundle_id:
-                return f"{self._prefix}/users/{user_id}/bundles/{bundle_id}/secrets"
-            return f"{self._prefix}/users/{user_id}/secrets"
+                return f"{self._prefix}/users/{user_segment}/bundles/{bundle_id}/secrets"
+            return f"{self._prefix}/users/{user_segment}/secrets"
         return f"{self._prefix}/platform/secrets"
 
     def _inventory_secret_id(self) -> str:
