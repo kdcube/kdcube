@@ -1,34 +1,31 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.10.23.1100"
+  ref: "2026.10.24.1030"
   description: |
-    This release follows 2026.10.19.2230. It publishes the platform images
-    and the tag, and it is the record the packaged CLI is published from.
+    Platform and kdcube-cli 2026.10.24.1030 follow 2026.10.19.2230.
 
-    The Connection Hub CLI can set a secret on a deployment end to end. When
-    the calling Card does not hold the secret resource, the management
-    service now returns the Hub's Card-grant consent as a CLI recovery bound
-    to that request (kdcube/kdcube#412). kdcube-cli accepts it with the same
-    origin, consent-path, request and choice checks as a request permit.
-    The secrets README describes both consent kinds (kdcube/kdcube#411).
+    The five platform image requirement files consume the PB package set at
+    2026.10.24.1000 or later, below 2027. The processor and executor require
+    connection-hub, project-board and app-foundation[mcp]. The ingress requires
+    connection-hub and app-foundation; dbdeploy and metric-service require
+    connection-hub. Existing extras and upper bounds are preserved. Installed
+    package versions and immutable image identities are recorded at publication.
 
-    A session issued by the OAuth original exchange now refreshes. Its
-    refresh record names the plan's Card selectors as resources, which the
-    refresh handler did not read, so every such connector session was refused
-    at its first refresh with card_resource_not_covered (kdcube/kdcube#413).
-    A refused original-exchange authorization logs a finite reason
-    (kdcube/kdcube#410).
+    Connection Hub's MCP surfaces and OAuth refresh enforce the same request
+    policy and entry-bound catalog rows. Refreshed sessions retain their entry
+    resource and read their original-exchange family's selectors before
+    reconnecting. Token exchange explains an original-exchange refusal, and the
+    management CLI can recover consent for an exact secret.
 
-    It also includes the site catalog convergence (kdcube/kdcube#409) and the
-    MCP surface and token refresh using the Hub request policy
-    (kdcube/kdcube#408).
+    The PB set also carries worker service discovery and calls, relay recovery
+    and retention improvements, project Control account policies and bounded
+    saver proofs, multi-profile procedure installation, and command option
+    validation. App Foundation and Connection Hub include A2A building blocks;
+    platform installation and activation of inbound A2A routes are separate.
 
-    Package floors are unchanged: the processor and executor require
-    connection-hub, project-board and app-foundation[mcp]
-    >=2026.10.19.2200,<2027; the ingress, dbdeploy and metric-service images
-    require connection-hub at that floor. These ranges set minimum versions;
-    the release image verification records the installed package versions
-    and image identities.
+    This platform snapshot also includes site catalog convergence and
+    AWS-compatible per-user secret document names. Optional agent and web-search
+    tool requirements retain their existing compatibility ranges.
 
 config:
-  version: "2026.10.23.1100"
+  version: "2026.10.24.1030"
