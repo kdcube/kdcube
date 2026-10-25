@@ -1,8 +1,8 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.10.25.0130"
+  ref: "2026.10.25.130"
   description: |
-    Platform and kdcube-cli 2026.10.25.0130 follow 2026.10.19.2230.
+    Platform and kdcube-cli 2026.10.25.130 follow 2026.10.19.2230.
 
     The five platform image requirement files consume the PB package set at
     2026.10.25.0100 or later, below 2027. The processor and executor require
@@ -33,4 +33,4 @@ platform:
     tool requirements retain their existing compatibility ranges.
 
 config:
-  version: "2026.10.25.0130"
+  version: "2026.10.25.130"
