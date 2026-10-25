@@ -6,6 +6,7 @@ tags: ["service", "secrets", "cli", "delegation", "operations"]
 keywords: ["kdcube secrets", "secret metadata", "secret get", "secret set", "secret delete", "secret export", "backend status", "delegated bearer"]
 updated_at: 2026-09-06
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/service/secrets/manage-a-secret-with-connection-hub-cli-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/delegated-management-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/secrets/secrets-service-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/secrets/host-vault-README.md
@@ -243,6 +244,10 @@ standard input), and retries the identical request once. `--no-open --no-wait
 user, then retries with the same explicit `--invocation-id`. A new invocation
 id is a new operation attempt. An administrator can also grant a key,
 namespace or scope in advance from the Card editor.
+
+For the step-by-step admin path with the Connection Hub CLI (install,
+authorize, the consent page, and the common refusals), see
+[KDCube Admin: Manage A Secret With The Connection Hub CLI](manage-a-secret-with-connection-hub-cli-README.md).
 
 ## Human-Only Export
 
