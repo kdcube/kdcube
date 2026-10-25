@@ -4,7 +4,7 @@ title: "KDCube Admin: Manage A Secret With The Connection Hub CLI"
 summary: "Step-by-step path for a KDCube super-admin to set, inspect, read and delete one deployment or application secret from a fresh machine with the Connection Hub CLI, including the consent page and the common refusals."
 tags: ["service", "secrets", "cli", "connection-hub", "operations", "how-to"]
 keywords: ["connection-hub secrets host", "set a secret", "secret consent", "resource_not_consented", "oauth_issuer_mismatch", "card grant", "once", "every time", "super-admin"]
-updated_at: 2026-10-23
+updated_at: 2026-10-25
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/secrets/secret-management-cli-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/delegated-management-service-README.md
@@ -40,17 +40,19 @@ Card never carries more than the person who approved it holds.
   `connections.delegated_credentials.admission.services` lists
   `urn:kdcube:management:secret:*:*:*:*:*`. The Connection Hub descriptor
   template has it by default.
-- **Versions.** The consent flow below needs a KDCube platform at release
-  2026.10.23.1100 or later and a Connection Hub that includes the W929 fixes
-  (consent for one secret). The troubleshooting section names what an older
-  deployment shows.
+- **Versions.** The documented release family uses KDCube platform and
+  `kdcube-cli` 2026.10.25.0130 or later, the Connection Hub app source and
+  library from App Ecosystem's PB set 2026.10.25.0100 or later, and
+  `connection-hub-cli` 2026.10.25.0200 or later. The hosted Hub app supplies
+  the authorization-code exchange fix; installing the CLI alone does not
+  update that app. The troubleshooting section names older-deployment symptoms.
 - **`uv`** on the machine you work from.
 
 ## 1. Install The CLI
 
-From PyPI, once `connection-hub-cli` 2026.10.23.1100 or later is published
-(it pulls `kdcube-cli` 2026.10.23.1100 or later, which understands the secret
-consent):
+From PyPI, once `connection-hub-cli` 2026.10.25.0200 or later is published
+(it pulls `kdcube-cli` 2026.10.25.0130 or later and the App Ecosystem packages
+at 2026.10.25.0100 or later):
 
 ```bash
 uv tool install connection-hub-cli
@@ -59,8 +61,8 @@ connection-hub --version
 
 Until then, or to match a deployment exactly, run the CLI from source at the
 App Ecosystem and KDCube revisions your deployment runs. Both packages come
-from source: the secret consent is handled in `kdcube-cli`, and the
-`kdcube-cli` on PyPI before 2026.10.23.1100 does not have it.
+from source: the secret consent is handled in `kdcube-cli`, so its source
+version must meet the Connection Hub CLI's declared dependency floor.
 
 ```bash
 CH() { uvx \
@@ -72,7 +74,8 @@ CH --version
 
 Pick a KDCube commit whose `kdcube_cli` version meets the `kdcube-cli`
 requirement of the `connection-hub-cli` at your App Ecosystem commit (from
-2026.10.23.1100 on, a KDCube commit at or after the 2026.10.23.1100 release);
+the 2026.10.25.0200 CLI release on, a KDCube commit at or after the
+2026.10.25.0130 platform/CLI release);
 otherwise `uv` refuses to resolve the two together.
 
 Every `connection-hub` command below works the same as `CH`.
@@ -169,8 +172,8 @@ whether a value existed.
 | `forbidden` with `delegated credential resource mismatch` | The Card does not hold the secret, and the deployment's Connection Hub predates the secret consent, so no consent was offered. | Update and reload Connection Hub, then rerun, or add the exact secret in the Card editor first. |
 | `oauth_client_resource_unreachable` when saving a secret in the Card editor | The secret is a selector (a `*` scope or key) or belongs to another deployment; the Card was entered through a door other than the deployment door or one exact secret; or the deployment's Connection Hub predates the editor fix for the CLI's Card. | Add one exact secret of this deployment, to the CLI's Card. On an older Connection Hub, use the consent from the CLI (steps 4 and 5). |
 | `resource_not_consented` | Expected on the first use of a secret: the Card does not hold it yet. The answer carries the consent. | Approve on the consent page (step 5). With `--no-open --no-wait`, open `recovery.authorization_url`, approve, and rerun with the same `--invocation-id`. |
-| `management_recovery_invalid` | The CLI refused the consent it was given, usually because the installed `kdcube-cli` is older than 2026.10.23.1100 and does not know the secret consent. | `uv tool upgrade connection-hub-cli` (or reinstall at 2026.10.23.1100 or later) and rerun. |
-| `invalid_grant` with `card_resource_not_covered` | The CLI's session could not be refreshed. On a platform before 2026.10.23.1100, every session made by `host authorize` failed at its first refresh this way. It also happens when the CLI's Card was revoked or no longer holds the deployment resource. | Update the platform; meanwhile run `connection-hub host authorize` again. |
+| `management_recovery_invalid` | The CLI refused the consent it was given, usually because the installed CLI pair predates the documented secret consent. | `uv tool upgrade connection-hub-cli` (or reinstall at 2026.10.25.0200 or later, with `kdcube-cli` 2026.10.25.0130 or later) and rerun. |
+| `invalid_grant` with `card_resource_not_covered` | The CLI's session could not be refreshed. A platform missing the resource-refresh fixes can fail this way on a session made by `host authorize`. It also happens when the CLI's Card was revoked or no longer holds the deployment resource. | Update the platform; meanwhile run `connection-hub host authorize` again. |
 | `delegated_access_unknown_resources` when you press Allow | The deployment's Connection Hub predates the fix that keeps the exact secret on the Card (it tried to save the whole secret row). | Update and reload Connection Hub, then rerun the same command. |
 | Consent page stays on "Loading this capability" | The deployment's Connection Hub predates the consent page fix for one concrete secret. | Update and reload Connection Hub, then open the consent again (rerun the command). |
 | The CLI waits forever after printing the consent | It is running without a person at the terminal (an agent or a pseudo-terminal). | Use `--no-open --no-wait` and pass the consent address to the person. |
