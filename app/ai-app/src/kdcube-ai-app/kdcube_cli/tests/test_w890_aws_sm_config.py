@@ -627,3 +627,70 @@ def test_write_rule_outside_the_aws_import_is_refused(monkeypatch, tmp_path):
                                       "--write-rule", "write-new"])
     with pytest.raises(SystemExit, match="--write-rule"):
         cli_mod.main()
+
+
+# ── Runtime-acquired per-user tokens are never exported, so a stale one cannot stop an export ──
+
+STALE_TOKEN = "users.u-gone.secrets.delegated_to_kdcube.credentials.access_token"
+
+
+def _with_inventory_key(store: FakeAwsCli, key: str) -> None:
+    inventory = json.loads(store.data[f"{PREFIX}/inventory"])
+    inventory["keys"] = sorted({*inventory["keys"], key})
+    store.data[f"{PREFIX}/inventory"] = json.dumps(inventory)
+
+
+def test_a_stale_acquired_token_whose_document_is_gone_does_not_stop_the_export():
+    data: dict[str, str] = {}
+    asyncio.run(_runtime(data).set_many({**VALUES, PLATFORM: "platform-value"}))
+    store = FakeAwsCli(data)
+    _with_inventory_key(store, STALE_TOKEN)
+    assert f"{PREFIX}/users/u-gone/secrets" not in store.data
+
+    assert aws_sm.export_values(_cli(store), PREFIX, include_platform=False) == VALUES
+    assert aws_sm.export_values(_cli(store), PREFIX, include_platform=True) == {**VALUES, PLATFORM: "platform-value"}
+    read = [argv[argv.index("--secret-id") + 1] for argv, _ in store.calls if argv[2] == "get-secret-value"]
+    assert f"{PREFIX}/users/u-gone/secrets" not in read, "an excluded key's document is never read"
+
+
+@pytest.mark.parametrize("tail", [
+    "connections.accounts.google.refresh_token",
+    "delegated_to_kdcube.credentials.token",
+    "remote_mcp.server.token",
+    "linkedin.accounts.me.token",
+])
+def test_every_excluded_prefix_is_left_out_with_or_without_its_bundle(tail):
+    from kdcube_cli.runtime_secrets_export import EXCLUDED_USER_PREFIXES
+
+    assert tail.startswith(EXCLUDED_USER_PREFIXES)
+    data: dict[str, str] = {}
+    asyncio.run(_runtime(data).set_many(VALUES))
+    store = FakeAwsCli(data)
+    _with_inventory_key(store, f"users.u-gone.secrets.{tail}")
+    _with_inventory_key(store, f"users.u-gone.bundles.travel@1-0.secrets.{tail}")
+    assert aws_sm.export_values(_cli(store), PREFIX, include_platform=False) == VALUES
+
+
+def test_a_missing_document_for_any_other_key_still_stops_the_export():
+    data: dict[str, str] = {}
+    asyncio.run(_runtime(data).set_many(VALUES))
+    store = FakeAwsCli(data)
+    # A per-user secret that is exported (not runtime-acquired): its missing document still stops.
+    _with_inventory_key(store, "users.u-gone.secrets.github.token")
+    with pytest.raises(aws_sm.AwsSecretsError, match="does not exist"):
+        aws_sm.export_values(_cli(store), PREFIX, include_platform=False)
+    # An app key and a platform key whose documents are gone stop it too.
+    for key, platform in (("bundles.gone@1-0.secrets.openai.api_key", False), ("platform.services.gone.key", True)):
+        store = FakeAwsCli(dict(data))
+        _with_inventory_key(store, key)
+        if platform:
+            store.data.pop(f"{PREFIX}/platform/secrets", None)
+        with pytest.raises(aws_sm.AwsSecretsError):
+            aws_sm.export_values(_cli(store), PREFIX, include_platform=True)
+
+
+def test_a_present_acquired_token_is_still_not_exported():
+    data: dict[str, str] = {}
+    asyncio.run(_runtime(data).set_many({**VALUES, "users.u-1.secrets.remote_mcp.server.token": "acquired"}))
+    store = FakeAwsCli(data)
+    assert aws_sm.export_values(_cli(store), PREFIX, include_platform=False) == VALUES

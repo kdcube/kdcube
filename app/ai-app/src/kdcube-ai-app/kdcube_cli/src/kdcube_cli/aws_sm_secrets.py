@@ -31,6 +31,7 @@ from kdcube_cli.management.secret_descriptors import (
     write_secret_descriptors_into_directory,
 )
 from kdcube_cli.management.secret_export import ExportedSecret
+from kdcube_cli.runtime_secrets_export import EXCLUDED_USER_PREFIXES
 
 INVENTORY_SCHEMA = "kdcube.aws_secret_inventory.v1"
 MAX_INVENTORY_KEYS = 4096
@@ -594,8 +595,19 @@ def plan_aggregate(cli: AwsSecretsCli, prefix: str, values: Mapping[str, str], *
 # ── Export ──
 
 
+def _acquired_user_token(key: str) -> bool:
+    """A per-user key holding a token acquired at runtime, which no export ever carries (EXCLUDED_USER_PREFIXES)."""
+    user = _split_user_key(key)
+    return user is not None and user[2].startswith(EXCLUDED_USER_PREFIXES)
+
+
 def export_values(cli: AwsSecretsCli, prefix: str, *, include_platform: bool) -> dict[str, str]:
-    """Every inventory key and its value, read document by document. A missing document or value stops."""
+    """Every exportable inventory key and its value, read document by document. A missing document or value stops.
+
+    Per-user keys holding runtime-acquired tokens are dropped before any document is read: they are never
+    exported, so a stale inventory entry whose document is gone cannot stop an export. Everything else stays
+    strict.
+    """
     inventory_secret = inventory_id(prefix)
     raw_inventory = cli.get(inventory_secret)
     if raw_inventory is None:
@@ -603,7 +615,7 @@ def export_values(cli: AwsSecretsCli, prefix: str, *, include_platform: bool) ->
     keys = [
         key
         for key in parse_inventory(raw_inventory, secret_id=inventory_secret)
-        if include_platform or _split_platform_key(key) is None
+        if (include_platform or _split_platform_key(key) is None) and not _acquired_user_token(key)
     ]
     grouped: dict[str, list[str]] = {}
     for key in keys:
