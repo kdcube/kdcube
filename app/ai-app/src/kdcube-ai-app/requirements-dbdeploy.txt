@@ -5,4 +5,4 @@ pydantic-settings==2.10.1
 PyYAML==6.0.2
 
 # Shared descriptor and authority configuration.
-connection-hub>=2026.10.19.2200,<2027
+connection-hub>=2026.10.25.0100,<2027

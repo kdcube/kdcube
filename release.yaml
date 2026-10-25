@@ -1,25 +1,36 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.10.19.2230"
+  ref: "2026.10.25.0130"
   description: |
-    This release follows 2026.10.19.1830. It publishes the platform images
-    and the tag, and it is the record the packaged CLI is published from.
+    Platform and kdcube-cli 2026.10.25.0130 follow 2026.10.19.2230.
 
-    The processor and executor require connection-hub, project-board and
-    app-foundation[mcp] >=2026.10.19.2200,<2027. The ingress requires
-    connection-hub and app-foundation at the same floor. The dbdeploy and
-    metric-service images require connection-hub at that floor too. This includes the
-    Project Board worker contract and CLI for importing project exports, and
-    the Connection Hub participant failure diagnostics from that package set.
+    The five platform image requirement files consume the PB package set at
+    2026.10.25.0100 or later, below 2027. The processor and executor require
+    connection-hub, project-board and app-foundation[mcp]. The ingress requires
+    connection-hub and app-foundation; dbdeploy and metric-service require
+    connection-hub. Existing extras and upper bounds are preserved. Installed
+    package versions and immutable image identities are recorded at publication.
 
-    The 2026.10.19.2200 pb set also includes the Connection Hub Card lock
-    policy check through INFO memory when CONFIG is restricted, as on
-    ElastiCache (elenaviter/app-ecosystem#861). An explicit noeviction policy
-    is still required; unknown policies remain refused. No Redis topology
-    or eviction-policy configuration is changed.
+    Connection Hub's MCP surfaces and OAuth refresh enforce the same request
+    policy and entry-bound catalog rows. Refreshed sessions retain their entry
+    resource and read their original-exchange family's selectors before
+    reconnecting. Token exchange explains an original-exchange refusal, and the
+    management CLI can recover consent for an exact secret.
 
-    These ranges set minimum versions; the release image verification records
-    the installed package versions and image identities.
+    The PB set also carries worker service discovery and calls, relay recovery
+    and retention improvements, project Control account policies and bounded
+    saver proofs, multi-profile procedure installation, and command option
+    validation. App Foundation and Connection Hub include A2A building blocks;
+    platform installation and activation of inbound A2A routes are separate.
+
+    Agent Card saves apply project bounds only to governed resources, name
+    refused permissions, and preserve revision links so policy changes can
+    settle after renewal or issuer updates. Delegated MCP gateway tool lists
+    and calls follow each agent Card combined with its linked Control.
+
+    This platform snapshot also includes site catalog convergence and
+    AWS-compatible per-user secret document names. Optional agent and web-search
+    tool requirements retain their existing compatibility ranges.
 
 config:
-  version: "2026.10.19.2230"
+  version: "2026.10.25.0130"
