@@ -162,6 +162,11 @@ that runtime file. Source refresh restages the platform before regenerating it.
 Application aliases and hosts remain proc catalog data; they are never rendered
 into this proxy file.
 
+The built-in templates carry the bounded
+[request-header capacity](proxy-ops-README.md#request-header-capacity). Refresh
+the staged source and regenerate the mounted runtime file to adopt template
+changes; rebuilding the image alone keeps that mounted file's existing bytes.
+
 ---
 
 ## CORS handling

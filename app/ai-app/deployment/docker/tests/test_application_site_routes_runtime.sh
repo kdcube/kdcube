@@ -41,6 +41,25 @@ assert_body() {
   [[ "$actual" == "$expected" ]] || fail "$label: expected '$expected', got '$actual'"
 }
 
+assert_request_header_capacity() {
+  local origin="$1"
+  local label="$2"
+  local token
+  local status
+
+  # Synthetic values only: the parser must accept a field above its old 8 KiB
+  # default while retaining the bounded 16 KiB field limit used at the edge.
+  token="$(printf '%12000s' '' | tr ' ' x)"
+  status="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $token" "$origin/health")"
+  assert_body "$status" "200" "$label 12000-byte token header"
+
+  token="$(printf '%17000s' '' | tr ' ' x)"
+  status="$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $token" "$origin/health")"
+  assert_body "$status" "400" "$label oversized request header"
+}
+
 docker network create "$NETWORK" >/dev/null
 docker run -d --rm \
   --name "$STUB_CONTAINER" \
@@ -103,6 +122,8 @@ run_proxy_matrix() {
     sleep 0.1
   done
   curl -fsS "$origin/health" >/dev/null || fail "proxy did not become ready"
+
+  assert_request_header_capacity "$origin" "$proxy_mode $route_prefix $forwarded_source"
 
   assert_body \
     "$(request_body "$origin" /health app.example.test)" \

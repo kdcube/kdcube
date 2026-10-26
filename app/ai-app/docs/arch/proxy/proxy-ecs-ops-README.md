@@ -193,6 +193,12 @@ deployment/docker/all_in_one_kdcube/nginx/kdcube-nginx-config
 The cloud deployment keeps the selected template in shared proxy-config
 storage. Operators do not edit that derived file directly.
 
+Deployment-owned Cognito and delegated templates carry the same bounded
+[request-header capacity](proxy-ops-README.md#request-header-capacity). Adopt a
+capacity change in the deployment's source template, then activate and verify
+it through the flow below. The image supplies the utility; the shared template
+supplies the effective header limit.
+
 ### Desired configuration
 
 Terraform performs the deterministic part of the contract:
