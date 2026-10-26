@@ -551,51 +551,49 @@ def test_aws_sm_secret_path_uses_grouped_documents():
     assert manager._inventory_secret_id() == "kdcube/demo/demo-march/inventory"
 
 
-_AWS_SM_NAME = __import__("re").compile(r"^[A-Za-z0-9/_+=.@!-]+$")
+_AWS_SM_NAME = __import__("re").compile(r"^[A-Za-z0-9/_+=.@-]+$")
 COGNITO_USER = "cognito:3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
 
 
 class _AwsNamingClient(_FakeAwsSecretsClient):
-    """Refuses names AWS Secrets Manager refuses (ValidationException: letters, digits and -/_+=.@!)."""
-
-    async def get_secret_value(self, *, SecretId: str):
-        if not _AWS_SM_NAME.match(SecretId):
-            raise _FakeAwsClientError("ValidationException")
-        return await super().get_secret_value(SecretId=SecretId)
+    """Enforce CreateSecret's name alphabet; an absent GetSecretValue still returns not found."""
 
     async def create_secret(self, *, Name: str, SecretString: str, Tags=None, ClientRequestToken=None):
-        if not _AWS_SM_NAME.match(Name):
-            raise _FakeAwsClientError("ValidationException")
+        if not _AWS_SM_NAME.fullmatch(Name):
+            raise _FakeAwsClientError("InvalidParameterException")
         return await super().create_secret(
             Name=Name, SecretString=SecretString, Tags=Tags, ClientRequestToken=ClientRequestToken)
 
 
 def test_aws_sm_user_segment_is_a_valid_reversible_name():
-    """W927: aipb.io platform user ids are cognito:<uuid>, and ":" is not a valid AWS secret name character."""
+    """Identity-provider user IDs produce reversible CreateSecret-compatible names."""
     manager = AwsSecretsManagerSecretsManager(
         SecretsManagerConfig(provider="aws-sm", component="proc", aws_sm_prefix="kdcube/demo/demo-march")
     )
     assert (
         manager._secret_id(f"users.{COGNITO_USER}.bundles.problem-board@1-0.secrets.github.token")
-        == "kdcube/demo/demo-march/users/cognito!3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
+        == "kdcube/demo/demo-march/users/encoded/cognito=3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
         "/bundles/problem-board@1-0/secrets"
     )
     assert (
         manager._secret_id(f"users.{COGNITO_USER}.secrets.github.token")
-        == "kdcube/demo/demo-march/users/cognito!3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f/secrets"
+        == "kdcube/demo/demo-march/users/encoded/cognito=3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f/secrets"
     )
     # An id with only the characters AWS allows keeps its existing name.
     assert manager._secret_id("users.user-1.secrets.github.token") == "kdcube/demo/demo-march/users/user-1/secrets"
 
-    ids = [COGNITO_USER, "user-1", "a!b", "a!21b", "a/b", "a:b", "a%3Ab", "a!3Ab", "ünï", "a b", "@x+y=z_"]
+    ids = [COGNITO_USER, "user-1", "a!b", "a!21b", "a/b", "a:b", "a%3Ab", "a!3Ab",
+           "ünï", "a b", "@x+y=z_", "a=3Ab", "a=b", "=", "😀"]
+    ids += [chr(code) for code in range(128)]
+    ids = list(dict.fromkeys(ids))
     segments = [secrets_manager_module.aws_sm_name_segment(user_id) for user_id in ids]
     assert len(set(segments)) == len(ids)
     for user_id, segment in zip(ids, segments):
-        assert _AWS_SM_NAME.match(segment) and "/" not in segment
+        assert _AWS_SM_NAME.fullmatch(segment) and "/" not in segment
         assert secrets_manager_module.aws_sm_name_segment_value(segment) == user_id
 
 
-@pytest.mark.parametrize("segment", ["a!3", "a!3a", "a!ZZ", "a:b", "a/b", "!FF"])
+@pytest.mark.parametrize("segment", ["a=3", "a=3a", "a=ZZ", "a:b", "a/b", "=FF", "a!3A", "=C3=28"])
 def test_a_malformed_aws_name_segment_is_refused_by_name(segment):
     with pytest.raises(SecretsManagerError, match="AWS secret name segment"):
         secrets_manager_module.aws_sm_name_segment_value(segment)
@@ -613,10 +611,51 @@ async def test_aws_sm_stores_and_reads_a_cognito_users_secret():
     await manager.set_secret(key, "token-value")
 
     assert await manager.get_secret(key) == "token-value"
-    name = "kdcube/demo/demo-march/users/cognito!3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f/bundles/problem-board@1-0/secrets"
+    name = "kdcube/demo/demo-march/users/encoded/cognito=3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f/bundles/problem-board@1-0/secrets"
     assert json.loads(client.data[name]) == {"github": {"token": "token-value"}}
     # Logical keys and the inventory keep the platform user id as it is.
     assert key in json.loads(client.data["kdcube/demo/demo-march/inventory"])["keys"]
+
+
+@pytest.mark.parametrize("suffix,document_suffix", [
+    ("secrets.token", "secrets"),
+    ("bundles.demo@1-0.secrets.token", "bundles/demo@1-0/secrets"),
+])
+@pytest.mark.parametrize("user_id,legacy_id", [
+    ("a:b", "a=3Ab"), ("a/b", "a=2Fb"), ("a!b", "a=21b"),
+    ("a b", "a=20b"), ("é", "=C3=A9"), ("encoded/one", "encoded=2Fone"),
+])
+@pytest.mark.asyncio
+async def test_aws_sm_encoded_users_cannot_read_or_overwrite_legacy_literal_ids(
+    user_id, legacy_id, suffix, document_suffix,
+):
+    prefix = "kdcube/demo/project"
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(provider="aws-sm", component="proc", aws_sm_prefix=prefix)
+    )
+    legacy_key = f"users.{legacy_id}.{suffix}"
+    new_key = f"users.{user_id}.{suffix}"
+    legacy_path = f"{prefix}/users/{legacy_id}/{document_suffix}"
+    client = _AwsNamingClient({legacy_path: json.dumps({"token": "legacy-value"})})
+    manager._session = _FakeAwsSession(client)
+
+    assert manager._secret_id(legacy_key) == legacy_path
+    assert manager._secret_id(new_key) != legacy_path
+    assert _AWS_SM_NAME.fullmatch(manager._secret_id(new_key))
+    assert await manager.get_secret(new_key) is None
+    assert await manager.get_secret(legacy_key) == "legacy-value"
+    await manager.set_secret(new_key, "new-value")
+    assert await manager.get_secret(new_key) == "new-value"
+    assert await manager.get_secret(legacy_key) == "legacy-value"
+
+
+def test_aws_sm_legacy_encoded_user_branch_keeps_its_names():
+    manager = AwsSecretsManagerSecretsManager(
+        SecretsManagerConfig(provider="aws-sm", component="proc", aws_sm_prefix="demo")
+    )
+    assert manager._secret_id("users.encoded.secrets.token") == "demo/users/encoded/secrets"
+    assert manager._secret_id("users.encoded.bundles.app/secrets.secrets.token") == "demo/users/encoded/bundles/app/secrets/secrets"
+    assert manager._secret_id("users.a:b.secrets.token") == "demo/users/encoded/a=3Ab/secrets"
 
 
 @pytest.mark.asyncio

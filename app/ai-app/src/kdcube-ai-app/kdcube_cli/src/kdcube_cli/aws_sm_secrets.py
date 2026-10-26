@@ -150,17 +150,25 @@ def validate_key(key: str) -> str:
     return key
 
 
-# The runtime provider's aws_sm_name_segment (kdcube_ai_app.infra.secrets.manager, W927): AWS secret names
-# allow only letters, digits and -/_+=.@!; a user id such as cognito:<uuid> is written with every other UTF-8
-# byte, and "!" itself, as "!" plus two hex digits. A plain id is unchanged.
-_AWS_SM_SEGMENT_PLAIN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_+=.@")
+# Match the runtime provider's codec and user-path selection without importing the SDK.
+# CreateSecret allows letters, digits and /_+=.@-. Reserve "=" for UTF-8 byte escapes
+# and encode "/" so an identifier occupies exactly one segment.
+_AWS_SM_SEGMENT_PLAIN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_+.@")
+_AWS_SM_LEGACY_USER_PLAIN = _AWS_SM_SEGMENT_PLAIN | {"="}
 
 
 def aws_sm_name_segment(value: str) -> str:
     return "".join(
-        char if char in _AWS_SM_SEGMENT_PLAIN else "".join(f"!{byte:02X}" for byte in char.encode("utf-8"))
+        char if char in _AWS_SM_SEGMENT_PLAIN else "".join(f"={byte:02X}" for byte in char.encode("utf-8"))
         for char in value
     )
+
+
+def aws_sm_user_path(user_id: str) -> str:
+    """Keep legacy valid names; escaped IDs have their own path beneath users/."""
+    if all(char in _AWS_SM_LEGACY_USER_PLAIN for char in user_id):
+        return user_id
+    return f"encoded/{aws_sm_name_segment(user_id)}"
 
 
 def document_id(prefix: str, key: str) -> str:
@@ -172,7 +180,7 @@ def document_id(prefix: str, key: str) -> str:
     user = _split_user_key(key)
     if user:
         user_id, bundle_id, _tail = user
-        user_segment = aws_sm_name_segment(user_id)
+        user_segment = aws_sm_user_path(user_id)
         if bundle_id:
             return f"{prefix}/users/{user_segment}/bundles/{bundle_id}/secrets"
         return f"{prefix}/users/{user_segment}/secrets"
