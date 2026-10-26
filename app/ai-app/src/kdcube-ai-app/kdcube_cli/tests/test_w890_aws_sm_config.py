@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -31,7 +32,7 @@ PERSON_APP = "users.u-1.bundles.travel@1-0.secrets.calendar.refresh_token"
 COGNITO = "cognito:3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
 COGNITO_PERSON = f"users.{COGNITO}.secrets.github.token"
 COGNITO_PERSON_APP = f"users.{COGNITO}.bundles.travel@1-0.secrets.calendar.refresh_token"
-COGNITO_SEGMENT = "cognito!3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
+COGNITO_SEGMENT = "encoded/cognito=3A3f1c2b7a-9d4e-4c1a-8f2e-5b6a7c8d9e0f"
 DOTTED = "bundles.travel@1-0.secrets.providers.maps.v2.key"
 PLATFORM = "platform.services.anthropic.api_key"
 AGGREGATE = f"{PREFIX}/bundles/secrets"
@@ -86,6 +87,7 @@ class FakeAwsCli:
             return subprocess.CompletedProcess(argv, 0, "{}", "")
         if op == "create-secret":
             name = argv[argv.index("--name") + 1]
+            assert re.fullmatch(r"[A-Za-z0-9/_+=.@-]+", name)
             assert name not in self.data
             self.data[name] = input
             self.written.append(name)
@@ -131,6 +133,7 @@ class _SdkClient:
         return {"ARN": SecretId}
 
     async def create_secret(self, *, Name: str, SecretString: str, Tags=None, ClientRequestToken=None):
+        assert re.fullmatch(r"[A-Za-z0-9/_+=.@-]+", Name)
         if Name in self.data:
             raise _ClientError("ResourceExistsException")
         self.data[Name] = SecretString
@@ -217,14 +220,47 @@ def test_document_and_tail_are_the_runtime_ones(key):
 
 
 def test_a_cognito_users_documents_are_named_as_the_runtime_names_them():
-    """W927: the runtime writes a cognito:<uuid> user's documents under an encoded name; the CLI names the same
-    documents. (The management user target does not accept ":" yet, so this user is not in the CLI round trip.)"""
+    """The runtime and config CLI select identical documents for identity-provider user IDs."""
     data: dict[str, str] = {}
     asyncio.run(_runtime(data).set_many({COGNITO_PERSON: "p", COGNITO_PERSON_APP: "pa"}))
     assert {aws_sm.document_id(PREFIX, COGNITO_PERSON), aws_sm.document_id(PREFIX, COGNITO_PERSON_APP)} == {
         f"{PREFIX}/users/{COGNITO_SEGMENT}/secrets",
         f"{PREFIX}/users/{COGNITO_SEGMENT}/bundles/travel@1-0/secrets",
     } == set(data) - {f"{PREFIX}/inventory"}
+
+
+@pytest.mark.parametrize("user_id", [COGNITO, "a:b", "a=3Ab", "a!b", "a/b", "a b", "é", "😀", "encoded", "@x+y=z_"])
+@pytest.mark.parametrize("suffix", ["secrets.token", "bundles.travel@1-0.secrets.token"])
+def test_encoded_and_legacy_user_paths_have_runtime_cli_parity(user_id, suffix):
+    from kdcube_ai_app.infra.secrets.manager import aws_sm_name_segment, aws_sm_name_segment_value
+
+    key = f"users.{user_id}.{suffix}"
+    assert aws_sm.document_id(PREFIX, key) == _runtime({})._secret_id(key)
+    assert re.fullmatch(r"[A-Za-z0-9/_+=.@-]+", aws_sm.document_id(PREFIX, key))
+    segment = aws_sm.aws_sm_name_segment(user_id)
+    assert segment == aws_sm_name_segment(user_id)
+    assert "/" not in segment
+    assert aws_sm_name_segment_value(segment) == user_id
+
+
+@pytest.mark.parametrize("writer", ["cli", "runtime"])
+def test_cli_and_runtime_share_escaped_users_without_aliasing_existing_literal_users(writer):
+    data: dict[str, str] = {}
+    runtime = _runtime(data)
+    values = {
+        "users.a:b.secrets.token": "escaped-user",
+        "users.a=3Ab.secrets.token": "literal-user",
+        "users.a:b.bundles.travel@1-0.secrets.token": "escaped-bundle",
+        "users.a=3Ab.bundles.travel@1-0.secrets.token": "literal-bundle",
+    }
+    if writer == "cli":
+        aws_sm.apply_import(_cli(FakeAwsCli(data)), PREFIX, values, write_rule="overwrite")
+    else:
+        asyncio.run(runtime.set_many(values))
+    for key, value in values.items():
+        assert asyncio.run(runtime.get_secret(key)) == value
+        document = _cli(FakeAwsCli(data)).get(aws_sm.document_id(PREFIX, key))
+        assert aws_sm.get_nested(json.loads(document), aws_sm.key_tail(key)) == value
 
 
 # ── The plan and the write rules ──

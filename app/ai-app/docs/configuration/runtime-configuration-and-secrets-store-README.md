@@ -203,14 +203,25 @@ For bundle deployment state in `aws-sm`, the grouped documents are:
 | `<prefix>/platform/secrets` | platform secret document, addressed logically as `platform.*` |
 | `<prefix>/bundles/<bundle_id>/descriptor` | bundle registry entry and non-secret `config` |
 | `<prefix>/bundles/<bundle_id>/secrets` | bundle-level secrets only |
-| `<prefix>/users/<user_id>/secrets` | direct user secrets |
-| `<prefix>/users/<user_id>/bundles/<bundle_id>/secrets` | user-bundle secrets |
+| `<prefix>/users/<user_path>/secrets` | direct user secrets |
+| `<prefix>/users/<user_path>/bundles/<bundle_id>/secrets` | user-bundle secrets |
 
-`<user_id>` in an AWS name is the platform user id written so that AWS accepts it. AWS secret names allow
-only letters, digits and `-/_+=.@!`. Those characters stay as they are, except `!` and `/`. Every other
-UTF-8 byte is written as `!` followed by two uppercase hex digits, and `!` itself is `!21`. So
-`cognito:3f1c…` becomes `cognito!3A3f1c…`, while `user-1` is unchanged. The mapping can be reversed, and
-two user ids never share a name. Logical keys and the inventory keep the platform user id unchanged.
+`<user_path>` preserves existing valid user names and gives escaped identifiers a separate path.
+AWS [CreateSecret names](https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html)
+allow letters, digits and `/_+=.@-`. User IDs consisting of those characters except `/` retain their raw
+path, including literal `=`. Thus `user-1` and `a=3Ab` keep their existing documents.
+
+Other user IDs use `encoded/<segment>`. The segment reserves `=` and writes it, `/`, and every byte
+outside the remaining allowed characters as `=` followed by two uppercase hexadecimal digits. This
+UTF-8 encoding is reversible: `cognito:user` uses `encoded/cognito=3Auser`, `a/b` uses `encoded/a=2Fb`,
+and `a:=b` uses `encoded/a=3A=3Db`. Every escaped segment contains `=`, separating it from the literal
+`secrets` and `bundles` branches of an existing user named `encoded`. It also isolates `a:b` from the
+legacy raw user `a=3Ab`. Runtime and config-import CLI use the same mapping. Logical keys and inventory
+retain the original user ID.
+
+Earlier `!HH` names were rejected by CreateSecret, so they cannot identify documents created through
+that API. Existing valid raw names need no migration. The provider does not fall back to another user's
+raw name when reading an escaped ID.
 
 Logical reads always use canonical keys. The AWS provider maps those keys to
 the grouped documents above and maintains inventory only after successful
