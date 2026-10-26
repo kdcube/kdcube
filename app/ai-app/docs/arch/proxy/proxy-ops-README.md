@@ -113,6 +113,34 @@ limit_req_status 429;
 
 ---
 
+## Request header capacity
+
+Delegated Cards with service grants can produce an Authorization field larger
+than nginx's default 8 KiB buffer. The supported proxy templates use this
+bounded capacity in `http {}` so those requests can reach authentication:
+
+```nginx
+large_client_header_buffers 4 16k;
+```
+
+Each complete HTTP/1 header line must fit one buffer, including its name,
+separator and line ending. Increasing the buffer count does not enlarge a
+single field. Buffers are allocated on demand. See
+[nginx's request-header contract](https://nginx.org/en/docs/http/ngx_http_core_module.html#large_client_header_buffers).
+
+The public edge has its own limits: [AWS ALB](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html)
+allows 16 KiB per header and 64 KiB for request headers, both non-adjustable;
+[CloudFront](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-limits.html)
+limits the request including headers and query strings, excluding the body,
+to 32,768 bytes. Leave room for other fields and headers added by proxy hops.
+A Card that exceeds the applicable edge limit needs a smaller token payload.
+
+For diagnosis, record byte lengths and HTTP status only. nginx's verbose
+header-parser logs can contain credential values. Use synthetic values for
+parser boundary tests and the caller's normal service request for live proof.
+Local deployments regenerate their CLI-rendered mounted configuration;
+[ECS deployments activate the reviewed template and verify its hashes](proxy-ecs-ops-README.md#configuration-activation).
+
 ## Anti-DDoS hardening
 
 ```text
@@ -161,7 +189,7 @@ client_body_timeout    15s;
 send_timeout           30s;
 keepalive_timeout      65s;
 keepalive_requests     1000;
-large_client_header_buffers 4 8k;   # reject oversized headers
+large_client_header_buffers 4 16k;  # bounded request-header capacity
 ```
 
 ### Auth zone (credential stuffing protection)
