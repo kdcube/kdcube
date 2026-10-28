@@ -13,7 +13,10 @@ see_also:
 
 Captured 2026-10-28: four themes, Latin and Cyrillic, each at one, three and
 six repeats. All 24 LARGE PNGs were inspected. Their SHA-256 values, actual
-pages, text and layout/master chains are in `fit-calibration.json`. Its input
+page geometry, layout/master chains and length/script-preserving neutral text
+are in `fit-calibration.json`. Observations describe the original captured
+text and PNGs; neutral text preserves the estimator inputs but has not been
+rendered to claim identical glyph widths. Its input
 capture SHA-256 is `16b76ad18a2dbdccbe669b412510e569cf11ad56345f02c6f032b736d9b146d7`.
 
 The stock body font resolves to Lato 13 pt for Streamline/Focus, Arial 18 pt

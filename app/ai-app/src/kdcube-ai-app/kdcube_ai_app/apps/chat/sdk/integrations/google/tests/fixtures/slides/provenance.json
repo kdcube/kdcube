@@ -2,46 +2,136 @@
   "capture_date": "2026-10-28",
   "provider": "Google Slides API v1",
   "transformations": [
-    "Extract the presentation member from each captured response envelope.",
-    "Keep provided Drive-ID aliases, redacted provider URLs and transport-escaped tag text.",
-    "Replace each presentation title with its neutral fixture alias.",
-    "Serialize as UTF-8 JSON with two-space indentation; preserve all other field values."
+    "Start from the complete captured-response fixtures at the supplied source ref; preserve original capture hashes.",
+    "Retain only the listed adapter and calibration fields; omit unused page properties, theme data, shape properties, borders and provider URLs.",
+    "Neutralise all text runs, notes, table cells and alt text, preserving code-point and UTF-16 lengths, scripts, whitespace and line breaks. Assign neutral tag names of equal length.",
+    "Keep neutral presentation aliases and original layout names; preserve missing fields such as the PPTX revisionId.",
+    "Calibration copies keep page size, identity and layout/master chains; each test supplies its captured case page instead of duplicate copy slides.",
+    "Keep measured observations and original thumbnail hashes. Neutral strings preserve estimator inputs, not exact rendered glyph widths.",
+    "Serialize as UTF-8 JSON with two-space indentation."
   ],
   "fixtures": {
     "simple_table": {
       "capture_sha256": "85353c9512cb606413983b80429fa840a3e6df8da7867613ec0eb5324dddfbc6",
-      "fixture_sha256": "9563bf761b0bd77a70995bd528db83fcadca552046dd149d31c22afc2a38462f",
+      "fixture_sha256": "25a61774b3bd37475d72adae344ae22cbcd95587b2c9c9affc2bb6d6f20d4d2b",
       "slides": 3,
       "layouts": 11,
-      "masters": 1
+      "masters": 1,
+      "before_bytes": 498032,
+      "after_bytes": 190945
     },
     "streamline_rotated": {
       "capture_sha256": "63b2210a866169e52fd8369298d9395f1b64ca7d6713ed1d125a326a4819939e",
-      "fixture_sha256": "d2bbf9f9abc50872c92c144cf7c6de8478bb193c0fd9e0d70343df6587cdf435",
+      "fixture_sha256": "64bc58fe56c35b7586d2330b32ae21e386b5ad82838da22c72badf8523a82c6f",
       "slides": 3,
       "layouts": 11,
-      "masters": 1
+      "masters": 1,
+      "before_bytes": 410200,
+      "after_bytes": 174647
     },
     "focus_group": {
       "capture_sha256": "416aece4d30667ece2ce6540d108c9832fce41cf34be19d0381219a6b5f90932",
-      "fixture_sha256": "fb26abac3de61f94d603a5c9ecc91b5d12c14938f430c170db34d7a9d793d23f",
+      "fixture_sha256": "f85b3b58c56a6bb562cb0cc8d2d81fa3b7263f7bd9cdcbd6d16974cdc17f04ea",
       "slides": 4,
       "layouts": 11,
-      "masters": 1
+      "masters": 1,
+      "before_bytes": 518298,
+      "after_bytes": 211325
     },
     "material_group_rotated": {
       "capture_sha256": "f69d807b3a2f117e50ac89a2bed72081ecf73a97739520379510529e1b577121",
-      "fixture_sha256": "d85f9b31c781975ae958aba43ea4e5ee84b7511a4757b84404b8d1ec3ed2866f",
+      "fixture_sha256": "1216e93add049138a3f49e9214d9b7b2e4e2a36f6278a6db6b438d70e0c6e005",
       "slides": 4,
       "layouts": 11,
-      "masters": 1
+      "masters": 1,
+      "before_bytes": 400435,
+      "after_bytes": 170317
     },
     "pptx_converted": {
       "capture_sha256": "0650cfc68f502ec0f731564f60d82657554f12347dd89cc4f83075995d416da5",
-      "fixture_sha256": "0c6e9d9e7f26027c27dbb55676eea325f84724f22c14104eed2789b5b3ed27e4",
+      "fixture_sha256": "9b6f92bdee8693cfe684b6bdb8db369a93f95c6e5bbf33bf541eeb07d8ae1cfc",
       "slides": 16,
       "layouts": 17,
-      "masters": 1
+      "masters": 1,
+      "before_bytes": 1971784,
+      "after_bytes": 752223
     }
+  },
+  "calibration": {
+    "capture_sha256": "16b76ad18a2dbdccbe669b412510e569cf11ad56345f02c6f032b736d9b146d7",
+    "fixture_sha256": "f66e6c25d68fb6cf668ca87b7f461f8c053273d0ac302a1fb2c2fd5cc7738157",
+    "before_bytes": 2282093,
+    "after_bytes": 898858
+  },
+  "retained_fields": {
+    "presentation": [
+      "presentationId",
+      "title",
+      "revisionId",
+      "pageSize",
+      "slides",
+      "layouts",
+      "masters"
+    ],
+    "page": [
+      "objectId",
+      "pageElements",
+      "slideProperties",
+      "layoutProperties",
+      "notesProperties"
+    ],
+    "slideProperties": [
+      "isSkipped",
+      "layoutObjectId",
+      "masterObjectId",
+      "notesPage"
+    ],
+    "layoutProperties": [
+      "name",
+      "displayName",
+      "masterObjectId"
+    ],
+    "element": [
+      "objectId",
+      "title",
+      "description",
+      "size",
+      "transform",
+      "shape",
+      "table",
+      "elementGroup",
+      "image",
+      "sheetsChart",
+      "video"
+    ],
+    "shape": [
+      "shapeType",
+      "placeholder.type",
+      "placeholder.parentObjectId",
+      "text.textElements"
+    ],
+    "textElement": [
+      "startIndex",
+      "endIndex",
+      "textRun.content",
+      "textRun.style.fontSize",
+      "textRun.style.fontFamily",
+      "textRun.style.bold",
+      "paragraphMarker.style.lineSpacing",
+      "paragraphMarker.bullet.glyph"
+    ],
+    "table": [
+      "rows",
+      "columns",
+      "tableRows[].tableCells[].text.textElements"
+    ],
+    "notesProperties": [
+      "speakerNotesObjectId"
+    ]
+  },
+  "complete_fixture_source_ref": "ed24572888d74edce49048d3d0a19fdce90394dc",
+  "sizes": {
+    "before_bytes": 6080842,
+    "after_bytes": 2398315
   }
 }
