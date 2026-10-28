@@ -47,6 +47,15 @@ def compare(label, before, after):
     return {"case": label, "projection_sha256": digest}
 
 
+def compare_body(label, before, after, body_ref):
+    def body(value):
+        return next(e for e in snapshot(value, limit=50)["slides"][0]["elements"] if e["ref"] == body_ref)
+    left, right = normalise(body(before)), normalise(body(after))
+    assert left == right, f"Body diagnostic or text profile changed: {label}"
+    digest = hashlib.sha256(json.dumps(right, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return {"case": label, "body_projection_sha256": digest}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-ref", required=True)
@@ -65,7 +74,8 @@ def main():
         left = copy.deepcopy(before["copy_presentations_after"][old["deck"]])
         right = copy.deepcopy(after["copy_presentations_after"][new["deck"]])
         left["slides"], right["slides"] = [old["page_after_write"]], [new["page_after_write"]]
-        output.append(compare(old["case"], left, right))
+        body_ref = new["page_after_write"]["pageElements"][0]["objectId"]
+        output.append(compare_body(old["case"], left, right, body_ref))
     print(json.dumps({"comparisons": len(output), "unchanged": True, "projections": output}, indent=2))
 
 

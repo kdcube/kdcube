@@ -7,61 +7,63 @@
     "Neutralise all text runs, notes, table cells and alt text, preserving code-point and UTF-16 lengths, scripts, whitespace and line breaks. Assign neutral tag names of equal length.",
     "Keep neutral presentation aliases and original layout names; preserve missing fields such as the PPTX revisionId.",
     "Calibration copies keep page size, identity and layout/master chains; each test supplies its captured case page instead of duplicate copy slides.",
+    "Keep only parent-chain shapes on layouts and masters; retain placeholder types and layoutProperties for every layout to preserve the complete layout listing.",
+    "Each calibration page keeps only the written BODY element; a shared parent chain per deck supplies inherited styles. Other page diagnostics are outside this calibration projection.",
     "Keep measured observations and original thumbnail hashes. Neutral strings preserve estimator inputs, not exact rendered glyph widths.",
-    "Serialize as UTF-8 JSON with two-space indentation."
+    "Serialize fixture bodies as compact UTF-8 JSON; keep provenance indented for reading."
   ],
   "fixtures": {
     "simple_table": {
       "capture_sha256": "85353c9512cb606413983b80429fa840a3e6df8da7867613ec0eb5324dddfbc6",
-      "fixture_sha256": "25a61774b3bd37475d72adae344ae22cbcd95587b2c9c9affc2bb6d6f20d4d2b",
+      "fixture_sha256": "a7ec30850a530afff3b0d51ed5973abef1c108836b4d089372d6891d28d6cb99",
       "slides": 3,
       "layouts": 11,
       "masters": 1,
       "before_bytes": 498032,
-      "after_bytes": 190945
+      "after_bytes": 28827
     },
     "streamline_rotated": {
       "capture_sha256": "63b2210a866169e52fd8369298d9395f1b64ca7d6713ed1d125a326a4819939e",
-      "fixture_sha256": "64bc58fe56c35b7586d2330b32ae21e386b5ad82838da22c72badf8523a82c6f",
+      "fixture_sha256": "09afff4606fa82090692b089ed78c7020186d2d7c043716e7c81db5281fabf08",
       "slides": 3,
       "layouts": 11,
       "masters": 1,
       "before_bytes": 410200,
-      "after_bytes": 174647
+      "after_bytes": 21464
     },
     "focus_group": {
       "capture_sha256": "416aece4d30667ece2ce6540d108c9832fce41cf34be19d0381219a6b5f90932",
-      "fixture_sha256": "f85b3b58c56a6bb562cb0cc8d2d81fa3b7263f7bd9cdcbd6d16974cdc17f04ea",
+      "fixture_sha256": "b4678bf3bfed976b10345ee0339a203c9c70c146c26f26ad3a7c19f315ce4626",
       "slides": 4,
       "layouts": 11,
       "masters": 1,
       "before_bytes": 518298,
-      "after_bytes": 211325
+      "after_bytes": 23871
     },
     "material_group_rotated": {
       "capture_sha256": "f69d807b3a2f117e50ac89a2bed72081ecf73a97739520379510529e1b577121",
-      "fixture_sha256": "1216e93add049138a3f49e9214d9b7b2e4e2a36f6278a6db6b438d70e0c6e005",
+      "fixture_sha256": "2be2da228013331eab88c60f15ecbba1da6ac4609487afa230db0f76e97a2d3a",
       "slides": 4,
       "layouts": 11,
       "masters": 1,
       "before_bytes": 400435,
-      "after_bytes": 170317
+      "after_bytes": 23501
     },
     "pptx_converted": {
       "capture_sha256": "0650cfc68f502ec0f731564f60d82657554f12347dd89cc4f83075995d416da5",
-      "fixture_sha256": "9b6f92bdee8693cfe684b6bdb8db369a93f95c6e5bbf33bf541eeb07d8ae1cfc",
+      "fixture_sha256": "0d2631fc5ca7f3b968f0cdf0719038e15231745e349191adbe596bb9cb070184",
       "slides": 16,
       "layouts": 17,
       "masters": 1,
       "before_bytes": 1971784,
-      "after_bytes": 752223
+      "after_bytes": 114058
     }
   },
   "calibration": {
     "capture_sha256": "16b76ad18a2dbdccbe669b412510e569cf11ad56345f02c6f032b736d9b146d7",
-    "fixture_sha256": "f66e6c25d68fb6cf668ca87b7f461f8c053273d0ac302a1fb2c2fd5cc7738157",
+    "fixture_sha256": "906edbea1cdfd081da224afd35ae9c50c5d7bbe38beb70d545b53943c259ff90",
     "before_bytes": 2282093,
-    "after_bytes": 898858
+    "after_bytes": 86061
   },
   "retained_fields": {
     "presentation": [
@@ -132,6 +134,6 @@
   "complete_fixture_source_ref": "ed24572888d74edce49048d3d0a19fdce90394dc",
   "sizes": {
     "before_bytes": 6080842,
-    "after_bytes": 2398315
+    "after_bytes": 297782
   }
 }

@@ -136,11 +136,56 @@ def page(value):
     return row
 
 
-def presentation(value, *, include_slides=True):
+def walk(elements):
+    for row in elements:
+        yield row
+        yield from walk(row.get("elementGroup", {}).get("children", []))
+
+
+def support_pages(value, roots):
+    """Keep inherited styles and layout placeholder metadata exactly."""
+    support = [*value.get("layouts", []), *value.get("masters", [])]
+    indexed = {e.get("objectId"): e for p in support for e in walk(p.get("pageElements", []))}
+    def parent(row):
+        return row.get("shape", {}).get("placeholder", {}).get("parentObjectId")
+    pending = [parent(e) for e in roots if parent(e)]
+    needed = set()
+    while pending:
+        ref = pending.pop()
+        if ref in needed or ref not in indexed:
+            continue
+        needed.add(ref)
+        inherited = parent(indexed[ref])
+        if inherited:
+            pending.append(inherited)
+    def project(rows, *, layout):
+        output = []
+        for row in rows:
+            if "elementGroup" in row:
+                children = project(row["elementGroup"].get("children", []), layout=layout)
+                if children:
+                    output.append({"objectId": row["objectId"], "elementGroup": {"children": children}})
+            elif row.get("objectId") in needed:
+                output.append({"objectId": row["objectId"], "shape": row["shape"]})
+            elif layout and row.get("shape", {}).get("placeholder", {}).get("type"):
+                # Layout listings expose every placeholder's type, even
+                # when no slide inherits its styling.
+                output.append({"objectId": row["objectId"], "shape": {"placeholder": {"type": row["shape"]["placeholder"]["type"]}}})
+        return output
+    for kind in ("layouts", "masters"):
+        for p in value.get(kind, []):
+            if "pageElements" in p:
+                p["pageElements"] = project(p["pageElements"], layout=kind == "layouts")
+
+
+def presentation(value, *, include_slides=True, roots=None):
     row = keep(value, ("presentationId", "title", "revisionId", "pageSize"))
     for kind in ("slides", "layouts", "masters"):
         if kind in value and (kind != "slides" or include_slides):
             row[kind] = [page(p) for p in value[kind]]
+    if roots is None:
+        roots = [e for p in row.get("slides", []) for e in walk(p.get("pageElements", []))]
+    support_pages(row, roots)
     return row
 
 
@@ -158,17 +203,25 @@ def main():
         raw = read(name + ".json")
         value = json.loads(raw)
         if name == "fit-calibration":
+            # Each fit test consumes one written BODY plus a shared style
+            # chain. Other page elements do not contribute to its fit.
+            cases = []
+            for c in value["cases"]:
+                body = next(e for e in c["page_after_write"]["pageElements"] if e.get("shape", {}).get("placeholder", {}).get("type") == "BODY")
+                projected_page = keep(c["page_after_write"], ("objectId",))
+                projected_page["pageElements"] = [element(body)]
+                cases.append({**keep(c, ("case", "deck", "script", "repeats", "chars", "thumbnail", "observed")), "text": neutral_text(c["text"]), "page_after_write": projected_page})
             output = {
                 "note": "Trimmed captured API pages and style chains with neutral text of equal lengths, scripts and line breaks. Observations and thumbnail hashes describe the original pre-neutralisation rendering, not a rendering of this neutral text.",
                 "source_sha256": value["source_sha256"],
-                "cases": [{**keep(c, ("case", "deck", "script", "repeats", "chars", "thumbnail", "observed")), "text": neutral_text(c["text"]), "page_after_write": page(c["page_after_write"])} for c in value["cases"]],
-                "copy_presentations_after": {k: presentation(v, include_slides=False) for k, v in value["copy_presentations_after"].items()},
+                "cases": cases,
+                "copy_presentations_after": {k: presentation(v, include_slides=False, roots=[e for c in cases if c["deck"] == k for e in c["page_after_write"]["pageElements"]]) for k, v in value["copy_presentations_after"].items()},
             }
             record = provenance.setdefault("calibration", {"capture_sha256": value["source_sha256"]})
         else:
             output = presentation(value)
             record = provenance["fixtures"][name]
-        encoded = (json.dumps(output, ensure_ascii=False, indent=2) + "\n").encode()
+        encoded = (json.dumps(output, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
         (ROOT / (name + ".json")).write_bytes(encoded)
         record.update(fixture_sha256=hashlib.sha256(encoded).hexdigest(), before_bytes=len(raw), after_bytes=len(encoded))
         before_total += len(raw)
@@ -179,8 +232,10 @@ def main():
         "Neutralise all text runs, notes, table cells and alt text, preserving code-point and UTF-16 lengths, scripts, whitespace and line breaks. Assign neutral tag names of equal length.",
         "Keep neutral presentation aliases and original layout names; preserve missing fields such as the PPTX revisionId.",
         "Calibration copies keep page size, identity and layout/master chains; each test supplies its captured case page instead of duplicate copy slides.",
+        "Keep only parent-chain shapes on layouts and masters; retain placeholder types and layoutProperties for every layout to preserve the complete layout listing.",
+        "Each calibration page keeps only the written BODY element; a shared parent chain per deck supplies inherited styles. Other page diagnostics are outside this calibration projection.",
         "Keep measured observations and original thumbnail hashes. Neutral strings preserve estimator inputs, not exact rendered glyph widths.",
-        "Serialize as UTF-8 JSON with two-space indentation.",
+        "Serialize fixture bodies as compact UTF-8 JSON; keep provenance indented for reading.",
     ]
     provenance["retained_fields"] = RETAINED_FIELDS
     provenance["complete_fixture_source_ref"] = args.source_ref

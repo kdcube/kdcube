@@ -17,7 +17,10 @@ notes, transforms and effective styles are retained from those bodies. The
 fixtures keep the fields consumed by the adapter and calibration tests;
 unused page/theme/shape properties, borders and provider URLs are omitted.
 The counts are Simple 3 slides/11 layouts, Streamline 3/11, Focus 4/11,
-Material 4/11 and converted PPTX 16/17, each with one master.
+Material 4/11 and converted PPTX 16/17, each with one master. Layout names
+and placeholder types remain for every layout. Layout/master shapes retain
+full effective styles only along a slide placeholder's parent chain;
+unreferenced styles and decorative support shapes are omitted.
 
 Drive IDs retain their stable capture aliases. Every captured text run,
 speaker note, table cell and alt text is replaced with neutral text of the
@@ -31,9 +34,11 @@ The separate first-page responses remain input evidence rather than duplicated
 snapshot fixtures. Missing fields stay missing: the PPTX source, for example,
 returned no `revisionId`.
 
-`fit-calibration.json` keeps the consumed fields of all 24 captured pages and
-the copies' page sizes, layouts and masters for style inheritance. Duplicate
-copy slides are omitted because each case supplies its own page. Observations
+`fit-calibration.json` keeps each written BODY element from 24 captured pages,
+plus one shared parent style chain and page size per deck. Other case-page
+elements and duplicate copy slides are omitted. This projection verifies
+the written body's fit and geometry; broader page diagnostics are covered
+by the five deck fixtures. Observations
 from the original matching PNGs record
 visible lines, line pitch and whether ink extends past the body frame.
 Thumbnail hashes identify the exact images; the PNGs remain measurement input
@@ -43,14 +48,17 @@ All 24 images were inspected. These observations describe the original text;
 neutral strings preserve the estimator's inputs, not exact rendered glyph
 widths. No new rendering of the neutral text is claimed.
 
-The six JSON bodies shrink from **6,080,842 to 2,398,315 bytes** (60.6 percent).
+The six JSON bodies shrink from **6,080,842 to 297,782 bytes** (95.1 percent),
+using compact UTF-8 JSON. Provenance remains indented for reading.
 `trim_fixtures.py --source-ref <complete-fixture-commit>` reproduces the
 projection and neutralisation using only the standard library.
 `compare_fixtures.py --source-ref <complete-fixture-commit>` runs with the
-qualified SDK interpreter and overlay. It compares all five deck snapshots
-and 24 calibration snapshots: text becomes a per-character script/length/
-whitespace profile; all other fields, including every fit value, compare
-exactly. The measured observations and thumbnail hashes must also match.
+qualified SDK interpreter and overlay. It compares all five full deck
+snapshots and the 24 written BODY projections: text becomes a per-character
+script/length/whitespace profile; all other fields in those projections,
+including every fit value, compare exactly. The measured observations and
+thumbnail hashes must also match. The complete-fixture source commit is
+recorded in `provenance.json`.
 
 See [calibration](calibration.md) for the measurements, coefficient choice and
 known conservative warning. The converted PPTX deck has no BODY or OBJECT
