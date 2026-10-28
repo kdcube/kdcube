@@ -1,0 +1,162 @@
+{
+  "presentationId": "fixture_pptx",
+  "title": "PPTX converted fixture",
+  "revisionId": "revision_1",
+  "pageSize": {
+    "width": {
+      "magnitude": 9144000,
+      "unit": "EMU"
+    },
+    "height": {
+      "magnitude": 5143500,
+      "unit": "EMU"
+    }
+  },
+  "layouts": [
+    {
+      "objectId": "layout_0",
+      "layoutProperties": {
+        "name": "Title and body",
+        "displayName": "Title and body"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_1",
+      "layoutProperties": {
+        "name": "TITLE",
+        "displayName": "Титульний слайд"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_2",
+      "layoutProperties": {
+        "name": "OBJECT",
+        "displayName": "Назва та вміст"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_3",
+      "layoutProperties": {
+        "name": "SECTION_HEADER",
+        "displayName": "Назва розділу"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_4",
+      "layoutProperties": {
+        "name": "TWO_OBJECTS",
+        "displayName": "Два об’єкти"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_5",
+      "layoutProperties": {
+        "name": "TWO_OBJECTS_WITH_TEXT",
+        "displayName": "Порівняння"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_6",
+      "layoutProperties": {
+        "name": "TITLE_ONLY",
+        "displayName": "Лише заголовок"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_7",
+      "layoutProperties": {
+        "name": "BLANK",
+        "displayName": "Пустий слайд"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_8",
+      "layoutProperties": {
+        "name": "OBJECT_WITH_CAPTION_TEXT",
+        "displayName": "Вміст і підпис"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_9",
+      "layoutProperties": {
+        "name": "PICTURE_WITH_CAPTION_TEXT",
+        "displayName": "Рисунок і підпис"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_10",
+      "layoutProperties": {
+        "name": "Назва та підпис",
+        "displayName": "Назва та підпис"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_11",
+      "layoutProperties": {
+        "name": "Цитата з підписом",
+        "displayName": "Цитата з підписом"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_12",
+      "layoutProperties": {
+        "name": "Картка назви",
+        "displayName": "Картка назви"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_13",
+      "layoutProperties": {
+        "name": "Картка назви цитати",
+        "displayName": "Картка назви цитати"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_14",
+      "layoutProperties": {
+        "name": "Істина/хибність",
+        "displayName": "Істина/хибність"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_15",
+      "layoutProperties": {
+        "name": "VERTICAL_TEXT",
+        "displayName": "Заголовок і вертикальний текст"
+      },
+      "pageElements": []
+    },
+    {
+      "objectId": "layout_16",
+      "layoutProperties": {
+        "name": "VERTICAL_TITLE_AND_VERTICAL_TEXT",
+        "displayName": "Вертикальний заголовок і текст"
+      },
+      "pageElements": []
+    }
+  ],
+  "slides": [
+    {
+      "objectId": "slide_1",
+      "slideProperties": {
+        "layoutObjectId": "layout_2"
+      },
+      "pageElements": []
+    }
+  ]
+}

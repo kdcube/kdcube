@@ -1031,6 +1031,92 @@ disposable data:
     on the headerless table each return their refusal with no write, and that
     `header: 1` makes the name resolve.
 
+## Slides: read and fill a connected presentation
+
+The `slides` namespace lets an agent find a presentation, inspect its theme
+and slides, copy a template and replace text or tagged image placeholders.
+Enable the Slides API in the Google Cloud project used by connector app
+`gmail`. The descriptor declares two claims in both deployment sources:
+
+| Claim | Google scopes (besides `openid`, `email`, `profile`) |
+| --- | --- |
+| `slides:read` | `presentations.readonly`, `drive.readonly` |
+| `slides:write` | `presentations`, `drive.file` |
+
+Reads and exports use `slides:read`. Copy, template filling and edits require
+both read and write approval; placing a copy in `parent_id` additionally
+requires `drive:write`. The connected account stays bound to the presentation
+ref. Cards select the `slides` namespace and exact operations through the
+generic `named_services` MCP door. Provider credentials remain server-side.
+
+Start with `object.search` and the title, or `object.list` for recent decks.
+`object.get` returns `kdcube.slides.snapshot.v1`: presentation title/revision,
+theme layouts, slide titles, element roles and text, notes, rotation and fit
+flags. Layout words follow Google's predefined names in lower case. PPTX
+layout `OBJECT` maps to `title_and_body`, and `TWO_OBJECTS` maps to
+`title_and_two_columns`; other imported names keep `layout: null` and their
+display name. The service derives geometry from the element's own size and
+transform and composes group-relative transforms. Placeholder parents supply
+text style rather than position.
+
+Read pages with `filters.start_slide` (1-based) and `filters.slide_limit`
+(1–50). Follow `snapshot.range.next_slide` until null. Text is bounded to
+12,000 characters per element and 100,000 per call, with explicit truncation
+flags. Fit, grid and relation diagnostics are heuristic; the initial fit
+constants are Latin 0.50, Cyrillic 0.60 and line pitch 1.35. Request a
+thumbnail to check the rendered result. Element geometry in EMU stays in the
+adapter; agents use returned refs, roles and relations.
+
+| Action | Inputs |
+| --- | --- |
+| `export` | `format: pdf` or `pptx` |
+| `thumbnail` | one `slide` selector; `size: SMALL`, `MEDIUM` or `LARGE` |
+| `copy` | `source` ref/link and a new `title`; optional `parent_id` |
+| `fill_template` | `source`, new `title`, `values` and optional `images` maps keyed by tag |
+| `replace_text` | literal `replacements`; optional `slides` selectors, or one `slide` plus `element` |
+| `replace_shapes_with_image` | `tag` or literal `text`, `image_uri` or `file_ref`, optional slide selectors and `fit` |
+
+`object.upsert` creates an empty presentation from `title`, or renames the
+presentation in `object_ref`. Every write supports `preview: true`. Templates
+discover `{{tags}}` before copying; an unknown tag returns
+`slides_template_tag_missing`, and an inaccessible source returns
+`slides_template_unreadable`. Office files return `slides_not_native` with
+guidance to use the import operation when available.
+
+```json
+{"namespace":"slides","object_ref":"slides:google:<account>:presentation:<id>",
+ "action":"replace_text","payload":{"revision_id":"<revision from object.get>",
+ "slide":{"title":"Roadmap"},"replacements":{"{{QUARTER}}":"Q4"},"preview":true}}
+```
+
+Edits resolve selectors on a fresh read and require that revision in
+`writeControl.requiredRevisionId`. A caller-supplied stale revision returns
+`slides_revision_changed`. Without an explicit revision, a race may be
+re-resolved once before any write succeeds. Multi-batch edits chain each
+returned revision. A copy or partial write is never silently repeated after
+an uncertain response: errors identify the created copy where known. A
+rename checks an explicit revision before its Drive metadata write; Drive
+does not provide the Slides atomic revision guard for that metadata change.
+
+Exports return `slides.export` refs; thumbnails return `slides.thumbnail`
+refs. Streaming `object.get` materializes the bytes. When configured, the app
+also supplies a short-lived signed download URL. Google's thumbnail
+`contentUrl` stays inside the adapter and is downloaded without the Google
+bearer. Canonical thumbnail refs default to SMALL; MEDIUM/LARGE delivery uses
+streaming `object.get` with `filters.size` to preserve the requested size.
+
+Images must be public HTTPS PNG/JPEG/GIF, smaller than 50 MB and at most
+25 megapixels. A deployment `file_ref` uses a request-owned staged copy and
+the existing signed `provider_fetch` route, with cleanup after success or
+failure. Caller-owned source files remain available. Public fetches check
+the platform SSRF policy at each redirect. Quota and transport failures carry
+retry metadata; the adapter performs no hidden quota retries.
+
+SDK modules own transport, snapshots, selectors and templates. The external
+KDCube services app owns credential resolution, registration and signed-file
+delivery. Slide creation/composition, import, comments and the typed raw MCP
+door are separate stages.
+
 ## Add another Google service, the same way
 
 Any other Google API connects the same way: enable the API in Google Cloud, and
@@ -1048,6 +1134,7 @@ users. The connect, grant, and two-gate machinery are unchanged.
 | Drive | `drive:read` -> `drive.readonly` | `drive:write` -> `drive` (or `drive.file`, per file) |
 | Calendar | `calendar:read` -> `calendar.readonly` | `calendar:write` -> `calendar` |
 | Docs | `docs:read` -> `documents.readonly` | `docs:write` -> `documents` |
+| Slides | `slides:read` -> `presentations.readonly` | `slides:write` -> `presentations` |
 
 The read-write-supersedes-read-only reconciliation is generic: connecting a
 read + write pair for ANY of these sends only the read-write scope (Google grants

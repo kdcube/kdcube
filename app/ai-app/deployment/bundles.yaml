@@ -340,6 +340,19 @@ bundles:
               - kdcube:role:super-admin
               delegable_permissions:
               - sheets:write
+            - grant: slides:read
+              label: Read Google Slides
+              description: Find, read, export and preview presentations.
+              delegable_roles: &id001
+              - kdcube:role:registered - kdcube:role:paid - kdcube:role:privileged - kdcube:role:super-admin
+              delegable_permissions:
+              - slides:read
+            - grant: slides:write
+              label: Edit Google Slides
+              description: Create, copy, fill and edit presentations.
+              delegable_roles: *id001
+              delegable_permissions:
+              - slides:write
             - grant: docs:read
               label: Read Google Docs
               description: Find documents and read or export their content through a connected Google account.
@@ -2107,6 +2120,106 @@ bundles:
                             grants:
                             - "named_services:use"
                             - "linkedin:org:read"
+                  slides:
+                    label: Presentations
+                    description: Find, read, create, copy and edit connected presentations.
+                    authority_id: delegated_client
+                    tools:
+                      about:
+                        operation: provider.about
+                        label: About presentations
+                        description: Learn how to use connected presentations.
+                        grants:
+                        - named_services:use
+                        - slides:read
+                      capabilities:
+                        operation: provider.capabilities
+                        label: Presentation capabilities
+                        description: List supported presentation operations.
+                        grants:
+                        - named_services:use
+                        - slides:read
+                      schema:
+                        operation: object.schema
+                        label: Presentation schema
+                        description: Read presentation refs, selectors and action payloads.
+                        grants:
+                        - named_services:use
+                        - slides:read
+                      search:
+                        operation: object.search
+                        label: Find presentations
+                        description: Find presentations by title.
+                        grants:
+                        - named_services:use
+                        - slides:read
+                      list:
+                        operation: object.list
+                        label: Recent presentations
+                        description: List recently modified presentations.
+                        grants:
+                        - named_services:use
+                        - slides:read
+                      get:
+                        operation: object.get
+                        label: Read a presentation
+                        description: Read a snapshot or download an exported file.
+                        grants:
+                        - named_services:use
+                        - slides:read
+                      upsert:
+                        operation: object.upsert
+                        label: Create or rename a presentation
+                        description: Create an empty deck or change a title.
+                        grants:
+                        - named_services:use
+                        - slides:read
+                        - slides:write
+                      action:
+                        operation: object.action
+                        label: Presentation action
+                        description: Run a selected presentation action.
+                        operations:
+                          object.action.export:
+                            label: Export a presentation
+                            description: Download a PDF or PowerPoint file.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                          object.action.thumbnail:
+                            label: Preview a slide
+                            description: Render one slide as a PNG image.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                          object.action.copy:
+                            label: Copy a presentation
+                            description: Make a copy of a deck with a new title.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.fill_template:
+                            label: Fill a presentation template
+                            description: Copy a template and replace its text and image tags.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.replace_text:
+                            label: Replace presentation text
+                            description: Replace literal phrases or tags in selected slides.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.replace_shapes_with_image:
+                            label: Replace tagged shapes with an image
+                            description: Put an image into shapes containing a chosen tag.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
             - resource: '*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/productivity*'
               label: KDCube productivity MCP
               tools:
@@ -2393,6 +2506,8 @@ bundles:
                   - docs:delete
                   - drive:read
                   - drive:write
+                  - slides:read
+                  - slides:write
               claims:
                 gmail:read:
                   label: Read Gmail
@@ -2493,6 +2608,24 @@ bundles:
                   # drive.file cannot write into pre-existing folders the app
                   # never touched; placement needs the full drive scope.
                   - https://www.googleapis.com/auth/drive
+                slides:read:
+                  label: Read Google Slides
+                  description: Find, read, export and preview presentations.
+                  provider_scopes:
+                  - openid
+                  - email
+                  - profile
+                  - https://www.googleapis.com/auth/presentations.readonly
+                  - https://www.googleapis.com/auth/drive.readonly
+                slides:write:
+                  label: Edit Google Slides
+                  description: Create, copy, fill and edit presentations.
+                  provider_scopes:
+                  - openid
+                  - email
+                  - profile
+                  - https://www.googleapis.com/auth/presentations
+                  - https://www.googleapis.com/auth/drive.file
             slack:
               label: Slack
               adapter: slack.oauth_user_token
