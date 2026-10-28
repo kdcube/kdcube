@@ -1057,7 +1057,10 @@ layout `OBJECT` maps to `title_and_body`, and `TWO_OBJECTS` maps to
 `title_and_two_columns`; other imported names keep `layout: null` and their
 display name. The service derives geometry from the element's own size and
 transform and composes group-relative transforms. Placeholder parents supply
-text style rather than position.
+text style rather than position. Fit uses the text box's own transformed
+width and height, including group transforms; rotating a box cannot create
+extra text capacity. Overlap and off-slide diagnostics use its enclosing
+axis-aligned rectangle.
 
 Read pages with `filters.start_slide` (1-based) and `filters.slide_limit`
 (1–50). Follow `snapshot.range.next_slide` until null. Text is bounded to

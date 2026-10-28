@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,54 @@ def test_group_child_geometry_is_relative_to_group():
 def test_rotation_is_reported_from_shear():
     result = geometry({"size": {"width": {"magnitude": 3e6}, "height": {"magnitude": 3e6}}, "transform": {"scaleX": 2.537, "scaleY": .746, "shearX": .107, "shearY": -.365}})
     assert result["rotation_deg"] == pytest.approx(-8.187, abs=.02)
+
+
+@pytest.mark.parametrize("angle", [45, 90, -45])
+@pytest.mark.parametrize("grouped", [False, True])
+def test_rotating_text_does_not_create_more_room_for_it(angle, grouped):
+    def read_shape(degrees):
+        radians = math.radians(degrees)
+        rotation = {
+            "scaleX": math.cos(radians), "scaleY": math.cos(radians),
+            "shearX": -math.sin(radians), "shearY": math.sin(radians),
+            "translateX": 250, "translateY": 100, "unit": "PT",
+        }
+        element = {
+            "objectId": "body",
+            "size": {
+                "width": {"magnitude": 200, "unit": "PT"},
+                "height": {"magnitude": 100, "unit": "PT"},
+            },
+            "shape": {"text": {"textElements": [{"textRun": {
+                "content": "M" * 79,
+                "style": {"fontSize": {"magnitude": 18, "unit": "PT"}},
+            }}]}},
+        }
+        if grouped:
+            elements = [{
+                "objectId": "group", "transform": rotation,
+                "elementGroup": {"children": [element]},
+            }]
+        else:
+            element["transform"] = rotation
+            elements = [element]
+        presentation = {
+            "pageSize": {
+                "width": {"magnitude": 720, "unit": "PT"},
+                "height": {"magnitude": 405, "unit": "PT"},
+            },
+            "slides": [{"objectId": "slide", "pageElements": elements}],
+        }
+        view = snapshot(presentation)
+        return next(e for e in view["slides"][0]["elements"] if e["ref"] == "body")
+
+    original = read_shape(0)
+    rotated = read_shape(angle)
+    assert original["fit"]["status"] == "overflow_risk"
+    assert rotated["rotation_deg"] == pytest.approx(angle)
+    assert rotated["fit"] == original["fit"]
+    # Layout diagnostics still need the world-aligned rectangle.
+    assert rotated["geometry"]["height"] != pytest.approx(original["geometry"]["height"])
 
 
 def test_text_budget_and_pagination_are_explicit():

@@ -55,6 +55,16 @@ def shape_text(shape):
     return "".join(str(e.get("textRun", {}).get("content", "")) for e in shape.get("text", {}).get("textElements", []))
 
 
+def _fit_box(element, parent):
+    """Measure the text frame along its transformed local axes."""
+    a, b, c, d, _, _ = _compose(parent, _matrix(element.get("transform")))
+    size = element.get("size", {})
+    return {
+        "width": _emu(size.get("width")) * math.hypot(a, b),
+        "height": _emu(size.get("height")) * math.hypot(c, d),
+    }
+
+
 def _font(shape, all_shapes, seen=None):
     seen = set(seen or ())
     sizes = [float(run["textRun"]["style"]["fontSize"]["magnitude"]) for run in shape.get("text", {}).get("textElements", []) if run.get("textRun", {}).get("style", {}).get("fontSize", {}).get("magnitude")]
@@ -184,7 +194,7 @@ def snapshot(presentation, *, start=1, limit=20):
             if placeholder:
                 row["role"] = "title" if placeholder == "centered_title" else placeholder
             if shape:
-                row["fit"] = fit(shape, box, all_shapes)
+                row["fit"] = fit(shape, _fit_box(element, parent), all_shapes)
             elements.append(row)
         bodies = sorted((e for e in elements if e.get("role") == "body"), key=lambda e:e["geometry"]["x"])
         for n, body in enumerate(bodies, 1):
