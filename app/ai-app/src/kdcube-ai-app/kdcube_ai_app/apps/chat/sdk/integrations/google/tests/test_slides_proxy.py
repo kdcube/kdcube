@@ -160,6 +160,50 @@ def test_preview_predicts_overflow_and_never_mutates_the_read(monkeypatch):
     assert original == deck()
 
 
+def test_targeted_replace_preserves_other_runs_and_uses_utf16_ranges():
+    from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import shape_text
+
+    original = deck()
+    shape = original["slides"][0]["pageElements"][0]["shape"]
+    shape["text"]["textElements"] = [
+        {"textRun": {"content": "Keep ", "style": {"bold": True, "fontSize": {"magnitude": 18}}}},
+        {"textRun": {"content": "😀 old middle old\n", "style": {"bold": False, "fontSize": {"magnitude": 18}}}},
+    ]
+    before = copy.deepcopy(original)
+    requests, plan = proxy.replace_text_requests(proxy.snapshot(original), {
+        "slide": {"ref": "slide_a"}, "element": {"ref": "title_a"},
+        "replacements": {"old": "new phrase"},
+    })
+    assert requests == [
+        {"deleteText": {"objectId": "title_a", "textRange": {"type": "FIXED_RANGE", "startIndex": 19, "endIndex": 22}}},
+        {"insertText": {"objectId": "title_a", "text": "new phrase", "insertionIndex": 19}},
+        {"deleteText": {"objectId": "title_a", "textRange": {"type": "FIXED_RANGE", "startIndex": 8, "endIndex": 11}}},
+        {"insertText": {"objectId": "title_a", "text": "new phrase", "insertionIndex": 8}},
+    ]
+    predicted = proxy._predict(original, requests)["slides"][0]["pageElements"][0]["shape"]
+    assert shape_text(predicted) == plan[0]["after"] == "Keep 😀 new phrase middle new phrase\n"
+    assert predicted["text"]["textElements"][0] == shape["text"]["textElements"][0]
+    assert original == before
+
+
+@pytest.mark.parametrize("replacements,match_case,expected", [
+    ({"Hello": ""}, True, " {{NAME}}"),
+    ({"hello": "😀", "{{NAME}}": "value"}, False, "😀 value"),
+    ({"Hello": "new", "new": "final"}, True, "final {{NAME}}"),
+    ({"missing": "unused"}, True, "Hello {{NAME}}"),
+])
+def test_targeted_prediction_tracks_deletions_case_and_sequential_maps(replacements, match_case, expected):
+    from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import shape_text
+
+    original = deck()
+    requests, plan = proxy.replace_text_requests(proxy.snapshot(original), {
+        "slide": {"ref": "slide_a"}, "element": {"ref": "title_a"},
+        "replacements": replacements, "match_case": match_case,
+    })
+    predicted = proxy._predict(original, requests)
+    assert shape_text(predicted["slides"][0]["pageElements"][0]["shape"]) == plan[0]["after"] == expected
+
+
 def test_template_copy_compiles_against_copy_ids(monkeypatch):
     writes = []
     def handler(request):

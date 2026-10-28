@@ -1092,6 +1092,12 @@ as copy, export and rename require a presentation ref. Artifact refs support
 reads; they cannot become presentation write targets. A supplied `source`
 must agree with `object_ref`.
 
+An element-scoped text replacement edits each matching phrase in place,
+preserving styling in untouched runs. The adapter resolves UTF-16 ranges from
+the fresh text and applies occurrences from last to first. Replacement-map
+entries apply in their supplied order; `match_case` defaults to true. Targeted
+edits are bounded to 1000 requests, and preview uses the same ranges.
+
 ```json
 {"namespace":"slides","object_ref":"slides:google:<account>:presentation:<id>",
  "action":"replace_text","payload":{"revision_id":"<revision from object.get>",

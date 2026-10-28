@@ -10,6 +10,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import (
 
 MAX_REPLACEMENTS = 100
 MAX_REPLACEMENT_TEXT = 20_000
+MAX_ELEMENT_EDIT_REQUESTS = 1_000
 TAG_RE = re.compile(r"\{\{[^{}\n]+\}\}")
 
 
@@ -63,17 +64,28 @@ def replace_text_requests(snapshot, payload):
         current = element.get("text", "")
         if len(current) > 100_000:
             raise SlidesValidationError("slides_text_too_large", "This shape exceeds the bounded targeted-edit size. Use literal replacement on its slide instead of replacing the whole element text.")
-        updated = current
+        updated, requests = current, []
         for old, new in values.items():
-            updated = updated.replace(old, new)
-        if len(updated) > 100_000:
-            raise SlidesValidationError("slides_text_too_large", "Keep targeted element text within 100000 characters.")
+            pattern = re.compile(re.escape(old), 0 if payload.get("match_case", True) else re.IGNORECASE)
+            matches = [m for m in pattern.finditer(updated) if m.group() != new]
+            if not matches:
+                continue
+            offsets = [0]
+            for char in updated:
+                offsets.append(offsets[-1] + (2 if ord(char) > 0xFFFF else 1))
+            # Later occurrences are edited first so earlier UTF-16 indices
+            # stay valid. Unmatched runs retain their provider-owned styling.
+            for match in reversed(matches):
+                start, end = offsets[match.start()], offsets[match.end()]
+                requests.append({"deleteText": {"objectId": element["ref"], "textRange": {"type": "FIXED_RANGE", "startIndex": start, "endIndex": end}}})
+                if new:
+                    requests.append({"insertText": {"objectId": element["ref"], "text": new, "insertionIndex": start}})
+                if len(requests) > MAX_ELEMENT_EDIT_REQUESTS:
+                    raise SlidesValidationError("slides_too_many_replacements", "Keep targeted edits within 1000 requests; narrow the replacement text or use a slide-wide literal replacement.")
+            updated = pattern.sub(lambda _: new, updated)
+            if len(updated) > 100_000:
+                raise SlidesValidationError("slides_text_too_large", "Keep targeted element text within 100000 characters.")
         preview={"ref": element["ref"], "before": current[:12000], "after": updated[:12000], "before_truncated": len(current)>12000, "after_truncated": len(updated)>12000}
-        if current == updated:
-            return [], [preview]
-        requests = [{"deleteText": {"objectId": element["ref"], "textRange": {"type": "ALL"}}}]
-        if updated:
-            requests.append({"insertText": {"objectId": element["ref"], "text": updated, "insertionIndex": 0}})
         return requests, [preview]
     requests = [{"replaceAllText": {"containsText": {"text": old, "matchCase": bool(payload.get("match_case", True))}, "replaceText": new, "pageObjectIds": page_ids}} for old,new in values.items()]
     return requests, [{"slides": page_ids, "replacements": values}]

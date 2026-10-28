@@ -177,6 +177,36 @@ async def validate_image_uri(client, uri):
         raise SlidesValidationError("slides_image_too_large", "Images must contain at most 25 megapixels.")
 
 
+def _predict_text_edit(shape, start, end, inserted=""):
+    """Splice UTF-16 offsets while retaining unaffected run styles for fit."""
+    elements, offset, did_insert = [], 0, False
+    for item in shape.get("text", {}).get("textElements", []):
+        if "textRun" not in item:
+            elements.append(item)
+            continue
+        run = item["textRun"]
+        encoded = run.get("content", "").encode("utf-16-le")
+        length = len(encoded) // 2
+        left = min(length, max(0, start - offset))
+        right = min(length, max(0, end - offset))
+        content = encoded[:2 * left].decode("utf-16-le")
+        if not did_insert and offset <= start <= offset + length:
+            content += inserted
+            did_insert = True
+        content += encoded[2 * right:].decode("utf-16-le")
+        if content:
+            elements.append({**item, "textRun": {**run, "content": content}})
+        offset += length
+    if not did_insert and inserted:
+        elements.append({"textRun": {"content": inserted}})
+    # This is a fit-only projection. Provider text-element indices are no
+    # longer current and are not needed by the snapshot or fit estimator.
+    for item in elements:
+        item.pop("startIndex", None)
+        item.pop("endIndex", None)
+    shape.setdefault("text", {})["textElements"] = elements
+
+
 def _predict(presentation, requests):
     """Estimate text fit over a private copy; never mutate the provider input."""
     from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import shape_text
@@ -199,8 +229,14 @@ def _predict(presentation, requests):
                     changed=text.replace(old,replacement["replaceText"]) if replacement["containsText"].get("matchCase") else re.sub(re.escape(old),lambda m:replacement["replaceText"],text,flags=re.I)
                 elif image and image["containsText"]["text"] in text:
                     changed=""
-                elif request.get("deleteText", {}).get("objectId")==element["objectId"]:changed=""
-                elif request.get("insertText", {}).get("objectId")==element["objectId"]:changed=request["insertText"]["text"]+text
+                elif request.get("deleteText", {}).get("objectId")==element["objectId"]:
+                    bounds = request["deleteText"]["textRange"]
+                    end = len(text.encode("utf-16-le")) // 2
+                    _predict_text_edit(element["shape"], bounds.get("startIndex", 0), bounds.get("endIndex", end))
+                elif request.get("insertText", {}).get("objectId")==element["objectId"]:
+                    insertion = request["insertText"]
+                    index = insertion.get("insertionIndex", 0)
+                    _predict_text_edit(element["shape"], index, index, insertion["text"])
                 if changed is not None:
                     runs=element["shape"].get("text", {}).get("textElements", [])
                     style=next((r["textRun"].get("style", {}) for r in runs if "textRun" in r), {})

@@ -37,8 +37,16 @@ def test_template_discovers_tags_before_compiling_and_refuses_unknown_tag():
 
 def test_targeted_replace_uses_delete_insert_without_google_offsets():
     requests, plan = replace_text_requests(view(), {"slide": {"position": 1}, "element": {"role": "title"}, "replacements": {"{{NAME}}": "Ada"}})
-    assert requests == [{"deleteText": {"objectId": "title_a", "textRange": {"type": "ALL"}}}, {"insertText": {"objectId": "title_a", "text": "Hello Ada", "insertionIndex": 0}}]
+    assert requests == [{"deleteText": {"objectId": "title_a", "textRange": {"type": "FIXED_RANGE", "startIndex": 6, "endIndex": 14}}}, {"insertText": {"objectId": "title_a", "text": "Ada", "insertionIndex": 6}}]
     assert plan[0]["before"] == "Hello {{NAME}}"
+
+
+def test_targeted_replace_refuses_excessive_requests_before_writing():
+    source = view()
+    source["slides"][0]["elements"][0]["text"] = "x" * 501
+    with pytest.raises(SlidesValidationError) as exc:
+        replace_text_requests(source, {"slide": {"position": 1}, "element": {"role": "title"}, "replacements": {"x": "y"}})
+    assert exc.value.code == "slides_too_many_replacements"
 
 
 def test_unknown_selectors_and_bad_refs_refuse():
