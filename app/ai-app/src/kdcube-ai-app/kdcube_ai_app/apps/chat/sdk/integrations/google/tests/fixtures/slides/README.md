@@ -61,7 +61,8 @@ thumbnail hashes must also match. The complete-fixture source commit is
 recorded in `provenance.json`.
 
 See [calibration](calibration.md) for the measurements, coefficient choice and
-known conservative warning. The converted PPTX deck has no BODY or OBJECT
-placeholder, so it has no calibration cases; that remains a verification gap
-for a later slide-creation pass. Grid tolerance belongs to the later composition
-stage and is not calibrated here.
+known conservative warning. The original converted PPTX slides have no BODY or
+OBJECT placeholder. The later [layout creation fixtures](s2a/README.md) add an
+OBJECT-layout slide and six measured BODY cases, plus creation tests across
+all five themes and an unmapped-BODY probe. Grid tolerance belongs to the
+later composition stage and is not calibrated here.

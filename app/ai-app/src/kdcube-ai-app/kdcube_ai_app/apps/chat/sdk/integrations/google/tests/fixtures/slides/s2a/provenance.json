@@ -1,0 +1,74 @@
+{
+  "capture_date": "2026-10-28",
+  "provider": "Google Slides API v1",
+  "files": {
+    "slides-raw-simple_table.json": {
+      "capture_sha256": "85353c9512cb606413983b80429fa840a3e6df8da7867613ec0eb5324dddfbc6",
+      "capture_bytes": 363982
+    },
+    "simple_table-layouts.json": {
+      "fixture_sha256": "016cbde9efca4f3b454a355fd2ddfafdb650db467eb92440112fd143b73727d4",
+      "fixture_bytes": 15782
+    },
+    "slides-raw-streamline_rotated.json": {
+      "capture_sha256": "63b2210a866169e52fd8369298d9395f1b64ca7d6713ed1d125a326a4819939e",
+      "capture_bytes": 306277
+    },
+    "streamline_rotated-layouts.json": {
+      "fixture_sha256": "0f05f9d1e3b1c126cfba21ecf150cbeefc7822fd5f868730d93779d138a5db9a",
+      "fixture_bytes": 17951
+    },
+    "slides-raw-focus_group.json": {
+      "capture_sha256": "416aece4d30667ece2ce6540d108c9832fce41cf34be19d0381219a6b5f90932",
+      "capture_bytes": 385336
+    },
+    "focus_group-layouts.json": {
+      "fixture_sha256": "2e9d8d34177b7df52235c1e5bb6d5e17fc6f5fd415dfc21ed271b4a62a6e06c8",
+      "fixture_bytes": 17341
+    },
+    "slides-raw-material_group_rotated.json": {
+      "capture_sha256": "f69d807b3a2f117e50ac89a2bed72081ecf73a97739520379510529e1b577121",
+      "capture_bytes": 299807
+    },
+    "material_group_rotated-layouts.json": {
+      "fixture_sha256": "bf0e8807cfc97ff5d4910ee706513af15c790e340037e886e862cdfb21c55e98",
+      "fixture_bytes": 17020
+    },
+    "slides-raw-pptx_converted.json": {
+      "capture_sha256": "0650cfc68f502ec0f731564f60d82657554f12347dd89cc4f83075995d416da5",
+      "capture_bytes": 1471963
+    },
+    "pptx_converted-layouts.json": {
+      "fixture_sha256": "26dc83d0b607899dc35165935c8026c25f1a6e8759184f2d95011b48a6e85501",
+      "fixture_bytes": 26584
+    },
+    "slides-p7-pptx-object-calibration.json": {
+      "capture_sha256": "0f7dcd0dc292665303a8a531758e83231a0ad00d3cf01d0a6a8f422d99f3805a",
+      "capture_bytes": 733614
+    },
+    "calibration-measurements.json": {
+      "capture_sha256": "d0100777a67a938957b468d8c0a62e82051f0491de0581cb4dba89bbd68469f1",
+      "capture_bytes": 4904
+    },
+    "pptx-object-calibration.json": {
+      "fixture_sha256": "882c527fdc678c25ae5cef930df68efd866b21c5391d3f6cba770b99fc4fb8cf",
+      "fixture_bytes": 40676
+    },
+    "slides-p7-unmapped-body.json": {
+      "capture_sha256": "de56e7b7741fdcc98a55c5110187de66aa16d3c650ba96b727a3537c000ca2c1",
+      "capture_bytes": 18823
+    },
+    "unmapped-body.json": {
+      "fixture_sha256": "83c43a9e78e3f192b079a10c41a368d628a9e8f7038bd960e46c96f9edaa1014",
+      "fixture_bytes": 5642
+    }
+  },
+  "transformations": [
+    "Retain captured layout names, placeholder IDs/parents, size/transform and effective text/paragraph styles for supported title/body and two-column layouts.",
+    "Keep only referenced master style chains. The first existing slide keeps identity/master/layout metadata for insertion-master resolution; its content is omitted.",
+    "Use neutral presentation titles. Neutralise captured run, notes, table and alt text with the same lengths, scripts, whitespace and line breaks, as in the parent fixture preparation tool.",
+    "Keep only the written BODY for each of six calibration cases, with one shared style context. Retain the created-page projection for notes and creation geometry.",
+    "PNG observations and hashes describe original rendered text. A neutral-gray ink mask (chroma spread below 40, RGB distance above 180) excludes the colored decorative corner; all six images were inspected.",
+    "Neutral strings preserve estimator inputs, not rendered glyph widths. JSON is compact UTF-8; no PNG bytes or provider URLs are committed."
+  ]
+}

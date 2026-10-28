@@ -1,7 +1,7 @@
 ---
 id: sdk.google-slides.fit-calibration
 title: Slides text-fit calibration from rendered body boxes
-summary: Twenty-four rendered cases calibrate a conservative fit warning for captured Arial, Lato and Roboto text while preserving explicit limits for other fonts and PPTX.
+summary: Twenty-four rendered cases calibrate Arial, Lato and Roboto fit warnings; six later OBJECT-layout cases extend the captured coverage to converted PowerPoint text.
 tags: [google-slides, fit, testing]
 keywords: [Latin, Cyrillic, line pitch, overflow, body placeholder, calibration]
 see_also:
@@ -81,6 +81,8 @@ is recorded with the tested source head separately.
 The input is one repeated sentence per script and three font families. It
 does not establish accuracy for arbitrary prose, mixed styles, custom fonts,
 other aspect ratios, or an exact text-rendering engine. A thumbnail remains
-the visual check. The converted PPTX deck has no BODY/OBJECT placeholder, so
-PPTX fit calibration remains open for a later slide-creation pass. Grid
+the visual check. The original converted PPTX slides have no BODY/OBJECT
+placeholder. A later creation pass added an OBJECT-layout slide with an
+inherited Trebuchet MS 18 pt BODY. Its six measured cases fit without changing
+these coefficients; see [the creation calibration](s2a/README.md). Grid
 alignment tolerance is outside this calibration stage.
