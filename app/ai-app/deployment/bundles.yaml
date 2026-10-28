@@ -2220,6 +2220,55 @@ bundles:
                             - named_services:use
                             - slides:read
                             - slides:write
+                          object.action.add_slide:
+                            label: Add a slide
+                            description: Add a slide using one of the presentation layouts.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.set_text:
+                            label: Write slide text
+                            description: Replace or append text and bullet items in one slide element.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.style_text:
+                            label: Style slide text
+                            description: Format a quoted phrase in one slide element.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.set_notes:
+                            label: Write speaker notes
+                            description: Replace or append speaker notes for a slide.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.move_slide:
+                            label: Move slides
+                            description: Reorder selected slides while preserving their relative order.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.delete_slide:
+                            label: Delete slides
+                            description: Remove selected slides while keeping at least one slide.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.skip_slide:
+                            label: Skip or show slides
+                            description: Choose whether selected slides appear in the presentation.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
             - resource: '*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/productivity*'
               label: KDCube productivity MCP
               tools:

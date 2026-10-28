@@ -105,6 +105,25 @@ def test_unknown_actions_are_refused_before_provider_call():
     assert not response.ok and response.error.code == "slides_unsupported_action"
 
 
+@pytest.mark.parametrize("action", ["set_text", "style_text", "set_notes", "move_slide", "delete_slide", "skip_slide"])
+def test_edit_actions_keep_a_slide_ref_scope_and_require_write_claims(action):
+    seen = []
+    async def execute(**kwargs):
+        seen.append(kwargs)
+        return {"ok": True, "ret": {"presentation_id": "deck", "account_id": "account"}}
+    result = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action=action, object_ref="slides:google:account:slide:slide_a:deck", payload={"preview": True})))
+    assert result.ok
+    assert seen[0]["payload"]["slide"] == {"ref": "slide_a"}
+    assert seen[0]["claim"] == ["slides:read", "slides:write"]
+
+
+def test_add_slide_requires_a_presentation_ref_before_provider_call():
+    async def execute(**kwargs):
+        raise AssertionError("A slide ref must not expand its scope")
+    result = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action="add_slide", object_ref="slides:google:account:slide:slide_a:deck", payload={"layout": "blank"})))
+    assert not result.ok and result.error.code == "slides_presentation_ref_required"
+
+
 def test_slide_ref_constrains_replace_to_that_slide():
     seen=[]
     async def execute(**kwargs):

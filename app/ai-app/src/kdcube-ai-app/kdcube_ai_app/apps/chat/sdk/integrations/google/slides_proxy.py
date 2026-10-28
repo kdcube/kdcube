@@ -6,16 +6,16 @@ revision race may be resolved once only when the caller supplied no revision.
 from __future__ import annotations
 
 import base64
-import copy
 import io
 import json
-import re
 from collections.abc import Mapping
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
 from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import snapshot
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.prediction import predict as _predict
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.editing import EDIT_ACTIONS, compile_edit
 from kdcube_ai_app.apps.chat.sdk.integrations.provider_errors import provider_failure_from_response, provider_failure_from_exception
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, presentation_id, resolve_slide
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.templates import replace_text_requests, image_requests, template_requests
@@ -28,11 +28,11 @@ MAX_EXPORT_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_PRESENTATION_BYTES = 16 * 1024 * 1024
 MAX_BATCH_REQUESTS = 100
-MUTATING_OPERATIONS = frozenset({"create", "rename", "copy", "fill_template", "replace_text", "replace_shapes_with_image"})
+MUTATING_OPERATIONS = frozenset({"create", "rename", "copy", "fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS})
 # URLs from image/chart objects are deliberately excluded. Group children
 # remain internal and are projected by slides_structure, never returned raw.
 _ELEMENT = "objectId,title,description,size,transform,shape,table,elementGroup(children),image(imageProperties(cropProperties)),sheetsChart(spreadsheetId,chartId),video(id,source)"
-PRESENTATION_FIELDS = f"presentationId,title,revisionId,pageSize,slides(objectId,slideProperties(isSkipped,layoutObjectId,notesPage(notesProperties,pageElements({_ELEMENT}))),pageElements({_ELEMENT})),layouts(objectId,layoutProperties,pageElements({_ELEMENT})),masters(objectId,pageElements({_ELEMENT}))"
+PRESENTATION_FIELDS = f"presentationId,title,revisionId,pageSize,slides(objectId,slideProperties(isSkipped,layoutObjectId,masterObjectId,notesPage(notesProperties,pageElements({_ELEMENT}))),pageElements({_ELEMENT})),layouts(objectId,layoutProperties,pageElements({_ELEMENT})),masters(objectId,pageElements({_ELEMENT}))"
 
 
 class _ProviderError(Exception):
@@ -44,6 +44,7 @@ class SlidesClient:
     def __init__(self, client, token):
         self.client, self.headers = client, {"Authorization": f"Bearer {token}"}
         self.created_id = ""
+        self.created_slide_id = ""
         self.writes_applied = False
 
     async def request(self, method, url, *, operation, mutating=False, **kwargs):
@@ -105,6 +106,9 @@ class SlidesClient:
         replies = []
         for start in range(0, len(requests), MAX_BATCH_REQUESTS):
             result = await self.request("POST", f"{SLIDES_API}/presentations/{deck_id}:batchUpdate", operation=operation, mutating=True, json={"requests": requests[start:start+MAX_BATCH_REQUESTS], "writeControl": {"requiredRevisionId": revision}})
+            for request in requests[start:start+MAX_BATCH_REQUESTS]:
+                if "createSlide" in request:
+                    self.created_slide_id = request["createSlide"]["objectId"]
             replies.extend(result.get("replies", []))
             next_revision = result.get("writeControl", {}).get("requiredRevisionId")
             if not next_revision:
@@ -175,73 +179,6 @@ async def validate_image_uri(client, uri):
         raise SlidesValidationError("slides_image_unexpected_type", "Use a PNG, JPEG or GIF image.")
     if not measured.get("width") or not measured.get("height") or measured["width"] * measured["height"] > 25_000_000:
         raise SlidesValidationError("slides_image_too_large", "Images must contain at most 25 megapixels.")
-
-
-def _predict_text_edit(shape, start, end, inserted=""):
-    """Splice UTF-16 offsets while retaining unaffected run styles for fit."""
-    elements, offset, did_insert = [], 0, False
-    for item in shape.get("text", {}).get("textElements", []):
-        if "textRun" not in item:
-            elements.append(item)
-            continue
-        run = item["textRun"]
-        encoded = run.get("content", "").encode("utf-16-le")
-        length = len(encoded) // 2
-        left = min(length, max(0, start - offset))
-        right = min(length, max(0, end - offset))
-        content = encoded[:2 * left].decode("utf-16-le")
-        if not did_insert and offset <= start <= offset + length:
-            content += inserted
-            did_insert = True
-        content += encoded[2 * right:].decode("utf-16-le")
-        if content:
-            elements.append({**item, "textRun": {**run, "content": content}})
-        offset += length
-    if not did_insert and inserted:
-        elements.append({"textRun": {"content": inserted}})
-    # This is a fit-only projection. Provider text-element indices are no
-    # longer current and are not needed by the snapshot or fit estimator.
-    for item in elements:
-        item.pop("startIndex", None)
-        item.pop("endIndex", None)
-    shape.setdefault("text", {})["textElements"] = elements
-
-
-def _predict(presentation, requests):
-    """Estimate text fit over a private copy; never mutate the provider input."""
-    from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import shape_text
-    result=copy.deepcopy(presentation)
-    def shapes(elements):
-        for e in elements:
-            if "shape" in e:yield e
-            yield from shapes(e.get("elementGroup", {}).get("children", []))
-    for request in requests:
-        replacement=request.get("replaceAllText")
-        image=request.get("replaceAllShapesWithImage")
-        for slide in result.get("slides", []):
-            target_pages=(replacement or image or {}).get("pageObjectIds", [])
-            if target_pages and slide["objectId"] not in target_pages:continue
-            for element in shapes(slide.get("pageElements", [])):
-                text=shape_text(element["shape"])
-                changed=None
-                if replacement:
-                    old=replacement["containsText"]["text"]
-                    changed=text.replace(old,replacement["replaceText"]) if replacement["containsText"].get("matchCase") else re.sub(re.escape(old),lambda m:replacement["replaceText"],text,flags=re.I)
-                elif image and image["containsText"]["text"] in text:
-                    changed=""
-                elif request.get("deleteText", {}).get("objectId")==element["objectId"]:
-                    bounds = request["deleteText"]["textRange"]
-                    end = len(text.encode("utf-16-le")) // 2
-                    _predict_text_edit(element["shape"], bounds.get("startIndex", 0), bounds.get("endIndex", end))
-                elif request.get("insertText", {}).get("objectId")==element["objectId"]:
-                    insertion = request["insertText"]
-                    index = insertion.get("insertionIndex", 0)
-                    _predict_text_edit(element["shape"], index, index, insertion["text"])
-                if changed is not None:
-                    runs=element["shape"].get("text", {}).get("textElements", [])
-                    style=next((r["textRun"].get("style", {}) for r in runs if "textRun" in r), {})
-                    element["shape"]["text"]={"textElements":[{"textRun":{"content":changed,"style":style}}]}
-    return result
 
 
 async def _fit_flags(api, presentation, *, predicted=False):
@@ -328,11 +265,13 @@ async def _run(api, operation, payload):
         copied=await api.copy(deck_id,payload)
         copied_presentation=await api.get(copied["presentation_id"])
         return {**copied,"revision_id":copied_presentation.get("revisionId"), **await _fit_flags(api,copied_presentation)}
-    if operation not in ("fill_template", "replace_text", "replace_shapes_with_image"):
+    if operation not in ("fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS):
         raise SlidesValidationError("slides_unsupported_operation", "Choose an operation declared by the Slides schema.")
     for attempt in range(2):
         view = await api.all_snapshot(presentation)
-        if operation == "fill_template":
+        if operation in EDIT_ACTIONS:
+            requests, plan = compile_edit(presentation, view, operation, payload)
+        elif operation == "fill_template":
             _title(payload.get("title"))
             requests, plan = template_requests(view, payload)
         elif operation == "replace_text":
@@ -359,6 +298,12 @@ async def _run(api, operation, payload):
                 continue
             raise
         after = await api.get(deck_id) if requests else presentation
+        if operation == "add_slide" and "notes" in payload:
+            notes, _ = compile_edit(after, await api.all_snapshot(after), "set_notes", {"slide": {"ref": plan["slide"]}, "notes": payload["notes"]})
+            # The first creation batch already wrote. Chain its revision,
+            # and never retry the creation if this follow-up is refused.
+            written = await api.write_batches(deck_id, notes, written["revision_id"], operation=operation)
+            after = await api.get(deck_id)
         return {"presentation_id": deck_id, "title": after.get("title", ""), "revision_id": written["revision_id"], "observed_revision_id":after.get("revisionId"), "changes": plan, **await _fit_flags(api,after), "replies": written["replies"]}
 
 
@@ -387,4 +332,6 @@ async def execute_google_slides_operation(*, operation, access_token, payload=No
         result["ret"]["partial_result"] = True
         if api.created_id:
             result["ret"]["created_presentation_id"] = api.created_id
+        if api.created_slide_id:
+            result["ret"]["created_slide_id"] = api.created_slide_id
     return result

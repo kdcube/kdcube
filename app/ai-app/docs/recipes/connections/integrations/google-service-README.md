@@ -1079,6 +1079,13 @@ adapter; agents use returned refs, roles and relations.
 | `fill_template` | `source`, new `title`, `values` and optional `images` maps keyed by tag |
 | `replace_text` | literal `replacements`; optional `slides` selectors, or one `slide` plus `element` |
 | `replace_shapes_with_image` | `tag` or literal `text`, `image_uri` or `file_ref`, optional slide selectors and `fit` |
+| `add_slide` | one `layout` word or exact `layout_name`; optional `title`, `subtitle`, `body`, `body_2`, `notes`, `before` or `after` |
+| `set_text` | one `slide` and `element`, `text` or `items`, `mode: replace` or `append` |
+| `style_text` | one `slide` and `element`, unique `quoted_text`, `style` with bold/italic, font_size_pt, color or link |
+| `set_notes` | one `slide`, `notes` text, optional replace/append `mode` |
+| `move_slide` | `slide` or `slides` selectors and one `before` or `after` selector |
+| `delete_slide` | `slide` or `slides` selectors; at least one slide must remain |
+| `skip_slide` | `slide` or `slides` selectors, `skipped: true` or `false` |
 
 `object.upsert` creates an empty presentation from `title`, or renames the
 presentation in `object_ref`. Every write supports `preview: true`. Templates
@@ -1097,6 +1104,34 @@ preserving styling in untouched runs. The adapter resolves UTF-16 ranges from
 the fresh text and applies occurrences from last to first. Replacement-map
 entries apply in their supplied order; `match_case` defaults to true. Targeted
 edits are bounded to 1000 requests, and preview uses the same ranges.
+
+`add_slide` resolves the theme layout on the fresh read at the insertion
+position. Google layout names take precedence over the supported PowerPoint
+types: `OBJECT` maps to `title_and_body`, and `TWO_OBJECTS` maps to
+`title_and_two_columns`. Other theme names use exact `layout_name`; the
+adapter returns bounded candidates when a layout is missing or ambiguous.
+Every content placeholder receives a known ref. An unfilled placeholder is
+deleted unless `keep_empty_placeholders: true`, in which case it appears in
+`empty_placeholders`. Text arrays become bullet items.
+
+`set_text` replaces the selected element or appends before its implicit
+terminal newline. `style_text` resolves a quoted phrase internally using
+UTF-16 offsets; the phrase must occur exactly once. Its style accepts
+`bold`/`italic` booleans, `font_size_pt`, `color: "#RRGGBB"` and `link`.
+Slide moves use the current order even when selectors are reversed or repeated.
+
+Notes on a new slide require a read after creation to discover Google's
+speaker-notes placeholder ID. The follow-up write chains the creation
+revision. If it fails, the result identifies the created slide and reports
+`partial_result`; inspect that slide before retrying creation. Every editing
+action supports `preview: true` with resolved targets, before/after content
+or order, and predicted fit. Geometry stays inside the adapter.
+
+```json
+{"namespace":"slides","object_ref":"slides:google:<account>:presentation:<id>",
+ "action":"add_slide","payload":{"layout":"title_and_body","title":"Plan",
+ "body":["First step","Second step"],"notes":"Discuss the sequence","preview":true}}
+```
 
 ```json
 {"namespace":"slides","object_ref":"slides:google:<account>:presentation:<id>",

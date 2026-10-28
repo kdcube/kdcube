@@ -166,7 +166,7 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
         if parsed and parsed["kind"] in ("export", "thumbnail"):
             raise SlidesValidationError("slides_presentation_ref_required", "Artifacts are read with object.get. Address the presentation or slide for an action.")
         if parsed and parsed["kind"] == "slide":
-            if action in ("copy", "fill_template", "export"):
+            if action in ("copy", "fill_template", "export", "add_slide"):
                 raise SlidesValidationError("slides_presentation_ref_required", "This action applies to a whole presentation. Use its presentation ref.")
             if payload.get("slides") is not None or payload.get("slide") is not None:
                 raise SlidesValidationError("slides_slide_scope_conflict", "A slide ref already selects one slide. Remove the extra slide selectors.")

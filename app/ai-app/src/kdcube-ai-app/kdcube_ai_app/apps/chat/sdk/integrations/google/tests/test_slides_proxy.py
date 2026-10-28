@@ -14,6 +14,19 @@ def deck():
     return {"presentationId": "deck", "title": "Template", "revisionId": "r1", "pageSize": {"width": {"magnitude": 9144000}, "height": {"magnitude": 5143500}}, "slides": [{"objectId": "slide_a", "pageElements": [{"objectId": "title_a", "size": {"width": {"magnitude": 3000000}, "height": {"magnitude": 1000000}}, "shape": {"placeholder": {"type": "TITLE"}, "text": {"textElements": [{"textRun": {"content": "Hello {{NAME}}"}}]}}}]}]}
 
 
+def editable_deck():
+    value = deck()
+    title = copy.deepcopy(value["slides"][0]["pageElements"][0])
+    title["objectId"] = "layout_title"
+    body = copy.deepcopy(title)
+    body["objectId"] = "layout_body"
+    body["shape"]["placeholder"]["type"] = "BODY"
+    value["layouts"] = [{"objectId": "layout_a", "layoutProperties": {"name": "TITLE_AND_BODY", "displayName": "Title and body", "masterObjectId": "master_a"}, "pageElements": [title, body]}]
+    value["masters"] = [{"objectId": "master_a", "pageElements": []}]
+    value["slides"][0]["slideProperties"] = {"layoutObjectId": "layout_a", "masterObjectId": "master_a"}
+    return value
+
+
 def run(monkeypatch, operation, payload, handler, *, token="fixture-token"):
     real = httpx.AsyncClient
     def factory(*args, **kwargs):
@@ -202,6 +215,67 @@ def test_targeted_prediction_tracks_deletions_case_and_sequential_maps(replaceme
     })
     predicted = proxy._predict(original, requests)
     assert shape_text(predicted["slides"][0]["pageElements"][0]["shape"]) == plan[0]["after"] == expected
+
+
+def test_add_slide_preview_writes_nothing_and_predicts_fit_without_coordinates(monkeypatch):
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(200, json=editable_deck())
+    result = run(monkeypatch, "add_slide", {"presentation_ref": "deck", "layout": "title_and_body", "body": "x" * 1000, "preview": True}, handler)
+    assert result["ok"] and result["ret"]["preview"]
+    changes = result["ret"]["changes"]
+    body_ref = changes["elements"][0]["ref"]
+    assert any(r["element"] == body_ref and r["status"] == "overflow_risk" for r in result["ret"]["fit"])
+    assert changes["position"] == 2
+    assert "geometry" not in json.dumps(result) and "scaleX" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("notes_status", [200, 400, 403])
+def test_add_slide_reads_new_notes_id_and_chains_revision_without_recreating(monkeypatch, notes_status):
+    state, writes, created = editable_deck(), [], []
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=state)
+        body = json.loads(request.content)
+        writes.append(body)
+        if len(writes) == 1:
+            assert body["writeControl"] == {"requiredRevisionId": "r1"}
+            spec = body["requests"][0]["createSlide"]
+            assert {m["layoutPlaceholderObjectId"] for m in spec["placeholderIdMappings"]} == {"layout_title", "layout_body"}
+            created.append(spec["objectId"])
+            state["revisionId"] = "r2"
+            state["slides"].append({"objectId": created[0], "pageElements": [], "slideProperties": {"notesPage": {"notesProperties": {"speakerNotesObjectId": "provider_notes_1"}, "pageElements": [{"objectId": "provider_notes_1", "shape": {"text": {"textElements": [{"textRun": {"content": "\n"}}]}}}]}}})
+            return httpx.Response(200, json={"writeControl": {"requiredRevisionId": "r2"}})
+        assert len(writes) == 2
+        assert body["writeControl"] == {"requiredRevisionId": "r2"}
+        assert body["requests"][0]["deleteText"]["objectId"] == "provider_notes_1"
+        assert all("createSlide" not in r for r in body["requests"])
+        if notes_status != 200:
+            message = "The required revision ID does not match the latest revision." if notes_status == 400 else "Permission denied"
+            return httpx.Response(notes_status, json={"error": {"message": message}})
+        state["revisionId"] = "r3"
+        return httpx.Response(200, json={"writeControl": {"requiredRevisionId": "r3"}})
+    result = run(monkeypatch, "add_slide", {"presentation_ref": "deck", "layout": "title_and_body", "title": "Created", "notes": "Speaker notes"}, handler)
+    assert len(writes) == 2 and len(created) == 1
+    if notes_status == 200:
+        assert result["ok"] and result["ret"]["revision_id"] == "r3"
+    else:
+        assert not result["ok"] and result["ret"]["partial_result"]
+        assert result["ret"]["created_slide_id"] == created[0]
+
+
+def test_s2a_caller_revision_is_required_on_the_content_batch(monkeypatch):
+    writes = []
+    def handler(request):
+        if request.method == "GET":
+            return httpx.Response(200, json=deck())
+        body = json.loads(request.content)
+        writes.append(body)
+        assert body["writeControl"] == {"requiredRevisionId": "r1"}
+        assert body["requests"][0]["updateTextStyle"]["textRange"] == {"type": "FIXED_RANGE", "startIndex": 0, "endIndex": 5}
+        return httpx.Response(200, json={"writeControl": {"requiredRevisionId": "r2"}})
+    result = run(monkeypatch, "style_text", {"presentation_ref": "deck", "revision_id": "r1", "slide": {"ref": "slide_a"}, "element": {"ref": "title_a"}, "quoted_text": "Hello", "style": {"italic": True}}, handler)
+    assert result["ok"] and len(writes) == 1
 
 
 def test_template_copy_compiles_against_copy_ids(monkeypatch):

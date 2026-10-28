@@ -5,18 +5,13 @@ import math
 from fractions import Fraction
 
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError
+from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_fit import fit, shape_text
 
 SCHEMA = "kdcube.slides.snapshot.v1"
 MEDIA_TYPE = "application/vnd.kdcube.slides.snapshot+json"
 MAX_ELEMENT_TEXT = 12_000
 MAX_CALL_TEXT = 100_000
 MAX_SLIDES = 50
-# Calibrated on the captured Arial 18, Roboto 18 and Lato 13 body boxes;
-# see tests/fixtures/slides/calibration.md for measurements and limits.
-FIT_LATIN_WIDTH = 0.46
-FIT_CYRILLIC_WIDTH = 0.54
-FIT_LINE_PITCH = 1.22
-FIT_INSET_PT = 7.2
 LAYOUT_WORDS = frozenset("BLANK CAPTION_ONLY TITLE TITLE_AND_BODY TITLE_AND_TWO_COLUMNS TITLE_ONLY SECTION_HEADER SECTION_TITLE_AND_DESCRIPTION ONE_COLUMN_TEXT MAIN_POINT BIG_NUMBER".split())
 PPTX_LAYOUTS = {"OBJECT": "title_and_body", "TWO_OBJECTS": "title_and_two_columns"}
 
@@ -57,10 +52,6 @@ def geometry(element, parent=(1,0,0,1,0,0)):
     return {"x": min(xs), "y": min(ys), "width": max(xs)-min(xs), "height": max(ys)-min(ys), "rotation_deg": round(math.degrees(math.atan2(b,a)), 3)}
 
 
-def shape_text(shape):
-    return "".join(str(e.get("textRun", {}).get("content", "")) for e in shape.get("text", {}).get("textElements", []))
-
-
 def _fit_box(element, parent):
     """Measure the text frame along its transformed local axes."""
     a, b, c, d, _, _ = _compose(parent, _matrix(element.get("transform")))
@@ -69,43 +60,6 @@ def _fit_box(element, parent):
         "width": _emu(size.get("width")) * math.hypot(a, b),
         "height": _emu(size.get("height")) * math.hypot(c, d),
     }
-
-
-def _font(shape, all_shapes, seen=None):
-    seen = set(seen or ())
-    sizes = [float(run["textRun"]["style"]["fontSize"]["magnitude"]) for run in shape.get("text", {}).get("textElements", []) if run.get("textRun", {}).get("style", {}).get("fontSize", {}).get("magnitude")]
-    if sizes:
-        return max(sizes)
-    parent_id = shape.get("placeholder", {}).get("parentObjectId")
-    if parent_id and parent_id not in seen and parent_id in all_shapes:
-        return _font(all_shapes[parent_id], all_shapes, seen | {parent_id})
-    return 18.0
-
-
-def fit(shape, box, all_shapes):
-    text = shape_text(shape)
-    font = _font(shape, all_shapes)
-    width, height = max(1, box["width"] / 12700 - 2 * FIT_INSET_PT), max(1, box["height"] / 12700 - 2 * FIT_INSET_PT)
-    def styles(current, seen=None):
-        seen=set(seen or ())
-        own=current.get("text", {}).get("textElements", [])
-        parent=current.get("placeholder", {}).get("parentObjectId")
-        inherited=styles(all_shapes[parent], seen|{parent}) if parent in all_shapes and parent not in seen else []
-        return own+inherited
-    effective=styles(shape)
-    bold=any(e.get("textRun", {}).get("style", {}).get("bold") for e in effective)
-    spacing=max([float(e["paragraphMarker"]["style"]["lineSpacing"])/100 for e in effective if e.get("paragraphMarker", {}).get("style", {}).get("lineSpacing")] or [1.0])
-    # Bullet membership belongs to the actual paragraph; an absent bullet
-    # means no list, even when the placeholder's parent has a bulleted style.
-    if any(e.get("paragraphMarker", {}).get("bullet") for e in shape.get("text", {}).get("textElements", [])):
-        width=max(1,width-font)
-    needed = 0
-    for paragraph in text.splitlines():
-        units = sum((FIT_CYRILLIC_WIDTH if "\u0400" <= c <= "\u052f" else FIT_LATIN_WIDTH)+(.08 if bold else 0) for c in paragraph)
-        needed += max(1, math.ceil(units * font / width))
-    available = height / (font * max(.1,spacing) * FIT_LINE_PITCH)
-    ratio = needed / available
-    return {"status": "ok" if ratio <= .9 else "tight" if ratio <= 1 else "overflow_risk", "ratio": round(ratio, 3), "font_size_pt": font, "lines_needed": needed, "lines_available": round(available, 2)}
 
 
 def _walk(elements, parent=(1,0,0,1,0,0)):
