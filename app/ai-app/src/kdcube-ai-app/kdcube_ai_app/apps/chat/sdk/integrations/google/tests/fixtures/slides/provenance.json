@@ -1,0 +1,47 @@
+{
+  "capture_date": "2026-10-28",
+  "provider": "Google Slides API v1",
+  "transformations": [
+    "Extract the presentation member from each captured response envelope.",
+    "Keep provided Drive-ID aliases, redacted provider URLs and transport-escaped tag text.",
+    "Replace each presentation title with its neutral fixture alias.",
+    "Serialize as UTF-8 JSON with two-space indentation; preserve all other field values."
+  ],
+  "fixtures": {
+    "simple_table": {
+      "capture_sha256": "85353c9512cb606413983b80429fa840a3e6df8da7867613ec0eb5324dddfbc6",
+      "fixture_sha256": "9563bf761b0bd77a70995bd528db83fcadca552046dd149d31c22afc2a38462f",
+      "slides": 3,
+      "layouts": 11,
+      "masters": 1
+    },
+    "streamline_rotated": {
+      "capture_sha256": "63b2210a866169e52fd8369298d9395f1b64ca7d6713ed1d125a326a4819939e",
+      "fixture_sha256": "d2bbf9f9abc50872c92c144cf7c6de8478bb193c0fd9e0d70343df6587cdf435",
+      "slides": 3,
+      "layouts": 11,
+      "masters": 1
+    },
+    "focus_group": {
+      "capture_sha256": "416aece4d30667ece2ce6540d108c9832fce41cf34be19d0381219a6b5f90932",
+      "fixture_sha256": "fb26abac3de61f94d603a5c9ecc91b5d12c14938f430c170db34d7a9d793d23f",
+      "slides": 4,
+      "layouts": 11,
+      "masters": 1
+    },
+    "material_group_rotated": {
+      "capture_sha256": "f69d807b3a2f117e50ac89a2bed72081ecf73a97739520379510529e1b577121",
+      "fixture_sha256": "d85f9b31c781975ae958aba43ea4e5ee84b7511a4757b84404b8d1ec3ed2866f",
+      "slides": 4,
+      "layouts": 11,
+      "masters": 1
+    },
+    "pptx_converted": {
+      "capture_sha256": "0650cfc68f502ec0f731564f60d82657554f12347dd89cc4f83075995d416da5",
+      "fixture_sha256": "0c6e9d9e7f26027c27dbb55676eea325f84724f22c14104eed2789b5b3ed27e4",
+      "slides": 16,
+      "layouts": 17,
+      "masters": 1
+    }
+  }
+}

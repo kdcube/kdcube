@@ -9,6 +9,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import sna
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "slides"
+CALIBRATION = json.loads((FIXTURES / "fit-calibration.json").read_text())
 
 
 @pytest.mark.parametrize("theme", ["simple_table", "streamline_rotated", "focus_group", "material_group_rotated", "pptx_converted"])
@@ -110,3 +111,43 @@ def test_fit_uses_inherited_font_and_script_specific_width():
     assert latin["font_size_pt"] == 24
     assert cyrillic["lines_needed"] > latin["lines_needed"]
     assert cyrillic["status"] == "overflow_risk"
+
+
+def test_parent_bullets_do_not_turn_an_unlisted_paragraph_into_a_list():
+    parent = {"text": {"textElements": [
+        {"paragraphMarker": {"bullet": {"glyph": "●"}}},
+        {"textRun": {"style": {"fontSize": {"magnitude": 18}}}},
+    ]}}
+    shape = {
+        "placeholder": {"parentObjectId": "parent"},
+        "text": {"textElements": [
+            {"paragraphMarker": {"style": {}}},
+            {"textRun": {"content": "M" * 110}},
+        ]},
+    }
+    box = {"width": 200 * 12700, "height": 100 * 12700}
+    inherited = fit(shape, box, {"parent": parent})
+    unlisted_parent = copy.deepcopy(parent)
+    del unlisted_parent["text"]["textElements"][0]["paragraphMarker"]["bullet"]
+    assert inherited == fit(shape, box, {"parent": unlisted_parent})
+
+
+@pytest.mark.parametrize("case", CALIBRATION["cases"], ids=lambda case: case["case"])
+def test_captured_body_fit_matches_measured_overflow(case):
+    presentation = copy.deepcopy(CALIBRATION["copy_presentations_after"][case["deck"]])
+    presentation["slides"] = [case["page_after_write"]]
+    raw_body = next(e for e in case["page_after_write"]["pageElements"]
+                    if e.get("shape", {}).get("placeholder", {}).get("type") == "BODY")
+    body = next(e for e in snapshot(presentation)["slides"][0]["elements"]
+                if e["ref"] == raw_body["objectId"])
+    estimate = body["fit"]
+    expected_font = 13 if case["deck"] in ("streamline_rotated", "focus_group") else 18
+    assert estimate["font_size_pt"] == expected_font
+    if case["observed"]["overflow"]:
+        assert estimate["status"] == "overflow_risk"
+    elif case["case"] != "streamline_rotated.cyrillic.6":
+        assert estimate["status"] in ("ok", "tight")
+    # The near-boundary Streamline Cyrillic case is a documented conservative
+    # warning. Clipped Material images reveal only a lower bound on line count.
+    if not case["observed"]["line_count_is_lower_bound"]:
+        assert abs(estimate["lines_needed"] - case["observed"]["visible_lines"]) <= 1

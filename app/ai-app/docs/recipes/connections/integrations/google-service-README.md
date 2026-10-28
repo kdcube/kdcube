@@ -1065,9 +1065,10 @@ axis-aligned rectangle.
 Read pages with `filters.start_slide` (1-based) and `filters.slide_limit`
 (1–50). Follow `snapshot.range.next_slide` until null. Text is bounded to
 12,000 characters per element and 100,000 per call, with explicit truncation
-flags. Fit, grid and relation diagnostics are heuristic; the initial fit
-constants are Latin 0.50, Cyrillic 0.60 and line pitch 1.35. Request a
-thumbnail to check the rendered result. Element geometry in EMU stays in the
+flags. Fit, grid and relation diagnostics are heuristic. Text fit was calibrated
+on captured Arial, Lato and Roboto examples, with one documented conservative
+warning near a frame boundary; see the [measurements and limits](../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/integrations/google/tests/fixtures/slides/calibration.md).
+Request a thumbnail to check the rendered result. Element geometry in EMU stays in the
 adapter; agents use returned refs, roles and relations.
 
 | Action | Inputs |
