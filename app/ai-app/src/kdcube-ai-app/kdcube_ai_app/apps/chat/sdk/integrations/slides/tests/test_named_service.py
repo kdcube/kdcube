@@ -76,6 +76,15 @@ def test_artifact_stream_delivers_bytes_out_of_band():
     asyncio.run(exercise())
 
 
+def test_react_pull_materializes_export_instead_of_returning_another_reference():
+    async def execute(**kwargs):return {"ok":True,"ret":{"content_base64":base64.b64encode(b"pptx-bytes").decode()}}
+    async def exercise():
+        result=await provider(execute).dispatch(NamedServiceContext(),request("object.get",object_ref="slides:google:account:export:pptx:deck",context={"source":"react.pull"}))
+        assert isinstance(result,NamedServiceStreamResult)
+        assert b"".join([chunk async for chunk in result.chunks]) == b"pptx-bytes"
+    asyncio.run(exercise())
+
+
 def test_nondefault_thumbnail_size_explicitly_streams_instead_of_wrong_url():
     async def execute(**kwargs):return {"ok":True,"ret":{"presentation_id":"deck","account_id":"account","snapshot":snapshot()}}
     response=asyncio.run(provider(execute,file_url_factory=lambda *args:{"url":"https://files.example/default-size"}).dispatch(NamedServiceContext(),request("object.action",action="thumbnail",object_ref="slides:google:account:presentation:deck",payload={"slide":{"position":1},"size":"MEDIUM"})))
@@ -94,6 +103,28 @@ def test_unknown_actions_are_refused_before_provider_call():
     async def execute(**kwargs):raise AssertionError("must not call Google")
     response=asyncio.run(provider(execute).dispatch(NamedServiceContext(),request("object.action",action="raw_batch_update",object_ref="slides:google:account:presentation:deck")))
     assert not response.ok and response.error.code == "slides_unsupported_action"
+
+
+def test_slide_ref_constrains_replace_to_that_slide():
+    seen=[]
+    async def execute(**kwargs):
+        seen.append(kwargs)
+        return {"ok":True,"ret":{"presentation_id":"deck","account_id":"account"}}
+    result=asyncio.run(provider(execute).dispatch(NamedServiceContext(),request("object.action",action="replace_text",object_ref="slides:google:account:slide:slide_a:deck",payload={"replacements":{"Hello":"Hi"}})))
+    assert result.ok and seen[0]["payload"]["slide"] == {"ref":"slide_a"}
+
+
+@pytest.mark.parametrize("operation,kwargs",[("object.upsert",{"object_ref":"slides:google:account:slide:slide_a:deck","payload":{"title":"Rename"}}),("object.action",{"action":"replace_text","object_ref":"slides:google:account:export:pdf:deck","payload":{"replacements":{"Hello":"Hi"}}}),("object.action",{"action":"copy","object_ref":"slides:google:account:slide:slide_a:deck","payload":{"title":"Copy"}})])
+def test_artifact_or_slide_ref_never_expands_into_a_whole_deck_write(operation,kwargs):
+    async def execute(**kwargs):raise AssertionError("must not call provider")
+    result=asyncio.run(provider(execute).dispatch(NamedServiceContext(),request(operation,**kwargs)))
+    assert not result.ok and result.error.code == "slides_presentation_ref_required"
+
+
+def test_conflicting_source_cannot_change_the_addressed_deck():
+    async def execute(**kwargs):raise AssertionError("must not call provider")
+    result=asyncio.run(provider(execute).dispatch(NamedServiceContext(),request("object.action",action="copy",object_ref="slides:google:account:presentation:deck",payload={"source":"slides:google:account:presentation:other_deck","title":"Copy"})))
+    assert not result.ok and result.error.code == "slides_source_mismatch"
 
 
 def test_file_ref_uses_owned_copy_and_cleans_it_after_provider_failure(tmp_path):

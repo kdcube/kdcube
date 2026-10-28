@@ -70,11 +70,22 @@ def fit(shape, box, all_shapes):
     text = shape_text(shape)
     font = _font(shape, all_shapes)
     width, height = max(1, box["width"] / 12700 - 20), max(1, box["height"] / 12700 - 20)
+    def styles(current, seen=None):
+        seen=set(seen or ())
+        own=current.get("text", {}).get("textElements", [])
+        parent=current.get("placeholder", {}).get("parentObjectId")
+        inherited=styles(all_shapes[parent], seen|{parent}) if parent in all_shapes and parent not in seen else []
+        return own+inherited
+    effective=styles(shape)
+    bold=any(e.get("textRun", {}).get("style", {}).get("bold") for e in effective)
+    spacing=max([float(e["paragraphMarker"]["style"]["lineSpacing"])/100 for e in effective if e.get("paragraphMarker", {}).get("style", {}).get("lineSpacing")] or [1.0])
+    if any(e.get("paragraphMarker", {}).get("bullet") for e in effective):
+        width=max(1,width-font)
     needed = 0
-    for paragraph in text.splitlines() or [""]:
-        units = sum(0.60 if "\u0400" <= c <= "\u052f" else 0.50 for c in paragraph)
+    for paragraph in text.splitlines():
+        units = sum((0.60 if "\u0400" <= c <= "\u052f" else 0.50)+(.08 if bold else 0) for c in paragraph)
         needed += max(1, math.ceil(units * font / width))
-    available = height / (font * 1.35)
+    available = height / (font * max(.1,spacing) * 1.35)
     ratio = needed / available
     return {"status": "ok" if ratio <= .9 else "tight" if ratio <= 1 else "overflow_risk", "ratio": round(ratio, 3), "font_size_pt": font, "lines_needed": needed, "lines_available": round(available, 2)}
 
@@ -186,8 +197,10 @@ def snapshot(presentation, *, start=1, limit=20):
         notes_page = props.get("notesPage", {})
         notes_id = notes_page.get("notesProperties", {}).get("speakerNotesObjectId")
         notes = next((shape_text(e.get("shape", {})) for e in notes_page.get("pageElements", []) if e.get("objectId") == notes_id), "")
+        raw_notes = notes
         notes = notes[:max(0,min(MAX_ELEMENT_TEXT,budget))]
         budget -= len(notes)
-        slides.append({"position": position, "ref": slide.get("objectId", ""), "kind": layout.get("layout") or ("table" if any(e["kind"] == "table" for e in elements) else "other"), "layout_name": layout.get("layout_name", ""), "title": title, "skipped": bool(props.get("isSkipped")), "elements": elements, "notes": notes, **_layout_read(elements,width,height)})
+        slides.append({"position": position, "ref": slide.get("objectId", ""), "kind": layout.get("layout") or ("table" if any(e["kind"] == "table" for e in elements) else "other"), "layout_name": layout.get("layout_name", ""), "title": title, "skipped": bool(props.get("isSkipped")), "elements": elements, "notes": notes, "notes_truncated": len(notes)<len(raw_notes), **_layout_read(elements,width,height)})
     next_slide = start + len(slides)
-    return {"schema": SCHEMA, "presentation": {"title": presentation.get("title", ""), "revision_id": presentation.get("revisionId", ""), "slides": len(all_slides), "page": {"aspect": f"{ratio.numerator}:{ratio.denominator}"}}, "layouts": layouts, "slides": slides, "range": {"start_slide": start, "returned": len(slides), "next_slide": next_slide if next_slide <= len(all_slides) else None}, "text_truncated": budget <= 0}
+    truncated = budget <= 0 or any(e["text_truncated"] for slide in slides for e in slide["elements"]) or any(slide["notes_truncated"] for slide in slides)
+    return {"schema": SCHEMA, "presentation": {"title": presentation.get("title", ""), "revision_id": presentation.get("revisionId", ""), "slides": len(all_slides), "page": {"aspect": f"{ratio.numerator}:{ratio.denominator}"}}, "layouts": layouts, "slides": slides, "range": {"start_slide": start, "returned": len(slides), "next_slide": next_slide if next_slide <= len(all_slides) else None}, "text_truncated": truncated}

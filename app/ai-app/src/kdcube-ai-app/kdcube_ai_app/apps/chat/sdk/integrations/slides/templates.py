@@ -31,6 +31,8 @@ def _replacements(payload):
     for key, value in values.items():
         if not isinstance(key, str) or not key or len(key) > MAX_REPLACEMENT_TEXT or not isinstance(value, str) or len(value) > MAX_REPLACEMENT_TEXT:
             raise SlidesValidationError("slides_invalid_replacements", "Replacement keys and values must be text, at most 20000 characters each; keys must be nonempty.")
+    if sum(len(k)+len(v) for k,v in values.items()) > 100_000:
+        raise SlidesValidationError("slides_invalid_replacements", "Keep the complete replacement map within 100000 characters.")
     return dict(values)
 
 
@@ -59,15 +61,20 @@ def replace_text_requests(snapshot, payload):
         if element.get("kind") != "shape" or element.get("text_truncated"):
             raise SlidesValidationError("slides_element_not_editable", "Read one untruncated text shape before replacing its text.")
         current = element.get("text", "")
+        if len(current) > 100_000:
+            raise SlidesValidationError("slides_text_too_large", "This shape exceeds the bounded targeted-edit size. Use literal replacement on its slide instead of replacing the whole element text.")
         updated = current
         for old, new in values.items():
             updated = updated.replace(old, new)
+        if len(updated) > 100_000:
+            raise SlidesValidationError("slides_text_too_large", "Keep targeted element text within 100000 characters.")
+        preview={"ref": element["ref"], "before": current[:12000], "after": updated[:12000], "before_truncated": len(current)>12000, "after_truncated": len(updated)>12000}
         if current == updated:
-            return [], [{"ref": element["ref"], "before": current, "after": updated}]
+            return [], [preview]
         requests = [{"deleteText": {"objectId": element["ref"], "textRange": {"type": "ALL"}}}]
         if updated:
             requests.append({"insertText": {"objectId": element["ref"], "text": updated, "insertionIndex": 0}})
-        return requests, [{"ref": element["ref"], "before": current, "after": updated}]
+        return requests, [preview]
     requests = [{"replaceAllText": {"containsText": {"text": old, "matchCase": bool(payload.get("match_case", True))}, "replaceText": new, "pageObjectIds": page_ids}} for old,new in values.items()]
     return requests, [{"slides": page_ids, "replacements": values}]
 
@@ -102,6 +109,8 @@ def template_requests(snapshot, payload):
     if values:
         requests, _ = replace_text_requests(snapshot, {"replacements": {tag_name(k):v for k,v in values.items()}})
     for key,image in images.items():
+        if not isinstance(image,(str,Mapping)):
+            raise SlidesValidationError("slides_invalid_template", "Each template image must be a public URL or a map with image_uri.")
         image = {"image_uri": image} if isinstance(image,str) else dict(image)
         requests += image_requests(snapshot, {**image, "tag": tag_name(key)})
     return requests, {"tags": sorted(present)[:100], "filled_tags": sorted(supplied), "unfilled_tags": sorted(present-supplied)[:100]}

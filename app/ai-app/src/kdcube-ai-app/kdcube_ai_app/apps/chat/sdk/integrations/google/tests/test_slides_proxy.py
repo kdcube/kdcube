@@ -35,6 +35,19 @@ def test_read_is_masked_bounded_and_token_free(monkeypatch):
     assert "fixture-token" not in json.dumps(out)
 
 
+def test_slide_handle_selection_uses_one_fresh_read_beyond_page_one(monkeypatch):
+    calls=[]
+    def handler(request):
+        calls.append(request.method)
+        value=deck()
+        value["slides"]=[{**copy.deepcopy(value["slides"][0]),"objectId":f"slide_{i}"} for i in range(1,61)]
+        return httpx.Response(200,json=value)
+    result=run(monkeypatch,"get",{"presentation_ref":"deck","slide_selector":{"position":55}},handler)
+    assert result["ok"] and result["ret"]["snapshot"]["slides"][0]["ref"] == "slide_55"
+    assert len(result["ret"]["snapshot"]["slides"]) == 1
+    assert calls == ["GET"]
+
+
 def test_search_quotes_drive_query_and_preserves_next_cursor(monkeypatch):
     def handler(request):
         assert "name contains 'O\\'Brien'" in request.url.params["q"]
@@ -125,6 +138,26 @@ def test_template_preview_is_read_only(monkeypatch):
         return httpx.Response(200, json=deck())
     result = run(monkeypatch, "fill_template", {"source": "deck", "title": "Copy", "values": {"NAME": "Ada"}, "preview": True}, handler)
     assert result["ok"] and result["ret"]["preview"]
+    assert result["ret"]["fit_predicted"] and result["ret"]["fit"]
+
+
+def test_unreadable_template_is_actionable_and_does_not_create(monkeypatch):
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(404,json={"error":{"message":"File not found"}})
+    result=run(monkeypatch,"fill_template",{"source":"deck","title":"Copy","values":{"NAME":"Ada"}},handler)
+    assert result["error"]["code"] == "slides_template_unreadable"
+
+
+def test_preview_predicts_overflow_and_never_mutates_the_read(monkeypatch):
+    original=deck()
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(200,json=original)
+    result=run(monkeypatch,"replace_text",{"presentation_ref":"deck","replacements":{"Hello {{NAME}}":"A"*5000},"preview":True},handler)
+    assert result["ret"]["fit_predicted"]
+    assert result["ret"]["fit"][0]["status"] == "overflow_risk"
+    assert original == deck()
 
 
 def test_template_copy_compiles_against_copy_ids(monkeypatch):
@@ -148,7 +181,7 @@ def test_template_copy_compiles_against_copy_ids(monkeypatch):
     assert result["ok"] and result["ret"]["presentation_id"] == "copy_deck" and len(writes) == 1
 
 
-@pytest.mark.parametrize("status,code", [(429,"google_slides_rate_limited"),(503,"google_slides_service_unavailable"),(401,"google_slides_authorization_failed")])
+@pytest.mark.parametrize("status,code", [(429,"google_slides_rate_limited"),(503,"google_slides_provider_unavailable"),(401,"google_slides_authorization_failed")])
 def test_provider_failures_are_normalized_without_hidden_retry(monkeypatch,status,code):
     calls = []
     def handler(request):
@@ -156,7 +189,7 @@ def test_provider_failures_are_normalized_without_hidden_retry(monkeypatch,statu
         return httpx.Response(status, json={"error": {"message": "Provider unavailable"}}, headers={"Retry-After": "7"})
     result = run(monkeypatch, "get", {"presentation_ref": "deck"}, handler)
     assert not result["ok"]
-    if status == 429:assert result["error"]["code"] == code
+    assert result["error"]["code"] == code
     assert result["ret"]["provider_status"] == status and len(calls) == 1
     if status == 429:assert result["ret"]["retry_after"] == "7"
 
@@ -204,3 +237,20 @@ def test_partial_template_failure_identifies_created_copy(monkeypatch):
     result=run(monkeypatch,"fill_template",{"source":"deck","title":"Copy","values":{"NAME":"Ada"}},handler)
     assert result["ret"]["created_presentation_id"] == "copy_deck"
     assert result["ret"]["partial_result"]
+
+
+def test_bad_provider_response_is_not_echoed_and_write_is_uncertain(monkeypatch):
+    result=run(monkeypatch,"create",{"title":"New"},lambda req:httpx.Response(200,content=b"malformed-provider-body"))
+    assert result["error"]["code"] == "google_slides_invalid_response"
+    assert result["ret"]["outcome_unknown"] and result["ret"]["partial_result"]
+    assert "malformed-provider-body" not in json.dumps(result)
+
+
+def test_create_posts_only_the_requested_title(monkeypatch):
+    def handler(request):
+        if request.url.path == "/v1/presentations":
+            assert json.loads(request.content) == {"title":"New"}
+            return httpx.Response(200,json={"presentationId":"new_deck"})
+        return httpx.Response(200,json=deck())
+    result=run(monkeypatch,"create",{"title":"New"},handler)
+    assert result["ok"] and result["ret"]["presentation_id"] == "new_deck"

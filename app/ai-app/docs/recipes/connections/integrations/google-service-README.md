@@ -1083,6 +1083,11 @@ discover `{{tags}}` before copying; an unknown tag returns
 `slides_template_unreadable`. Office files return `slides_not_native` with
 guidance to use the import operation when available.
 
+A slide ref constrains edits to that slide. Whole-presentation actions such
+as copy, export and rename require a presentation ref. Artifact refs support
+reads; they cannot become presentation write targets. A supplied `source`
+must agree with `object_ref`.
+
 ```json
 {"namespace":"slides","object_ref":"slides:google:<account>:presentation:<id>",
  "action":"replace_text","payload":{"revision_id":"<revision from object.get>",

@@ -6,6 +6,8 @@ revision race may be resolved once only when the caller supplied no revision.
 from __future__ import annotations
 
 import base64
+import copy
+import io
 import json
 import re
 from collections.abc import Mapping
@@ -52,7 +54,7 @@ class SlidesClient:
             if response.status_code == 400 and "required revision" in message and ("does not match" in message or "mismatch" in message):
                 raise SlidesValidationError("slides_revision_changed", "The presentation changed. Read it again before retrying with a new revision_id.")
             if response.status_code == 400 and "office file" in message:
-                raise SlidesValidationError("slides_not_native", "This is an Office file in Drive. Use import to create a native presentation, then edit that copy.")
+                raise SlidesValidationError("slides_not_native", "This is an Office file in Drive. Save a native Google Slides copy, or use import when that action is available, then edit the native copy.")
             if response.status_code == 400 and operation == "replace_shapes_with_image":
                 raise SlidesValidationError("slides_image_fetch_failed", "Google could not fetch the image. Check the public URL, format, size and image dimensions.")
             raise _ProviderError(failure)
@@ -60,10 +62,19 @@ class SlidesClient:
             self.writes_applied = True
         if len(response.content) > MAX_PRESENTATION_BYTES:
             raise SlidesValidationError("slides_response_too_large", "This presentation exceeds the bounded read size. Export it or use a smaller deck.")
-        return response.json() if response.content else {}
+        try:
+            body=response.json() if response.content else {}
+        except ValueError as exc:
+            raise SlidesValidationError("google_slides_invalid_response", "Google returned an unreadable response. Read the presentation before retrying a write.", details={"outcome_unknown":mutating}) from exc
+        if not isinstance(body,Mapping):
+            raise SlidesValidationError("google_slides_invalid_response", "Google returned an invalid response object. Read the presentation before retrying a write.", details={"outcome_unknown":mutating})
+        return dict(body)
 
     async def get(self, deck_id):
-        return await self.request("GET", f"{SLIDES_API}/presentations/{deck_id}", operation="get", params={"fields": PRESENTATION_FIELDS})
+        result=await self.request("GET", f"{SLIDES_API}/presentations/{deck_id}", operation="get", params={"fields": PRESENTATION_FIELDS})
+        if not result.get("presentationId"):
+            raise SlidesValidationError("google_slides_invalid_response", "Google returned no presentation identity. Read the presentation again.")
+        return result
 
     async def all_snapshot(self, presentation):
         # The REST API has no slide pagination. Project bounded windows locally;
@@ -107,6 +118,8 @@ class SlidesClient:
         if payload.get("parent_id"):
             body["parents"] = [presentation_id(payload["parent_id"])]
         result = await self.request("POST", f"{DRIVE_API}/files/{deck_id}/copy", operation="copy", mutating=True, params={"fields": "id,name,mimeType,webViewLink"}, json=body)
+        if not result.get("id"):
+            raise SlidesValidationError("google_slides_invalid_response", "Google accepted the copy but returned no identity. Inspect recent presentations before creating another copy.", details={"outcome_unknown":True})
         self.created_id = result.get("id", "")
         return {"presentation_id": result["id"], "title": result.get("name", title), "web_url": f"https://docs.google.com/presentation/d/{result['id']}/edit"}
 
@@ -146,13 +159,59 @@ async def _download(client, url, *, max_bytes, google_thumbnail=False):
 
 
 async def validate_image_uri(client, uri):
+    from PIL import Image
     from kdcube_ai_app.infra.service_hub.multimodality import validate_image_bytes
     data, mime = await _download(client, str(uri), max_bytes=MAX_IMAGE_BYTES)
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.width*image.height > 25_000_000:
+                raise SlidesValidationError("slides_image_too_large", "Images must contain at most 25 megapixels.")
+    except SlidesValidationError:
+        raise
+    except Exception as exc:
+        raise SlidesValidationError("slides_image_unexpected_type", "Use a valid PNG, JPEG or GIF image.") from exc
     measured = validate_image_bytes(data, media_type=mime)
     if not measured.get("valid") or measured.get("media_type", mime) not in {"image/png", "image/jpeg", "image/gif"}:
         raise SlidesValidationError("slides_image_unexpected_type", "Use a PNG, JPEG or GIF image.")
     if not measured.get("width") or not measured.get("height") or measured["width"] * measured["height"] > 25_000_000:
         raise SlidesValidationError("slides_image_too_large", "Images must contain at most 25 megapixels.")
+
+
+def _predict(presentation, requests):
+    """Estimate text fit over a private copy; never mutate the provider input."""
+    from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import shape_text
+    result=copy.deepcopy(presentation)
+    def shapes(elements):
+        for e in elements:
+            if "shape" in e:yield e
+            yield from shapes(e.get("elementGroup", {}).get("children", []))
+    for request in requests:
+        replacement=request.get("replaceAllText")
+        image=request.get("replaceAllShapesWithImage")
+        for slide in result.get("slides", []):
+            target_pages=(replacement or image or {}).get("pageObjectIds", [])
+            if target_pages and slide["objectId"] not in target_pages:continue
+            for element in shapes(slide.get("pageElements", [])):
+                text=shape_text(element["shape"])
+                changed=None
+                if replacement:
+                    old=replacement["containsText"]["text"]
+                    changed=text.replace(old,replacement["replaceText"]) if replacement["containsText"].get("matchCase") else re.sub(re.escape(old),lambda m:replacement["replaceText"],text,flags=re.I)
+                elif image and image["containsText"]["text"] in text:
+                    changed=""
+                elif request.get("deleteText", {}).get("objectId")==element["objectId"]:changed=""
+                elif request.get("insertText", {}).get("objectId")==element["objectId"]:changed=request["insertText"]["text"]+text
+                if changed is not None:
+                    runs=element["shape"].get("text", {}).get("textElements", [])
+                    style=next((r["textRun"].get("style", {}) for r in runs if "textRun" in r), {})
+                    element["shape"]["text"]={"textElements":[{"textRun":{"content":changed,"style":style}}]}
+    return result
+
+
+async def _fit_flags(api, presentation, *, predicted=False):
+    view=await api.all_snapshot(presentation)
+    flags=[{"slide":s["ref"],"element":e["ref"],**e["fit"]} for s in view["slides"] for e in s["elements"] if e.get("fit")]
+    return {"fit":flags[:1000],"fit_truncated":len(flags)>1000,"fit_predicted":predicted}
 
 
 async def _run(api, operation, payload):
@@ -176,9 +235,12 @@ async def _run(api, operation, payload):
     if operation == "create":
         title = _title(payload.get("title"))
         if payload.get("preview"):
-            return {"preview": True, "title": title}
+            return {"preview": True, "title": title, "fit": []}
         result = await api.request("POST", f"{SLIDES_API}/presentations", operation="create", mutating=True, json={"title": title})
-        return {"presentation_id": result["presentationId"], "title": title}
+        if not result.get("presentationId"):
+            raise SlidesValidationError("google_slides_invalid_response", "Google accepted creation but returned no identity. Inspect recent presentations before creating another deck.", details={"outcome_unknown":True})
+        api.created_id=result["presentationId"]
+        return {"presentation_id": result["presentationId"], "title": title, "fit": []}
     deck_id = presentation_id(payload.get("presentation_ref") or payload.get("source"))
     if operation == "export":
         await api.get(deck_id)  # Native-only, including direct adapter callers.
@@ -193,7 +255,13 @@ async def _run(api, operation, payload):
         return {"presentation_id": deck_id, "format": fmt, "mime_type": EXPORT_FORMATS[fmt], "byte_size": len(response.content), "content_base64": base64.b64encode(response.content).decode("ascii")}
     presentation = await api.get(deck_id)
     if operation == "get":
-        result = snapshot(presentation, start=payload.get("start_slide", 1), limit=payload.get("slide_limit", 20))
+        if payload.get("slide_selector") is not None:
+            selected=resolve_slide((await api.all_snapshot(presentation))["slides"],payload["slide_selector"])
+            result=snapshot(presentation,start=selected["position"],limit=1)
+            result["range"]["next_slide"]=None
+            result["range"]["selection"]="one_slide"
+        else:
+            result = snapshot(presentation, start=payload.get("start_slide", 1), limit=payload.get("slide_limit", 20))
         return {"presentation_id": deck_id, "title": presentation.get("title", ""), "snapshot": result, "revision_id": presentation.get("revisionId")}
     expected = payload.get("revision_id")
     if expected and expected != presentation.get("revisionId"):
@@ -212,14 +280,17 @@ async def _run(api, operation, payload):
     if operation == "rename":
         title = _title(payload.get("title"))
         if payload.get("preview"):
-            return {"preview": True, "presentation_id": deck_id, "before": presentation.get("title"), "title": title}
+            return {"preview": True, "presentation_id": deck_id, "before": presentation.get("title"), "title": title, **await _fit_flags(api,presentation,predicted=True)}
         # Drive metadata has no Slides revision guard. Do not promise atomic
         # compare-and-swap for a rename: the supplied revision was checked above.
         await api.request("PATCH", f"{DRIVE_API}/files/{deck_id}", operation="rename", mutating=True, json={"name": title}, params={"fields": "id,name"})
-        return {"presentation_id": deck_id, "title": title}
+        return {"presentation_id": deck_id, "title": title, **await _fit_flags(api,presentation)}
     if operation == "copy":
         _title(payload.get("title"))
-        return {"preview": True, "source_presentation_id": deck_id, "title": payload["title"]} if payload.get("preview") else await api.copy(deck_id, payload)
+        if payload.get("preview"):
+            return {"preview": True, "source_presentation_id": deck_id, "title": payload["title"], **await _fit_flags(api,presentation,predicted=True)}
+        copied=await api.copy(deck_id,payload)
+        return {**copied, **await _fit_flags(api,await api.get(copied["presentation_id"]))}
     if operation not in ("fill_template", "replace_text", "replace_shapes_with_image"):
         raise SlidesValidationError("slides_unsupported_operation", "Choose an operation declared by the Slides schema.")
     for attempt in range(2):
@@ -232,7 +303,7 @@ async def _run(api, operation, payload):
         else:
             requests, plan = image_requests(view, payload), {"tag": payload.get("tag", payload.get("text"))}
         if payload.get("preview"):
-            return {"preview": True, "presentation_id": deck_id, "changes": plan, "request_count": len(requests), "revision_id": presentation.get("revisionId")}
+            return {"preview": True, "presentation_id": deck_id, "changes": plan, "request_count": len(requests), "revision_id": presentation.get("revisionId"), **await _fit_flags(api,_predict(presentation,requests),predicted=True)}
         for request in requests:
             if "replaceAllShapesWithImage" in request:
                 await validate_image_uri(api.client, request["replaceAllShapesWithImage"]["imageUrl"])
@@ -251,8 +322,7 @@ async def _run(api, operation, payload):
                 continue
             raise
         after = await api.get(deck_id) if requests else presentation
-        post = await api.all_snapshot(after)
-        return {"presentation_id": deck_id, "title": after.get("title", ""), "revision_id": written["revision_id"], "changes": plan, "fit": [{"slide": s["ref"], "element": e["ref"], **e["fit"]} for s in post["slides"] for e in s["elements"] if e.get("fit")], "replies": written["replies"]}
+        return {"presentation_id": deck_id, "title": after.get("title", ""), "revision_id": written["revision_id"], "changes": plan, **await _fit_flags(api,after), "replies": written["replies"]}
 
 
 async def execute_google_slides_operation(*, operation, access_token, payload=None):
@@ -270,7 +340,7 @@ async def execute_google_slides_operation(*, operation, access_token, payload=No
         result = {"ok": False, "error": {"code": exc.code, "message": str(exc), "details": exc.details, "managed": True, "where": where}, "ret": {"outcome_unknown": False, **exc.details}}
     except _ProviderError as exc:
         result = exc.failure.error_result(where=where)
-        if operation == "fill_template" and not (api and api.created_id) and exc.failure.provider_status in (403,404):
+        if operation == "fill_template" and not (api and api.created_id) and exc.failure.category in ("access_denied", "not_found"):
             result["error"].update(code="slides_template_unreadable", message="The connected account cannot read or copy this template. Share it with that account and retry.")
     except httpx.HTTPError as exc:
         failure = provider_failure_from_exception(exc, provider="google", service="google_slides", operation=operation, fallback="Google Slides did not return a response. Read the presentation before retrying a write.", mutating=operation in MUTATING_OPERATIONS and not body.get("preview"))
