@@ -107,9 +107,9 @@ class SlidesClient:
             result = await self.request("POST", f"{SLIDES_API}/presentations/{deck_id}:batchUpdate", operation=operation, mutating=True, json={"requests": requests[start:start+MAX_BATCH_REQUESTS], "writeControl": {"requiredRevisionId": revision}})
             replies.extend(result.get("replies", []))
             next_revision = result.get("writeControl", {}).get("requiredRevisionId")
-            if not next_revision and start + MAX_BATCH_REQUESTS < len(requests):
+            if not next_revision:
                 raise SlidesValidationError("slides_revision_unavailable", "The write completed but Google returned no next revision. Read the presentation before continuing.")
-            revision = next_revision or revision
+            revision = next_revision
         return {"revision_id": revision, "replies": replies}
 
     async def copy(self, deck_id, payload):
@@ -290,7 +290,8 @@ async def _run(api, operation, payload):
         if payload.get("preview"):
             return {"preview": True, "source_presentation_id": deck_id, "title": payload["title"], **await _fit_flags(api,presentation,predicted=True)}
         copied=await api.copy(deck_id,payload)
-        return {**copied, **await _fit_flags(api,await api.get(copied["presentation_id"]))}
+        copied_presentation=await api.get(copied["presentation_id"])
+        return {**copied,"revision_id":copied_presentation.get("revisionId"), **await _fit_flags(api,copied_presentation)}
     if operation not in ("fill_template", "replace_text", "replace_shapes_with_image"):
         raise SlidesValidationError("slides_unsupported_operation", "Choose an operation declared by the Slides schema.")
     for attempt in range(2):
@@ -322,7 +323,7 @@ async def _run(api, operation, payload):
                 continue
             raise
         after = await api.get(deck_id) if requests else presentation
-        return {"presentation_id": deck_id, "title": after.get("title", ""), "revision_id": written["revision_id"], "changes": plan, **await _fit_flags(api,after), "replies": written["replies"]}
+        return {"presentation_id": deck_id, "title": after.get("title", ""), "revision_id": written["revision_id"], "observed_revision_id":after.get("revisionId"), "changes": plan, **await _fit_flags(api,after), "replies": written["replies"]}
 
 
 async def execute_google_slides_operation(*, operation, access_token, payload=None):
