@@ -344,7 +344,10 @@ bundles:
               label: Read Google Slides
               description: Find, read, export and preview presentations.
               delegable_roles: &id001
-              - kdcube:role:registered - kdcube:role:paid - kdcube:role:privileged - kdcube:role:super-admin
+              - kdcube:role:registered
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
               delegable_permissions:
               - slides:read
             - grant: slides:write
