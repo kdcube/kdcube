@@ -28,6 +28,9 @@ MAX_EXPORT_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_PRESENTATION_BYTES = 16 * 1024 * 1024
 MAX_BATCH_REQUESTS = 100
+# Drive may finish a small copy after the ordinary 30-second read deadline.
+# Keep slow file operations bounded, without retrying a creation on timeout.
+SLOW_DRIVE_TIMEOUT = httpx.Timeout(120, connect=10)
 MUTATING_OPERATIONS = frozenset({"create", "rename", "copy", "fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS})
 # URLs from image/chart objects are deliberately excluded. Group children
 # remain internal and are projected by slides_structure, never returned raw.
@@ -48,6 +51,8 @@ class SlidesClient:
         self.writes_applied = False
 
     async def request(self, method, url, *, operation, mutating=False, **kwargs):
+        if mutating and operation in {"copy", "import"}:
+            kwargs.setdefault("timeout", SLOW_DRIVE_TIMEOUT)
         response = await self.client.request(method, url, headers=self.headers, **kwargs)
         if response.status_code >= 400:
             failure = provider_failure_from_response(response, provider="google", service="google_slides", operation=operation, fallback="Google Slides could not complete this operation.", mutating=mutating)
@@ -220,7 +225,7 @@ async def _run(api, operation, payload):
         fmt = str(payload.get("format", "pdf")).lower()
         if fmt not in EXPORT_FORMATS:
             raise SlidesValidationError("slides_invalid_export_format", "Export format must be pdf or pptx.")
-        response = await api.client.get(f"{DRIVE_API}/files/{deck_id}/export", headers=api.headers, params={"mimeType": EXPORT_FORMATS[fmt]})
+        response = await api.client.get(f"{DRIVE_API}/files/{deck_id}/export", headers=api.headers, params={"mimeType": EXPORT_FORMATS[fmt]}, timeout=SLOW_DRIVE_TIMEOUT)
         if response.status_code >= 400:
             raise _ProviderError(provider_failure_from_response(response, provider="google", service="google_slides", operation="export", fallback="Google could not export this presentation."))
         if len(response.content) > MAX_EXPORT_BYTES:
@@ -279,7 +284,7 @@ async def _run(api, operation, payload):
         else:
             requests, plan = image_requests(view, payload), {"tag": payload.get("tag", payload.get("text"))}
         if payload.get("preview"):
-            return {"preview": True, "presentation_id": deck_id, "changes": plan, "request_count": len(requests), "revision_id": presentation.get("revisionId"), **await _fit_flags(api,_predict(presentation,requests),predicted=True)}
+            return {"preview": True, "presentation_id": deck_id, "title": presentation.get("title", ""), "changes": plan, "request_count": len(requests), "revision_id": presentation.get("revisionId"), **await _fit_flags(api,_predict(presentation,requests),predicted=True)}
         for request in requests:
             if "replaceAllShapesWithImage" in request:
                 await validate_image_uri(api.client, request["replaceAllShapesWithImage"]["imageUrl"])

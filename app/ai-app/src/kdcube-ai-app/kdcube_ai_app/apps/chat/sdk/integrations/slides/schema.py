@@ -48,7 +48,7 @@ _INSTRUCTIONS = {
 SLIDES_SCHEMA = {
     "namespace": "slides", "snapshot_schema": "kdcube.slides.snapshot.v1",
     "refs": ["slides:google:<account_id>:presentation:<presentation_id>", "slides:google:<account_id>:slide:<slide_id>:<presentation_id>", "slides:google:<account_id>:export:<pdf|pptx>:<presentation_id>", "slides:google:<account_id>:thumbnail:<slide_id>:<presentation_id>"],
-    "object_kinds": {"slides.presentation": {"description": "A native presentation with a theme and slides."}, "slides.export": {"description": "PDF or PowerPoint bytes."}, "slides.thumbnail": {"description": "A rendered PNG slide."}},
+    "object_kinds": {"slides.presentation": {"description": "A native presentation with a theme and slides."}, "slides.slide": {"description": "One slide in a native presentation."}, "slides.export": {"description": "PDF or PowerPoint bytes."}, "slides.thumbnail": {"description": "A rendered PNG slide."}},
     "operations": {name: {**meta, "instruction": SLIDES_INTRO} for name,meta in SLIDES_PRESENTATION.items() if "." in name},
     "actions": {name: {"label": SLIDES_PRESENTATION[name]["label"], "description": _INSTRUCTIONS[name]} for name in SLIDES_ACTIONS},
     "selectors": {"slide": ["position", "title", "title_contains", "tag", "kind", "ref", "last"], "element": ["role", "text_contains", "alt_text", "kind", "index", "ref"]},
