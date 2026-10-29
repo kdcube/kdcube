@@ -239,6 +239,17 @@ def test_add_slide_preview_writes_nothing_and_predicts_fit_without_coordinates(m
     assert result["ret"]["geometry_diagnostics_truncated"] is False
 
 
+def test_compose_preview_creates_semantic_content_without_a_provider_write(monkeypatch):
+    def handler(request):
+        assert request.method == "GET"
+        return httpx.Response(200, json=editable_deck())
+    result = run(monkeypatch, "compose", {"presentation_ref": "deck", "slide": {"position": 1}, "preview": True, "cells": [{"at": [0, 0], "element": {"text": "A composed caption"}}]}, handler)
+    assert result["ok"] and result["ret"]["preview"]
+    assert result["ret"]["changes"]["elements"][0]["after"] == "A composed caption\n"
+    assert result["ret"]["fit_predicted"]
+    assert "translateX" not in json.dumps(result)
+
+
 @pytest.mark.parametrize("notes_status", [200, 400, 403])
 def test_add_slide_reads_new_notes_id_and_chains_revision_without_recreating(monkeypatch, notes_status):
     state, writes, created = editable_deck(), [], []

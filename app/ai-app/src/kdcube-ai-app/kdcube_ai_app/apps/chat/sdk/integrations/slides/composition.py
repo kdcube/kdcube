@@ -49,6 +49,7 @@ def compile_composition(presentation, view, action, payload, *, image_sizes=None
         if not updates or any(not isinstance(value, str) or len(value) > 12000 for value in updates.values()):
             invalid("Pass title or description text of at most 12000 characters.")
         return [{"updatePageElementAltText": {"objectId": element.get("_content_ref", element["ref"]), **updates}}], {"slide": slide["ref"], "ref": element["ref"], **updates}
+    replaced = None
     if action == "compose":
         box = resolve_region(presentation, raw, payload.get("region", "body"))
         cells = grid_cells(payload, box)
@@ -58,7 +59,15 @@ def compile_composition(presentation, view, action, payload, *, image_sizes=None
             spec["image"] = image_source(payload)
         source = spec.get("image")
         dimensions = (image_sizes or {}).get(source.get("image_uri")) if isinstance(source, Mapping) else None
-        box = placement(presentation, raw, slide, spec, image_ratio=dimensions["width"]/dimensions["height"] if dimensions else None)
+        if action == "add_image" and payload.get("element") is not None:
+            if any(key in payload for key in ("region", "below", "above", "left_of", "right_of", "over")):
+                invalid("Replace one element or choose a region/relative anchor.")
+            replaced = resolve_element(slide, payload["element"])
+            if replaced.get("group_ref"):
+                raise SlidesValidationError("slides_group_child_placement", "Replace the containing group as a whole.")
+            box = replaced["geometry"]
+        else:
+            box = placement(presentation, raw, slide, spec, image_ratio=dimensions["width"]/dimensions["height"] if dimensions else None)
         cells = [(spec, box)]
     requests, changes, used = [], [], set()
     for spec, box in cells:
@@ -70,4 +79,6 @@ def compile_composition(presentation, view, action, payload, *, image_sizes=None
         if "over" in spec:
             requests.append({"updatePageElementsZOrder": {"pageElementObjectIds": [change["ref"]], "operation": "BRING_TO_FRONT"}})
         changes.append(change)
-    return requests, {"slide": slide["ref"], "region": payload.get("region", "body") if action == "compose" else None, "elements": changes}
+    if replaced:
+        requests.append({"deleteObject": {"objectId": replaced["ref"]}})
+    return requests, {"slide": slide["ref"], "region": payload.get("region", "body") if action == "compose" else None, "elements": changes, "replaced_element": replaced["ref"] if replaced else None}

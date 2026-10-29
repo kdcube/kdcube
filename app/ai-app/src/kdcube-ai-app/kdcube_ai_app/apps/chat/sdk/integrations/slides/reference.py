@@ -65,8 +65,10 @@ def duplicate_slide_requests(presentation, view, payload):
             raise SlidesValidationError("slides_invalid_image_fit", "Use CENTER_INSIDE or CENTER_CROP.")
         requests.append({"replaceImage": {"imageObjectId": element.get("_content_ref", element["ref"]), "url": source_image["image_uri"], "imageReplaceMethod": method}})
         used.add(element["ref"])
-    plan = {"slide": copied["ref"], "reference_slide": source["ref"], "elements": changes, "kept_from_reference": [{"ref": e["ref"], "kind": e["kind"], "role": e.get("role")} for e in copied["elements"] if e["ref"] not in used and (e.get("text", "").strip() or e["kind"] in ("image", "table", "chart", "video"))][:100]}
-    plan["kept_from_reference_truncated"] = sum(e["ref"] not in used for e in copied["elements"]) > 100
+    kept = [{"ref": e["ref"], "kind": e["kind"], "role": e.get("role")} for e in copied["elements"] if e["ref"] not in used and (e.get("text", "").strip() or e["kind"] in ("image", "table", "chart", "video"))]
+    if source.get("notes", "").strip() and "notes" not in replacements:
+        kept.append({"ref": copied["ref"], "kind": "notes", "role": "notes"})
+    plan = {"slide": copied["ref"], "reference_slide": source["ref"], "elements": changes, "kept_from_reference": kept[:100], "kept_from_reference_truncated": len(kept)>100}
     if "notes" in replacements:
         notes = replacements["notes"]
         if not isinstance(notes, str):

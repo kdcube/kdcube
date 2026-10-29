@@ -181,6 +181,16 @@ def test_image_filling_its_cell_and_unfilled_shape_remain_single_elements():
     assert not any("groupObjects" in r for r in requests)
 
 
+def test_image_replacement_creates_new_content_before_deleting_the_selected_placeholder():
+    raw = deck()
+    requests, plan = compile("add_image", {"element": {"role": "body"}, "image_uri": "https://example.test/image.png"}, raw, image_sizes={"https://example.test/image.png": {"width": 100, "height": 100}})
+    assert requests[-1] == {"deleteObject": {"objectId": "body1"}}
+    assert plan["replaced_element"] == "body1"
+    result = snapshot(predict(raw, requests))["slides"][0]
+    assert not any(e["ref"] == "body1" for e in result["elements"])
+    assert len([e for e in result["elements"] if e["kind"] == "image"]) == 1
+
+
 def test_callout_text_edits_target_the_inset_and_whole_group_deletion_removes_it():
     raw = deck()
     requests, _ = compile("add_shape", {"shape": "round_rectangle", "fill": "theme.accent1", "text": "Before"}, raw)

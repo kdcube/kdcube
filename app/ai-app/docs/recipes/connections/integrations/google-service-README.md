@@ -1091,7 +1091,7 @@ adapter; agents use returned refs, roles and relations.
 | `skip_slide` | `slide` or `slides` selectors, `skipped: true` or `false` |
 | `compose` | `slide`, optional `region`, positive `cols`/`rows` weights and `cells` with zero-based `at`, optional spans or nested `grid` |
 | `add_shape` | `slide`, `shape: text_box`, `rectangle`, `round_rectangle` or `ellipse`; text/items, theme colors and a region or single anchor |
-| `add_image` | `slide`, image source and a region or single anchor; preserves aspect ratio |
+| `add_image` | `slide`, image source and a region, single anchor or `element` to replace; preserves aspect ratio |
 | `set_alt_text` | `slide`, `element`, `title` and/or `description` |
 | `duplicate_slide_like` | `like` selector, role `replacements`, optional image replacements, notes and `before`/`after` |
 | `import` | one Drive `source_file` or deployment `file_ref`, optional title/folder; creates a new native deck |
@@ -1221,7 +1221,8 @@ bearer. Canonical thumbnail refs default to SMALL; MEDIUM/LARGE delivery uses
 streaming `object.get` with `filters.size` to preserve the requested size.
 
 Images must be public HTTPS PNG/JPEG/GIF, smaller than 50 MB and at most
-25 megapixels. A deployment `file_ref` uses a request-owned staged copy and
+25 megapixels. Deployment `file_ref` images have a 25 MB shared staging bound,
+use a request-owned staged copy and
 the existing signed `provider_fetch` route, with cleanup after success or
 failure. Caller-owned source files remain available. Public fetches check
 the platform SSRF policy at each redirect. Quota and transport failures carry
@@ -1229,8 +1230,7 @@ retry metadata; the adapter performs no hidden quota retries.
 
 SDK modules own transport, snapshots, selectors and templates. The external
 KDCube services app owns credential resolution, registration and signed-file
-delivery. Slide creation/composition, import, comments and the typed raw MCP
-door are separate stages.
+delivery. Comments and the typed raw MCP door follow in later stages.
 
 ## Add another Google service, the same way
 

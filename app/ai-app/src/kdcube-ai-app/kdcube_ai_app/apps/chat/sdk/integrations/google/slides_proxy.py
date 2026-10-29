@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 from collections.abc import Mapping
 from urllib.parse import urljoin, urlparse
 
@@ -290,7 +291,11 @@ async def _run(api, operation, payload):
         if not url:
             raise SlidesValidationError("slides_image_hosting_unavailable", "Stage file_ref through the deployment's provider-fetch route.")
         if url not in image_sizes:
-            image_sizes[url] = await validate_image_uri(api.client, url)
+            prepared = source_image.get("_preview_image_size")
+            if payload.get("preview") and re.fullmatch(r"https://preview\.invalid/[a-f0-9]{32}/image\.(png|jpg|gif)", url) and isinstance(prepared, Mapping) and all(type(prepared.get(key)) is int and prepared[key] > 0 for key in ("width", "height")) and prepared["width"]*prepared["height"] <= 25_000_000:
+                image_sizes[url] = dict(prepared)
+            else:
+                image_sizes[url] = await validate_image_uri(api.client, url)
     for attempt in range(2):
         view = await api.all_snapshot(presentation)
         if operation in COMPOSITION_ACTIONS:

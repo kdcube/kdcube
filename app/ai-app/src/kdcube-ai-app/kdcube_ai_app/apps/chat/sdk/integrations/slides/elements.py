@@ -25,11 +25,16 @@ def image_source(spec):
     source = spec.get("image", spec)
     if not isinstance(source, Mapping) or bool(source.get("image_uri")) == bool(source.get("file_ref")):
         raise SlidesValidationError("slides_image_source_ambiguous", "Pass exactly one image_uri or file_ref.")
+    value = source.get("image_uri") or source.get("file_ref")
+    if not isinstance(value, str) or not value.strip():
+        raise SlidesValidationError("slides_image_source_ambiguous", "Pass an image_uri or file_ref string.")
     return source
 
 
 def compile_new_element(raw_slide, spec, box, *, image_sizes=None):
     if "image" in spec or "image_uri" in spec or "file_ref" in spec:
+        if any(key in spec for key in ("shape", "text", "items", "table", "video", "chart")):
+            invalid("Use one new element kind per map; put captions and callouts in separate cells.")
         image = image_source(spec)
         url = image.get("image_uri")
         if not url:

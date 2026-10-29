@@ -9,6 +9,7 @@ from contextlib import AsyncExitStack
 from kdcube_ai_app.apps.chat.sdk.integrations.named_service_consent import tool_error_response
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.images import image_payload
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.import_files import import_file_payload
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.media_preparation import prepare_action_images
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema import (
     SLIDES_NAMESPACE, SLIDES_SCHEMA, SLIDES_INTRO, SLIDES_PRESENTATION,
     SLIDES_ACTIONS, SLIDES_CONNECTED_ACCOUNT_REQUIREMENTS, CLAIMS_BY_OPERATION,
@@ -210,7 +211,9 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
                 account = result.get("account_id") or account
             return await self._artifact(ctx, request, {"account_id": account, "presentation_id": deck_id, "kind": action, "detail": detail}, materialize=_materialize(request))
         async with AsyncExitStack() as stack:
-            if action == "replace_shapes_with_image":
+            if action in ("add_image", "compose", "duplicate_slide_like"):
+                payload = await prepare_action_images(ctx, action, payload, stack, staging_root_factory=self._staging_root_factory, provider_fetch_url_factory=self._provider_fetch_url_factory)
+            elif action == "replace_shapes_with_image":
                 payload = await stack.enter_async_context(image_payload(ctx, payload, staging_root_factory=self._staging_root_factory, provider_fetch_url_factory=self._provider_fetch_url_factory))
             elif action == "fill_template":
                 images = payload.get("images", {})
