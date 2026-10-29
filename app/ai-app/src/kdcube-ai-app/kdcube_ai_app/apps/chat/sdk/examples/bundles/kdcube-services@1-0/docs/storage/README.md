@@ -145,9 +145,10 @@ metadata.
 
 ## Temporary Inbound Upload Staging
 
-Named-service actions such as mail send or Slack upload can request an upload
-slot. The client sends raw bytes to `integration_file_upload` and receives a
-`staged:` ref:
+An authorized `request_upload` action creates a slot for the current user,
+tenant and project before returning a signed URL and `staged:` ref. The client
+sends raw bytes to `integration_file_upload` and passes that ref to the later
+consuming action:
 
 ```text
 authorized MCP call requests upload slot
@@ -168,8 +169,25 @@ URI/non-local STORAGE_PATH:
   <system-temp>/kdcube-integration-staging
 ```
 
-Staged refs are single-use. A best-effort sweep removes directories older than
-one hour. This is temporary user content, not durable app storage.
+The SDK accepts the lowercase 32-character hexadecimal IDs it generates.
+Every read, write, deletion and expiry sweep stays inside the resolved staging
+root. Slots and their files use no-follow access; data writes replace a file
+atomically inside the checked slot.
+
+`request_upload` records `{user, tenant, project, created}` in the slot's
+`.owner.json`, using authenticated context. The signed upload token contains
+only `{fi_ref, exp, v}`. The public upload route verifies that capability and
+writes only into an existing owned slot. Each authenticated consumer compares
+the recorded user, tenant and project with its current context before loading
+or deleting the file. A missing slot, missing owner record or different owner
+gets the same not-found result. A slot created before owner records were
+introduced must be replaced by a fresh `request_upload` call.
+
+A provider-fetch URL remains a capability for the measured copy staged by the
+authorized Docs action. Its token is the authorization for that server-side
+read; Google supplies no platform identity. Staged refs are single-use after
+successful consumption, unreadable after one hour, and collected by a
+best-effort expiry sweep. This is temporary user content.
 
 Current constraint: staging is filesystem-backed. The upload route and the
 later consuming action must see the same staging directory. A multi-host

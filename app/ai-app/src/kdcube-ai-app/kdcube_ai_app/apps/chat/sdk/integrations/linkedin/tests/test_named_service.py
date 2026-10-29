@@ -952,7 +952,8 @@ async def test_video_post_routes_one_staged_file(provider, ctx, monkeypatch):
             "video_urn": "urn:li:video:V1", "processing": "async",
         }}
 
-    def _resolve(entries):
+    def _resolve(owner, entries):
+        assert owner is ctx
         return [{"filename": "clip.mp4", "mime_type": "video/mp4", "data": b"x" * 10}], [], None
 
     monkeypatch.setattr(provider._linkedin, "publish_video", _video)

@@ -9,6 +9,12 @@ URL over plain HTTP — never through the model's context — and then reference
 the returned ``staged:`` ref in ``send``/``upload_file`` payloads. The adapter
 resolves the staged bytes into the tool workspace at action time and deletes
 them after use (single-use refs with a short TTL sweep as backstop).
+
+The authenticated upload request creates an owner-bound slot before minting a
+capability. Consumers pass their trusted context explicitly as ``owner`` for
+loads and cleanup; provider-fetch reads explicitly pass ``None`` after checking
+their signed capability. Public uploads use ``owner=None`` only to write an
+existing slot. Trusted actions stage new provider copies with ``owner=ctx``.
 """
 
 from __future__ import annotations

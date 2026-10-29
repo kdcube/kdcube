@@ -233,3 +233,21 @@ def test_send_images_requires_images(tmp_path):
     )
     assert result["ok"] is False
     assert result["error"] == "invalid_request"
+
+
+def test_staged_images_from_another_owner_are_refused(tmp_path, monkeypatch):
+    import inspect
+    from kdcube_ai_app.apps.chat.sdk.integrations import file_staging
+
+    notify = _notify_module()
+    owner = {"user_id": "owner", "tenant": "t", "project": "p"}
+    ref = file_staging.new_staged_ref("image.png")
+    kwargs = {"owner": owner} if "owner" in inspect.signature(file_staging.save_staged).parameters else {}
+    target = file_staging.save_staged(tmp_path, ref, b"private bytes", **kwargs)
+    monkeypatch.setattr(notify, "staging_root", lambda _: tmp_path)
+    async def no_provider(*args, **kwargs):
+        raise AssertionError("another owner's bytes must not reach Telegram")
+    monkeypatch.setattr(notify, "_bot_token", no_provider)
+    result = asyncio.run(notify.send_images(object(), identity={**owner, "user_id": "other"}, payload={"images": [{"staged_ref": ref}]}, storage_path=str(tmp_path)))
+    assert result["ok"] is False and result["error"] == "invalid_request"
+    assert target.read_bytes() == b"private bytes"

@@ -650,6 +650,7 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
             token, expires_at = mint_file_download_token(
                 secret,
                 fi_ref=staged_ref,
+                user_id="",
                 include_identity=False,
             )
             url = bundle_operation_url(
