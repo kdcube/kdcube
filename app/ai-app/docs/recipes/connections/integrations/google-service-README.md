@@ -1065,6 +1065,18 @@ width and height, including group transforms; rotating a box cannot create
 extra text capacity. Overlap and off-slide diagnostics use its enclosing
 axis-aligned rectangle.
 
+A slide-ref read returns kind `slides.slide` with the slide's title; a deck
+read returns `slides.presentation` with the presentation title. Edit previews
+retain the presentation title in their object metadata. Title placeholders
+use their full height for fit estimates and keep the horizontal text inset;
+the body-box calibration retains both insets. Title fit remains a heuristic
+and should be checked against a thumbnail.
+
+Drive copy, import and export requests allow 120 seconds for provider reads and
+writes, with a 10-second connection timeout. Other requests retain the
+30-second deadline. A creation timeout remains `outcome_unknown` and is never
+retried automatically: search for the intended title before copying again.
+
 Read pages with `filters.start_slide` (1-based) and `filters.slide_limit`
 (1–50). Follow `snapshot.range.next_slide` until null. Text is bounded to
 12,000 characters per element and 100,000 per call, with explicit truncation

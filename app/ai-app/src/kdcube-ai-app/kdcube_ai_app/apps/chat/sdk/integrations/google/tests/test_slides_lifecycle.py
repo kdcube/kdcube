@@ -28,6 +28,8 @@ def test_deployment_file_import_uses_related_multipart_and_native_target(monkeyp
     def handler(request):
         seen.append(request)
         if request.method == "POST":
+            if request.extensions["timeout"]["read"] < 45:
+                raise httpx.ReadTimeout("conversion still processing", request=request)
             assert request.url.host == "www.googleapis.com"
             assert request.url.params["uploadType"] == "multipart"
             assert request.headers["content-type"].startswith("multipart/related; boundary=")
@@ -50,6 +52,8 @@ def test_drive_import_copies_with_slides_mime_and_app_marker(monkeypatch):
             return httpx.Response(200, json=deck())
         if request.method == "GET":
             return httpx.Response(200, json={"id": "source", "name": "Source.pptx", "mimeType": IMPORT_TYPES["pptx"]})
+        if request.extensions["timeout"]["read"] < 45:
+            raise httpx.ReadTimeout("conversion still processing", request=request)
         body = json.loads(request.content)
         assert body["mimeType"] == "application/vnd.google-apps.presentation"
         assert body["appProperties"] == CREATED_PROPERTIES
