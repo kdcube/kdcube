@@ -130,6 +130,6 @@ def test_edit_preview_keeps_deck_title_through_named_service(monkeypatch):
     )))
     assert response.ok
     assert response.ret["object"]["title"] == "Source deck"
-    assert response.ret["result"]["preview"]
+    assert response.ret["extra"]["result"]["preview"]
     assert calls == ["GET"]
-    assert "Updated title" in json.dumps(response.ret["result"]["changes"])
+    assert "Updated title" in json.dumps(response.ret["extra"]["result"]["changes"])
