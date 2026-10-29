@@ -6,6 +6,10 @@ from fractions import Fraction
 
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError
 from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_fit import fit, shape_text
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.geometry import GRID_ALIGNMENT_TOLERANCE, emu as _emu, matrix as _matrix, compose as _compose, geometry, walk as _walk
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.regions import regions
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.diagnostics import layout_read as _layout_read
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.classify import classify
 
 SCHEMA = "kdcube.slides.snapshot.v1"
 MEDIA_TYPE = "application/vnd.kdcube.slides.snapshot+json"
@@ -21,37 +25,6 @@ def layout_word(name):
     return name.lower() if name in LAYOUT_WORDS else PPTX_LAYOUTS.get(name)
 
 
-def _emu(dimension):
-    return float((dimension or {}).get("magnitude", 0)) * (12700 if (dimension or {}).get("unit") == "PT" else 1)
-
-
-def _matrix(transform):
-    t = transform or {}
-    factor = 12700 if t.get("unit") == "PT" else 1
-    return (t.get("scaleX", 1), t.get("shearY", 0), t.get("shearX", 0), t.get("scaleY", 1), t.get("translateX", 0) * factor, t.get("translateY", 0) * factor)
-
-
-def _compose(p, c):
-    a,b,cx,d,e,f = p
-    g,h,i,j,k,l = c
-    return (a*g+cx*h, b*g+d*h, a*i+cx*j, b*i+d*j, a*k+cx*l+e, b*k+d*l+f)
-
-
-def geometry(element, parent=(1,0,0,1,0,0)):
-    if "elementGroup" in element:
-        composed = _compose(parent, _matrix(element.get("transform")))
-        children = [geometry(child, composed) for child in element["elementGroup"].get("children", [])]
-        if children:
-            x, y = min(c["x"] for c in children), min(c["y"] for c in children)
-            return {"x": x, "y": y, "width": max(c["x"]+c["width"] for c in children)-x, "height": max(c["y"]+c["height"] for c in children)-y, "rotation_deg": round(math.degrees(math.atan2(composed[1], composed[0])), 3)}
-    a,b,c,d,x,y = _compose(parent, _matrix(element.get("transform")))
-    width = _emu(element.get("size", {}).get("width"))
-    height = _emu(element.get("size", {}).get("height"))
-    corners = [(x, y), (x+a*width,y+b*width), (x+c*height,y+d*height), (x+a*width+c*height,y+b*width+d*height)]
-    xs,ys = zip(*corners)
-    return {"x": min(xs), "y": min(ys), "width": max(xs)-min(xs), "height": max(ys)-min(ys), "rotation_deg": round(math.degrees(math.atan2(b,a)), 3)}
-
-
 def _fit_box(element, parent):
     """Measure the text frame along its transformed local axes."""
     a, b, c, d, _, _ = _compose(parent, _matrix(element.get("transform")))
@@ -60,64 +33,6 @@ def _fit_box(element, parent):
         "width": _emu(size.get("width")) * math.hypot(a, b),
         "height": _emu(size.get("height")) * math.hypot(c, d),
     }
-
-
-def _walk(elements, parent=(1,0,0,1,0,0)):
-    for element in elements:
-        yield element, parent
-        if "elementGroup" in element:
-            yield from _walk(element["elementGroup"].get("children", []), _compose(parent, _matrix(element.get("transform"))))
-
-
-def _layout_read(elements, width, height):
-    """A deterministic read projection; tolerance is an uncalibrated heuristic."""
-    rows = [e for e in elements if not e.get("group_ref") and e["geometry"]["width"] > 0 and e["geometry"]["height"] > 0]
-    off_slide = [e["ref"] for e in rows if e["geometry"]["x"] < 0 or e["geometry"]["y"] < 0 or e["geometry"]["x"]+e["geometry"]["width"] > width or e["geometry"]["y"]+e["geometry"]["height"] > height]
-    relations, overlaps = [], []
-    diagnostic_rows = rows[:50]
-    for i,left in enumerate(diagnostic_rows):
-        a = left["geometry"]
-        for right in diagnostic_rows[i+1:]:
-            b = right["geometry"]
-            if a["x"] < b["x"]+b["width"] and b["x"] < a["x"]+a["width"] and a["y"] < b["y"]+b["height"] and b["y"] < a["y"]+a["height"]:
-                overlaps.append([left["ref"],right["ref"]])
-            elif a["x"]+a["width"] <= b["x"]:
-                relations.append({"element": left["ref"], "left_of": right["ref"]})
-            elif b["x"]+b["width"] <= a["x"]:
-                relations.append({"element": right["ref"], "left_of": left["ref"]})
-            elif a["y"]+a["height"] <= b["y"]:
-                relations.append({"element": left["ref"], "above": right["ref"]})
-            elif b["y"]+b["height"] <= a["y"]:
-                relations.append({"element": right["ref"], "above": left["ref"]})
-    result = {"relations": relations[:100], "overlaps": overlaps[:100], "off_slide": off_slide[:100], "free_regions": [], "geometry_diagnostics_truncated": len(rows)>50 or len(relations)>100 or len(overlaps)>100 or len(off_slide)>100}
-    if width <= 0 or height <= 0 or not rows or len(rows) > 30 or overlaps or any(e["rotation_deg"] for e in rows):
-        return result
-    def edges(axis, size):
-        values = sorted(v for e in rows for v in (e["geometry"][axis],e["geometry"][axis]+e["geometry"][size]))
-        groups = []
-        tolerance = (width if axis == "x" else height)*.015
-        for value in values:
-            if groups and value-groups[-1][0] <= tolerance:groups[-1].append(value)
-            else:groups.append([value])
-        return [sum(g)/len(g) for g in groups], any(len(g)>1 for g in groups)
-    xs, x_shared = edges("x","width")
-    ys, y_shared = edges("y","height")
-    if (len(rows)>1 and not (x_shared or y_shared)) or not 2 <= len(xs) <= 9 or not 2 <= len(ys) <= 9:
-        return result
-    occupied, cells = set(), []
-    for e in rows:
-        box=e["geometry"]
-        x1=min(range(len(xs)),key=lambda i:abs(xs[i]-box["x"]))
-        x2=min(range(len(xs)),key=lambda i:abs(xs[i]-box["x"]-box["width"]))
-        y1=min(range(len(ys)),key=lambda i:abs(ys[i]-box["y"]))
-        y2=min(range(len(ys)),key=lambda i:abs(ys[i]-box["y"]-box["height"]))
-        if x2 <= x1 or y2 <= y1:
-            return result
-        cells.append({"at":[y1,x1],"row_span":y2-y1,"col_span":x2-x1,"element":e["ref"]})
-        occupied.update((y,x) for y in range(y1,y2) for x in range(x1,x2))
-    result["grid"]={"region":"full","cols":[round((xs[i+1]-xs[i])/width,4) for i in range(len(xs)-1)],"rows":[round((ys[i+1]-ys[i])/height,4) for i in range(len(ys)-1)],"cells":cells}
-    result["free_regions"]=[{"at":[y,x]} for y in range(len(ys)-1) for x in range(len(xs)-1) if (y,x) not in occupied]
-    return result
 
 
 def snapshot(presentation, *, start=1, limit=20):
@@ -172,7 +87,8 @@ def snapshot(presentation, *, start=1, limit=20):
         raw_notes = notes
         notes = notes[:max(0,min(MAX_ELEMENT_TEXT,budget))]
         budget -= len(notes)
-        slides.append({"position": position, "ref": slide.get("objectId", ""), "kind": layout.get("layout") or ("table" if any(e["kind"] == "table" for e in elements) else "other"), "layout_name": layout.get("layout_name", ""), "title": title, "skipped": bool(props.get("isSkipped")), "elements": elements, "notes": notes, "notes_truncated": len(notes)<len(raw_notes), **_layout_read(elements,width,height)})
+        available_regions, unsupported_regions = regions(presentation, slide)
+        slides.append({"position": position, "ref": slide.get("objectId", ""), "kind": classify(elements, layout.get("layout"), title), "layout_name": layout.get("layout_name", ""), "title": title, "skipped": bool(props.get("isSkipped")), "elements": elements, "notes": notes, "notes_truncated": len(notes)<len(raw_notes), "regions": list(available_regions), "unsupported_regions": [{"region": name, **details} for name, details in unsupported_regions.items()], **_layout_read(elements,width,height)})
     next_slide = start + len(slides)
     truncated = budget <= 0 or any(e["text_truncated"] for slide in slides for e in slide["elements"]) or any(slide["notes_truncated"] for slide in slides)
     return {"schema": SCHEMA, "presentation": {"title": presentation.get("title", ""), "revision_id": presentation.get("revisionId", ""), "slides": len(all_slides), "page": {"aspect": f"{ratio.numerator}:{ratio.denominator}"}}, "layouts": layouts, "slides": slides, "range": {"start_slide": start, "returned": len(slides), "next_slide": next_slide if next_slide <= len(all_slides) else None}, "text_truncated": truncated}

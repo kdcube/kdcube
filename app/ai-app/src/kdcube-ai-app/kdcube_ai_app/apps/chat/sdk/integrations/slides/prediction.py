@@ -5,6 +5,7 @@ import copy
 import re
 
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.layouts import walk
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.layout_prediction import apply_layout_request
 
 
 def _style_text(shape, start, end, patch):
@@ -93,6 +94,8 @@ def predict(presentation, requests):
             if "shape" in e:yield e
             yield from shapes(e.get("elementGroup", {}).get("children", []))
     for request in requests:
+        if apply_layout_request(result, request):
+            continue
         if "createSlide" in request:
             _create_slide(result, request["createSlide"])
             continue
@@ -146,7 +149,8 @@ def predict(presentation, requests):
                 elif request.get("updateTextStyle", {}).get("objectId") == element["objectId"]:
                     update = request["updateTextStyle"]
                     bounds = update["textRange"]
-                    _style_text(element["shape"], bounds["startIndex"], bounds["endIndex"], update["style"])
+                    end = len(text.encode("utf-16-le")) // 2
+                    _style_text(element["shape"], bounds.get("startIndex", 0), bounds.get("endIndex", end), update["style"])
                 elif (request.get("createParagraphBullets") or request.get("deleteParagraphBullets") or {}).get("objectId") == element["objectId"]:
                     runs = element["shape"].setdefault("text", {}).setdefault("textElements", [])
                     markers = [r["paragraphMarker"] for r in runs if "paragraphMarker" in r]
