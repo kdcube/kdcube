@@ -27,6 +27,14 @@ def compose(p, c):
     return (a*g+cx*h, b*g+d*h, a*i+cx*j, b*i+d*j, a*k+cx*l+e, b*k+d*l+f)
 
 
+def inverse(transform):
+    a, b, c, d, e, f = transform
+    determinant = a*d-b*c
+    if abs(determinant) < 1e-12:
+        raise ValueError("singular transform")
+    return (d/determinant, -b/determinant, -c/determinant, a/determinant, (c*f-d*e)/determinant, (b*e-a*f)/determinant)
+
+
 def geometry(element, parent=(1, 0, 0, 1, 0, 0)):
     combined = compose(parent, matrix(element.get("transform")))
     if "elementGroup" in element:

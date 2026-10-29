@@ -356,6 +356,16 @@ bundles:
               delegable_roles: *id001
               delegable_permissions:
               - slides:write
+            - grant: slides:delete
+              label: Trash or restore Google Slides
+              description: Move marked service-created presentations into or out of Drive trash.
+              delegable_roles:
+              - kdcube:role:registered
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - slides:delete
             - grant: docs:read
               label: Read Google Docs
               description: Find documents and read or export their content through a connected Google account.
@@ -2272,6 +2282,60 @@ bundles:
                             - named_services:use
                             - slides:read
                             - slides:write
+                          object.action.compose:
+                            label: Compose a slide
+                            description: Arrange text, shapes, images and existing elements in a weighted grid.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.add_shape:
+                            label: Add a slide shape
+                            description: Place text or a theme-colored shape in a region or beside an element.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.add_image:
+                            label: Add a slide image
+                            description: Place a validated image while preserving its aspect ratio.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.set_alt_text:
+                            label: Describe slide content
+                            description: Write accessible title and description text for an element.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.duplicate_slide_like:
+                            label: Extend a deck from a reference slide
+                            description: Duplicate a selected slide and replace role texts or images.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.import:
+                            label: Import a presentation
+                            description: Convert a PPTX or ODP source into a new native presentation.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.trash:
+                            label: Trash a presentation
+                            description: Move a service-created presentation into Drive trash.
+                            grants:
+                            - named_services:use
+                            - slides:delete
+                          object.action.restore:
+                            label: Restore a presentation
+                            description: Restore a service-created presentation from Drive trash.
+                            grants:
+                            - named_services:use
+                            - slides:delete
             - resource: '*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/productivity*'
               label: KDCube productivity MCP
               tools:
@@ -2560,6 +2624,7 @@ bundles:
                   - drive:write
                   - slides:read
                   - slides:write
+                  - slides:delete
               claims:
                 gmail:read:
                   label: Read Gmail
@@ -2677,6 +2742,14 @@ bundles:
                   - email
                   - profile
                   - https://www.googleapis.com/auth/presentations
+                  - https://www.googleapis.com/auth/drive.file
+                slides:delete:
+                  label: Trash or restore Google Slides
+                  description: Trash or restore presentations carrying the service creation marker.
+                  provider_scopes:
+                  - openid
+                  - email
+                  - profile
                   - https://www.googleapis.com/auth/drive.file
             slack:
               label: Slack

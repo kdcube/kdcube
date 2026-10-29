@@ -136,14 +136,15 @@ def compile_edit(presentation, view, action, payload):
         requests, change = text_requests(notes_id, shape_text(shape), value, mode=payload.get("mode", "replace"))
         return requests, {"slide": slide["ref"], "role": "notes", "ref": notes_id, **change}
     element = resolve_element(slide, payload.get("element"))
-    if element.get("kind") != "shape" or element.get("text_truncated"):
+    if element.get("kind") not in ("shape", "callout") or element.get("text_truncated"):
         raise SlidesValidationError("slides_element_not_editable", "Read one untruncated text shape before editing.")
     current = element.get("text", "")
+    target_id = element.get("_content_ref", element["ref"])
     if action == "set_text":
         if ("text" in payload) == ("items" in payload):
             raise SlidesValidationError("slides_invalid_text", "Pass exactly one text string or items list.")
         value = {k: payload[k] for k in ("text", "items") if k in payload}
-        requests, change = text_requests(element["ref"], current, value, mode=payload.get("mode", "replace"))
+        requests, change = text_requests(target_id, current, value, mode=payload.get("mode", "replace"))
         return requests, {"slide": slide["ref"], "ref": element["ref"], **change}
     quoted = payload.get("quoted_text")
     if not isinstance(quoted, str) or not quoted or len(quoted) > MAX_TEXT:
@@ -154,5 +155,5 @@ def compile_edit(presentation, view, action, payload):
     patch = style(payload.get("style"))
     match = matches[0]
     bounds = {"type": "FIXED_RANGE", "startIndex": utf16_len(current[:match.start()]), "endIndex": utf16_len(current[:match.end()])}
-    request = {"updateTextStyle": {"objectId": element["ref"], "textRange": bounds, "style": patch, "fields": ",".join(patch)}}
+    request = {"updateTextStyle": {"objectId": target_id, "textRange": bounds, "style": patch, "fields": ",".join(patch)}}
     return [request], {"slide": slide["ref"], "ref": element["ref"], "quoted_text": quoted[:12000], "style": dict(payload["style"]), "before": current[:12000], "after": current[:12000]}

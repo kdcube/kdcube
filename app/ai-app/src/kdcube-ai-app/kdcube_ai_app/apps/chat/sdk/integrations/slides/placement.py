@@ -42,7 +42,7 @@ def placement(presentation, raw_slide, slide, spec, *, image_ratio=None):
         invalid("Choose one region or exactly one relative anchor.")
     if not anchors:
         box = resolve_region(presentation, raw_slide, spec.get("region", "body"))
-        return contained(box, image_ratio) if image_ratio else box
+        return box
     key = anchors[0]
     anchor = resolve_element(slide, spec[key])["geometry"]
     if min(anchor["width"], anchor["height"]) <= 0:

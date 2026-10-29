@@ -1042,12 +1042,15 @@ Enable the Slides API in the Google Cloud project used by connector app
 | --- | --- |
 | `slides:read` | `presentations.readonly`, `drive.readonly` |
 | `slides:write` | `presentations`, `drive.file` |
+| `slides:delete` | `drive.file` |
 
 Reads and exports use `slides:read`. Copy, template filling and edits require
 both read and write approval; placing a copy in `parent_id` additionally
 requires `drive:write`. The connected account stays bound to the presentation
 ref. Cards select the `slides` namespace and exact operations through the
 generic `named_services` MCP door. Provider credentials remain server-side.
+Trash and restore use `slides:delete` and accept only decks carrying the
+service's private creation marker.
 
 Start with `object.search` and the title, or `object.list` for recent decks.
 `object.get` returns `kdcube.slides.snapshot.v1`: presentation title/revision,
@@ -1086,13 +1089,75 @@ adapter; agents use returned refs, roles and relations.
 | `move_slide` | `slide` or `slides` selectors and one `before` or `after` selector |
 | `delete_slide` | `slide` or `slides` selectors; at least one slide must remain |
 | `skip_slide` | `slide` or `slides` selectors, `skipped: true` or `false` |
+| `compose` | `slide`, optional `region`, positive `cols`/`rows` weights and `cells` with zero-based `at`, optional spans or nested `grid` |
+| `add_shape` | `slide`, `shape: text_box`, `rectangle`, `round_rectangle` or `ellipse`; text/items, theme colors and a region or single anchor |
+| `add_image` | `slide`, image source and a region or single anchor; preserves aspect ratio |
+| `set_alt_text` | `slide`, `element`, `title` and/or `description` |
+| `duplicate_slide_like` | `like` selector, role `replacements`, optional image replacements, notes and `before`/`after` |
+| `import` | one Drive `source_file` or deployment `file_ref`, optional title/folder; creates a new native deck |
+| `trash`, `restore` | marked service-created presentation; requires `slides:delete` |
 
 `object.upsert` creates an empty presentation from `title`, or renames the
 presentation in `object_ref`. Every write supports `preview: true`. Templates
 discover `{{tags}}` before copying; an unknown tag returns
 `slides_template_tag_missing`, and an inaccessible source returns
 `slides_template_unreadable`. Office files return `slides_not_native` with
-guidance to use the import operation when available.
+guidance to use the import operation.
+
+`compose` computes weighted cell boxes in the selected region. Each cell
+contains an existing element selector, a new text/shape/image map, or a nested
+grid. `row_span` and `col_span` combine cells; overlapping cell assignments
+are refused. Existing tables, videos and charts can move into cells. Creating
+new tables or videos follows in S3 and currently returns
+`slides_element_kind_not_yet_supported`.
+
+Regions use the slide's own placeholders and composed group transforms.
+`body` unions its BODY boxes; with two BODY placeholders, `left_half` and
+`right_half` use those actual boxes. Otherwise halves and thirds divide body
+with a gutter. A slide without BODY uses page margins and the title boundary.
+Rotated or sheared placeholder regions return
+`slides_region_unsupported_geometry`. Each snapshot lists available regions.
+
+Single-element placement accepts exactly one `below`, `above`, `left_of`,
+`right_of` or `over` selector. Width is a fraction of the anchor width;
+height comes from text or image aspect. Relative `align` is start/center/end,
+and `gap` is small/medium/large (0.3/0.4/0.5 inch). Overlay `at` is center or
+a pair such as top_right or bottom_left. New colors use theme names such as
+`theme.accent1`; created text below 14 pt raises a warning unless marked
+`footer: true`. Page margins are 0.5 inch and filled callout text has a 12 pt
+inset. Preview and writes return fit, overlap and off-slide diagnostics.
+
+An aspect-fit image that leaves space in its grid cell is grouped with a
+transparent cell rectangle. A filled callout groups its background with an
+inset text box. Groups have recognizable Slides-panel titles
+`kdcube:image-frame` and `kdcube:callout`; their frame is `kdcube:frame`.
+Image frames have no fill or outline unless `border: true`. Images filling
+their cells, plain text and unfilled shapes stay single elements. Snapshots
+show one image/callout with the group's cell box and hide its frame. Selectors
+address that one ref; alt text edits target the inner image and text edits
+target the inset box. Movement and deletion of the group affect the whole
+element. Renaming structural titles or changing the group's child structure
+makes it an ordinary group on the next read.
+
+Grid readback derives tracks, gutters and spans from ordinary content boxes;
+each group counts once. It stores no layout metadata in alt text. Alignment
+currently uses a named 1.5% page-relative tolerance pending further calibration.
+Free-form or overlapping content falls back to relations and diagnostics.
+
+`duplicate_slide_like` resolves one reference from the fresh snapshot, copies
+its elements under new IDs and places the copy relative to the original
+anchor selection. Role replacements and selected images affect the copy.
+Unnamed content remains and is listed in `kept_from_reference`.
+
+Drive import converts a PPTX/ODP source with a copy using the native Slides
+MIME type. A deployment upload uses multipart conversion, validates its
+archive format and is bounded to 5 MB. Import creates a new deck and takes
+no target `object_ref`; preview validates without copying or uploading.
+Service-created, copied and imported decks receive private Drive
+`appProperties.kdcube_slides_created: "1"`. Trash/restore refuses an unmarked
+deck, including decks created by older service versions. Drive metadata
+writes check a supplied Slides revision first but provide no atomic Slides
+revision compare-and-swap. A trashed deck can lack geometry until restored.
 
 A slide ref constrains edits to that slide. Whole-presentation actions such
 as copy, export and rename require a presentation ref. Artifact refs support

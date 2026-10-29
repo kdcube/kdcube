@@ -30,6 +30,44 @@ def test_every_operation_and_action_has_human_and_agent_descriptions():
     for row in SLIDES_SCHEMA["actions"].values():assert row["label"] and row["description"]
 
 
+@pytest.mark.parametrize("action", ["trash", "restore"])
+def test_lifecycle_uses_delete_claim_and_presentation_scope(action):
+    calls = []
+    async def execute(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "ret": {"account_id": "account", "presentation_id": "deck", "trashed": action == "trash"}}
+    response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action=action, object_ref="slides:google:account:presentation:deck", payload={"preview": True})))
+    assert response.ok and calls[0]["claim"] == ["slides:delete"]
+    assert calls[0]["account_id"] == "account"
+    calls.clear()
+    response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action=action, object_ref="slides:google:account:slide:slide_a:deck")))
+    assert not response.ok and not calls
+
+
+def test_import_accepts_drive_source_without_target_and_preserves_account_binding():
+    calls = []
+    async def execute(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "ret": {"account_id": "account", "presentation_id": "imported", "title": "Imported"}}
+    response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action="import", payload={"account_id": "account", "source_file": "https://drive.google.com/file/d/source/view"})))
+    assert response.ok and calls[0]["operation"] == "import"
+    assert calls[0]["account_id"] == "account"
+    assert calls[0]["claim"] == ["slides:read", "slides:write"]
+    calls.clear()
+    response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action="import", payload={"account_id": "other", "source_file": "slides:google:account:presentation:source"})))
+    assert not response.ok and not calls
+
+
+def test_public_snapshot_hides_frame_content_routing_ids():
+    view = snapshot()
+    view["slides"][0]["elements"][0]["_content_ref"] = "private_inner"
+    async def execute(**kwargs):
+        return {"ok": True, "ret": {"account_id": "account", "presentation_id": "deck", "snapshot": view}}
+    response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.get", object_ref="slides:google:account:presentation:deck")))
+    assert response.ok
+    assert "private_inner" not in str(response.to_dict())
+
+
 def test_discovery_does_not_resolve_credentials_or_call_google():
     async def execute(**kwargs):raise AssertionError("Discovery must stay local")
     async def exercise():

@@ -10,6 +10,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.geometry import GRID_ALIGNM
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.regions import regions
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.diagnostics import layout_read as _layout_read
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.classify import classify
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.frames import frame_content
 
 SCHEMA = "kdcube.slides.snapshot.v1"
 MEDIA_TYPE = "application/vnd.kdcube.slides.snapshot+json"
@@ -54,24 +55,37 @@ def snapshot(presentation, *, start=1, limit=20):
     all_slides = presentation.get("slides", [])
     for position, slide in enumerate(all_slides[start-1:start-1+limit], start):
         elements = []
+        walked = list(_walk(slide.get("pageElements", [])))
+        contexts = {e["objectId"]: (e, parent) for e, parent in walked}
+        framed = {e["objectId"]: frame_content(e) for e, _ in walked if frame_content(e)}
+        hidden = {child["objectId"] for e, _ in walked if e["objectId"] in framed for child, _ in _walk(e["elementGroup"]["children"])}
         group_parents = {child.get("objectId"): group.get("objectId") for group,_ in _walk(slide.get("pageElements", [])) if "elementGroup" in group for child,_ in _walk(group["elementGroup"].get("children", []))}
-        for element,parent in _walk(slide.get("pageElements", [])):
-            shape = element.get("shape", {})
+        for element,parent in walked:
+            if element["objectId"] in hidden:
+                continue
+            frame = framed.get(element["objectId"])
+            content, content_parent = contexts[frame[1]["objectId"]] if frame else (element, parent)
+            shape = content.get("shape", {})
             kind = next((name for key,name in (("shape","shape"),("image","image"),("table","table"),("sheetsChart","chart"),("video","video"),("elementGroup","group")) if key in element), "other")
+            if frame:
+                kind = frame[0]
             box = geometry(element, parent)
             raw_text = shape_text(shape) if shape else ""
             if kind == "table":
                 raw_text = "\n".join(shape_text(cell) for row in element["table"].get("tableRows", []) for cell in row.get("tableCells", []))
             text = raw_text[:min(MAX_ELEMENT_TEXT, max(0,budget))]
             budget -= len(text)
-            row = {"ref": element.get("objectId", ""), "kind": kind, "text": text, "text_truncated": len(text) < len(raw_text), "alt_text": element.get("description") or element.get("title", ""), "rotation_deg": box.pop("rotation_deg"), "geometry": box}
+            row = {"ref": element.get("objectId", ""), "kind": kind, "text": text, "text_truncated": len(text) < len(raw_text), "alt_text": content.get("description") or content.get("title", ""), "rotation_deg": box.pop("rotation_deg"), "geometry": box}
+            if frame:
+                row["_content_ref"] = content["objectId"]
+                row["role"] = kind
             if element.get("objectId") in group_parents:
                 row["group_ref"] = group_parents[element["objectId"]]
             placeholder = str(shape.get("placeholder", {}).get("type", "")).lower()
             if placeholder:
                 row["role"] = "title" if placeholder == "centered_title" else placeholder
             if shape:
-                row["fit"] = fit(shape, _fit_box(element, parent), all_shapes)
+                row["fit"] = fit(shape, _fit_box(content, content_parent), all_shapes)
             elements.append(row)
         bodies = sorted((e for e in elements if e.get("role") == "body"), key=lambda e:e["geometry"]["x"])
         for n, body in enumerate(bodies, 1):

@@ -8,6 +8,7 @@ from contextlib import AsyncExitStack
 
 from kdcube_ai_app.apps.chat.sdk.integrations.named_service_consent import tool_error_response
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.images import image_payload
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.import_files import import_file_payload
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema import (
     SLIDES_NAMESPACE, SLIDES_SCHEMA, SLIDES_INTRO, SLIDES_PRESENTATION,
     SLIDES_ACTIONS, SLIDES_CONNECTED_ACCOUNT_REQUIREMENTS, CLAIMS_BY_OPERATION,
@@ -30,7 +31,7 @@ def slides_named_service_spec(*, bundle_id=None):
         search_scopes=(NamedServiceSearchScope(namespace="slides", label="presentations", description="Find presentations by title or list recent decks."),),
         operations={name: {"transports": ("local", "api")} for name in SLIDES_SCHEMA["operations"]},
         label="Presentations", description="Read, copy, fill and edit connected presentations.", intro=SLIDES_INTRO,
-        metadata={"presentation": {"about": SLIDES_INTRO, "third_party": "Google Slides", "operations": {k:v for k,v in SLIDES_PRESENTATION.items() if "." in k}, "actions": {k:v for k,v in SLIDES_PRESENTATION.items() if k in SLIDES_ACTIONS}}, "connected_accounts": SLIDES_CONNECTED_ACCOUNT_REQUIREMENTS, "grant_hints": CLAIMS_BY_OPERATION, "canonical_refs": SLIDES_SCHEMA["refs"], "actions": {name: meta["description"] for name,meta in SLIDES_SCHEMA["actions"].items()}, "object_kinds": {name: meta["description"] for name,meta in SLIDES_SCHEMA["object_kinds"].items()}, "provider_catalog": {"google": {"provider_id": "google", "label": "Google Slides", "claims": {"read": "slides:read", "write": "slides:write"}}}},
+        metadata={"presentation": {"about": SLIDES_INTRO, "third_party": "Google Slides", "operations": {k:v for k,v in SLIDES_PRESENTATION.items() if "." in k}, "actions": {k:v for k,v in SLIDES_PRESENTATION.items() if k in SLIDES_ACTIONS}}, "connected_accounts": SLIDES_CONNECTED_ACCOUNT_REQUIREMENTS, "grant_hints": CLAIMS_BY_OPERATION, "canonical_refs": SLIDES_SCHEMA["refs"], "actions": {name: meta["description"] for name,meta in SLIDES_SCHEMA["actions"].items()}, "object_kinds": {name: meta["description"] for name,meta in SLIDES_SCHEMA["object_kinds"].items()}, "provider_catalog": {"google": {"provider_id": "google", "label": "Google Slides", "claims": {"read": "slides:read", "write": "slides:write", "delete": "slides:delete"}}}},
     )
 
 
@@ -134,6 +135,7 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
         for slide in view["slides"]:
             for element in slide["elements"]:
                 element.pop("geometry", None)
+                element.pop("_content_ref", None)
         obj = {**presentation_object(result, account), "snapshot": view}
         if parsed and parsed["kind"] == "slide":
             obj["ref"]=request.object_ref
@@ -162,11 +164,26 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
         if action not in SLIDES_ACTIONS:
             raise SlidesValidationError("slides_unsupported_action", "Choose a supported action from object.schema.")
         payload = dict(request.payload or {})
+        if action == "import":
+            if request.object_ref:
+                raise SlidesValidationError("slides_import_target_forbidden", "Import creates a new presentation. Pass its Drive source_file or deployment file_ref without a target object_ref.")
+            account = str(payload.get("account_id") or request.filters.get("account_id") or "")
+            source = payload.get("source_file", payload.get("source"))
+            if str(source or "").startswith("slides:"):
+                source_ref = parse_slides_ref(source)
+                if source_ref["kind"] != "presentation" or (account and account != source_ref["account_id"]):
+                    raise SlidesValidationError("slides_account_mismatch", "Import with the account bound to the source presentation ref.")
+                account = source_ref["account_id"]
+                payload.pop("source", None)
+                payload["source_file"] = source_ref["presentation_id"]
+            payload = await import_file_payload(ctx, payload, self._staging_root_factory)
+            result, error = await self._execute(request, action, payload, account)
+            return error if error is not None else self._mutation(request, result, account)
         account, deck_id, parsed = _input(request, payload)
         if parsed and parsed["kind"] in ("export", "thumbnail"):
             raise SlidesValidationError("slides_presentation_ref_required", "Artifacts are read with object.get. Address the presentation or slide for an action.")
         if parsed and parsed["kind"] == "slide":
-            if action in ("copy", "fill_template", "export", "add_slide"):
+            if action in ("copy", "fill_template", "export", "add_slide", "trash", "restore"):
                 raise SlidesValidationError("slides_presentation_ref_required", "This action applies to a whole presentation. Use its presentation ref.")
             if payload.get("slides") is not None or payload.get("slide") is not None:
                 raise SlidesValidationError("slides_slide_scope_conflict", "A slide ref already selects one slide. Remove the extra slide selectors.")

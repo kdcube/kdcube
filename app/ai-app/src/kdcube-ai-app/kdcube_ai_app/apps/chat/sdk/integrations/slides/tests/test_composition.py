@@ -10,6 +10,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.grid import grid_cells
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.prediction import predict
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.regions import resolve_region
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.editing import compile_edit
 
 
 def deck():
@@ -143,3 +144,68 @@ def test_alt_text_is_content_without_service_metadata():
     requests, _ = compile("set_alt_text", {"element": {"role": "body"}, "title": "Neutral content", "description": "An accessible description"}, raw)
     after = snapshot(predict(raw, requests))["slides"][0]["elements"][1]
     assert after["alt_text"] == "An accessible description"
+
+
+def image_composition():
+    return {"cols": [1.6, 1], "rows": [1, 2.2, .3], "cells": [
+        {"at": [0, 0], "row_span": 3, "element": {"role": "body"}},
+        {"at": [0, 1], "element": {"shape": "round_rectangle", "fill": "theme.accent1", "text": "Callout"}},
+        {"at": [1, 1], "element": {"image": {"image_uri": "https://example.test/image.png"}, "border": True}},
+        {"at": [2, 1], "element": {"text": "Caption", "align": "center"}},
+    ]}
+
+
+def test_letterboxed_image_and_inset_callout_are_one_element_each_and_read_same_grid():
+    raw = deck()
+    requests, _ = compile("compose", image_composition(), raw, image_sizes={"https://example.test/image.png": {"width": 100, "height": 100}})
+    after = predict(raw, requests)
+    result = snapshot(after)["slides"][0]
+    assert len(result["elements"]) == 5  # title plus four semantic cells
+    assert len([e for e in result["elements"] if e["kind"] == "image"]) == 1
+    assert len([e for e in result["elements"] if e["kind"] == "callout"]) == 1
+    assert result["grid"]["cols"] == pytest.approx([1.6/2.6, 1/2.6], abs=.0001)
+    assert result["grid"]["rows"] == pytest.approx([1/3.5, 2.2/3.5, .3/3.5], abs=.0001)
+    assert not result["overlaps"] and not result["off_slide"]
+    assert all(e.get("alt_text") != "kdcube:frame" for e in result["elements"])
+    image = next(e for e in result["elements"] if e["kind"] == "image")
+    edits, _ = compile("set_alt_text", {"element": {"ref": image["ref"]}, "description": "A square chart"}, after)
+    assert edits[0]["updatePageElementAltText"]["objectId"] == image["_content_ref"]
+    assert next(e for e in snapshot(predict(after, edits))["slides"][0]["elements"] if e["kind"] == "image")["alt_text"] == "A square chart"
+
+
+def test_image_filling_its_cell_and_unfilled_shape_remain_single_elements():
+    raw = deck()
+    requests, _ = compile("add_image", {"image_uri": "https://example.test/image.png"}, raw, image_sizes={"https://example.test/image.png": {"width": 888, "height": 394}})
+    assert not any("groupObjects" in r for r in requests)
+    requests, _ = compile("add_shape", {"shape": "rectangle", "text": "Plain outline"}, raw)
+    assert not any("groupObjects" in r for r in requests)
+
+
+def test_callout_text_edits_target_the_inset_and_whole_group_deletion_removes_it():
+    raw = deck()
+    requests, _ = compile("add_shape", {"shape": "round_rectangle", "fill": "theme.accent1", "text": "Before"}, raw)
+    raw = predict(raw, requests)
+    view = snapshot(raw)
+    callout = next(e for e in view["slides"][0]["elements"] if e["kind"] == "callout")
+    edits, _ = compile_edit(raw, view, "set_text", {"slide": {"position": 1}, "element": {"ref": callout["ref"]}, "text": "After"})
+    assert edits[0]["deleteText"]["objectId"] == callout["_content_ref"]
+    raw = predict(raw, edits)
+    assert next(e for e in snapshot(raw)["slides"][0]["elements"] if e["kind"] == "callout")["text"] == "After\n"
+    raw = predict(raw, [{"deleteObject": {"objectId": callout["ref"]}}])
+    assert not any(e["kind"] == "callout" for e in snapshot(raw)["slides"][0]["elements"])
+
+
+def test_resizing_image_frame_keeps_child_aspect_and_full_cell_box():
+    raw = deck()
+    requests, _ = compile("add_image", {"image_uri": "https://example.test/image.png"}, raw, image_sizes={"https://example.test/image.png": {"width": 100, "height": 100}})
+    raw = predict(raw, requests)
+    image = next(e for e in snapshot(raw)["slides"][0]["elements"] if e["kind"] == "image")
+    requests, _ = compile("compose", {"cols": [1, 1], "cells": [{"at": [0, 1], "element": {"ref": image["ref"]}}]}, raw)
+    assert requests[0]["updatePageElementTransform"]["objectId"] == image["ref"]
+    after = predict(raw, requests)
+    group = next(e for e in after["slides"][0]["pageElements"] if e["objectId"] == image["ref"])
+    child = next(e for e in group["elementGroup"]["children"] if "image" in e)
+    from kdcube_ai_app.apps.chat.sdk.integrations.slides.geometry import matrix
+    box = geometry(child, matrix(group["transform"]))
+    assert box["width"] == pytest.approx(box["height"])
+    assert geometry(group)["width"] > box["width"] or geometry(group)["height"] > box["height"]

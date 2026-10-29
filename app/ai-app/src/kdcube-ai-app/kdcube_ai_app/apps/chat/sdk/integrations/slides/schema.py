@@ -3,8 +3,9 @@
 SLIDES_NAMESPACE = "slides"
 SLIDES_READ_CLAIM = "slides:read"
 SLIDES_WRITE_CLAIM = "slides:write"
+SLIDES_DELETE_CLAIM = "slides:delete"
 SLIDES_TRANSPORTS = ("local", "api")
-SLIDES_ACTIONS = ("export", "thumbnail", "copy", "fill_template", "replace_text", "replace_shapes_with_image", "add_slide", "set_text", "style_text", "set_notes", "move_slide", "delete_slide", "skip_slide")
+SLIDES_ACTIONS = ("export", "thumbnail", "copy", "fill_template", "replace_text", "replace_shapes_with_image", "add_slide", "set_text", "style_text", "set_notes", "move_slide", "delete_slide", "skip_slide", "compose", "add_shape", "add_image", "set_alt_text", "duplicate_slide_like", "import", "trash", "restore")
 SLIDES_INTRO = "Find a deck with object.search, then object.get its snapshot and revision_id. Address slides by position, title, tag, kind or a returned ref; address elements by role, text, kind/index or ref. Add slides using a listed theme layout, edit text or notes, style a quoted span and reorder slides. Pass revision_id when editing, use preview and inspect fit warnings. Export PDF/PPTX or request a thumbnail for visual checks."
 _DESCRIPTIONS = {
     "provider.about": ("About presentations", "Learn how to use connected presentations."),
@@ -28,6 +29,14 @@ _DESCRIPTIONS = {
     "move_slide": ("Move slides", "Reorder selected slides while preserving their relative order."),
     "delete_slide": ("Delete slides", "Remove selected slides while keeping at least one slide."),
     "skip_slide": ("Skip or show slides", "Choose whether selected slides appear in the presentation."),
+    "compose": ("Compose a slide", "Arrange text, shapes, images and existing elements in a weighted grid."),
+    "add_shape": ("Add a slide shape", "Place text or a theme-colored shape in a region or beside an element."),
+    "add_image": ("Add a slide image", "Place a validated image while preserving its aspect ratio."),
+    "set_alt_text": ("Describe slide content", "Write accessible title and description text for an element."),
+    "duplicate_slide_like": ("Extend a deck from a reference slide", "Duplicate a selected slide and replace role texts or images."),
+    "import": ("Import a presentation", "Convert a PPTX or ODP source into a new native presentation."),
+    "trash": ("Trash a presentation", "Move a service-created presentation into Drive trash."),
+    "restore": ("Restore a presentation", "Restore a service-created presentation from Drive trash."),
 }
 SLIDES_PRESENTATION = {name: {"label": label, "description": desc} for name,(label,desc) in _DESCRIPTIONS.items()}
 _INSTRUCTIONS = {
@@ -44,6 +53,14 @@ _INSTRUCTIONS = {
     "move_slide": "Pass slide or slides selectors and exactly one before or after selector. The fresh current order decides relative order, even if your selectors are reversed or duplicated. Pass revision_id and preview to inspect before_order and after_order.",
     "delete_slide": "Pass slide or slides selectors. Deleting every remaining slide is refused; keep at least one slide. Pass revision_id and preview to inspect the order after removal.",
     "skip_slide": "Pass slide or slides selectors and skipped true (default) or false. Pass revision_id and preview to inspect the visibility change.",
+    "compose": "Pass slide, region (default body), positive cols/rows weights and cells addressed by zero-based at [row,column], with optional row_span/col_span or a nested grid. Each element is a selector, text/shape map or image source. Existing tables/videos/charts can move; new creation follows in S3. Colors use theme.accent1 or another theme color. Pass preview and revision_id; inspect fit, overlaps and off_slide.",
+    "add_shape": "Pass slide and shape text_box, rectangle, round_rectangle or ellipse, with optional text/items and theme fill/outline/color. Place by region or exactly one below/above/left_of/right_of/over selector. Relative placement accepts align start/center/end, gap small/medium/large and width as an anchor fraction; overlay at selects one of nine positions. Pass preview and revision_id.",
+    "add_image": "Pass slide, exactly one public HTTPS image_uri or deployment file_ref, and a region or single relative anchor. PNG/JPEG/GIF, under 50 MB and at most 25 megapixels. The adapter validates bytes and computes an aspect-preserving box. Pass preview and revision_id; inspect geometry warnings.",
+    "set_alt_text": "Pass slide and element selectors plus title or description. Use human-readable accessibility content. Pass preview and revision_id.",
+    "duplicate_slide_like": "Pass like as one reference-slide selector, optional before/after selector and replacements by title/subtitle/body/body_2, notes or selected images. Unnamed content remains and is listed in kept_from_reference. Pass preview and revision_id; inspect fit before extending the deck.",
+    "import": "Create a new presentation without target object_ref. Pass one Drive source_file (ID/link) or deployment file_ref, optional title and parent_id. Deployment PPTX/ODP uploads are bounded to 5 MB and validated before Google. Preview converts nothing. An account-bound source ref must match the selected account.",
+    "trash": "Address a presentation carrying this service's private creation marker and grant slides:delete. Preview before moving it to Drive trash. Older unmarked decks are refused; the Drive metadata write is not an atomic Slides revision compare-and-swap.",
+    "restore": "Address a marked service-created presentation and grant slides:delete. Preview before restoring it from Drive trash. Older unmarked decks are refused; geometry may be unavailable while the deck is trashed.",
 }
 SLIDES_SCHEMA = {
     "namespace": "slides", "snapshot_schema": "kdcube.slides.snapshot.v1",
@@ -53,18 +70,18 @@ SLIDES_SCHEMA = {
     "actions": {name: {"label": SLIDES_PRESENTATION[name]["label"], "description": _INSTRUCTIONS[name]} for name in SLIDES_ACTIONS},
     "selectors": {"slide": ["position", "title", "title_contains", "tag", "kind", "ref", "last"], "element": ["role", "text_contains", "alt_text", "kind", "index", "ref"]},
     "pagination": "object.get filters.start_slide (1-based) and slide_limit (1..50); next_slide names the next range. Search/list uses cursor/next_cursor.",
-    "connected_account_claims": ["slides:read", "slides:write"],
-    "limitations": ["Animations, transitions and master/theme editing are outside this service.", "Fit flags are geometric estimates. Text written through the API does not automatically shrink.", "Slide composition, comments, import and typed raw requests follow in later stages."],
+    "connected_account_claims": ["slides:read", "slides:write", "slides:delete"],
+    "limitations": ["Animations, transitions and master/theme editing are outside this service.", "Fit flags are geometric estimates. Text written through the API does not automatically shrink.", "New tables/videos, comments and typed raw requests follow in later stages.", "Trash/restore refuses decks created before the service creation marker existed."],
 }
 
 
 def action_claims(action, payload=None):
     payload = payload or {}
-    claims = [SLIDES_READ_CLAIM] if action in ("get", "search", "export", "thumbnail") else [SLIDES_READ_CLAIM, SLIDES_WRITE_CLAIM]
+    claims = [SLIDES_DELETE_CLAIM] if action in ("trash", "restore") else [SLIDES_READ_CLAIM] if action in ("get", "search", "export", "thumbnail") else [SLIDES_READ_CLAIM, SLIDES_WRITE_CLAIM]
     if payload.get("parent_id"):
         claims.append("drive:write")
     return claims
 
 
 CLAIMS_BY_OPERATION = {"object.get": [SLIDES_READ_CLAIM], "object.list": [SLIDES_READ_CLAIM], "object.search": [SLIDES_READ_CLAIM], "object.upsert": [SLIDES_READ_CLAIM, SLIDES_WRITE_CLAIM], "object.action": [SLIDES_READ_CLAIM, SLIDES_WRITE_CLAIM], **{f"object.action.{name}": action_claims(name) for name in SLIDES_ACTIONS}}
-SLIDES_CONNECTED_ACCOUNT_REQUIREMENTS = [{"provider_id": "google", "provider_label": "Google", "claims": [SLIDES_READ_CLAIM, SLIDES_WRITE_CLAIM], "claim_labels": {SLIDES_READ_CLAIM: "read presentations", SLIDES_WRITE_CLAIM: "edit presentations"}, "claims_by_operation": CLAIMS_BY_OPERATION}]
+SLIDES_CONNECTED_ACCOUNT_REQUIREMENTS = [{"provider_id": "google", "provider_label": "Google", "claims": [SLIDES_READ_CLAIM, SLIDES_WRITE_CLAIM, SLIDES_DELETE_CLAIM], "claim_labels": {SLIDES_READ_CLAIM: "read presentations", SLIDES_WRITE_CLAIM: "edit presentations", SLIDES_DELETE_CLAIM: "trash or restore service-created presentations"}, "claims_by_operation": CLAIMS_BY_OPERATION}]

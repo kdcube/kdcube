@@ -59,9 +59,10 @@ def replace_text_requests(snapshot, payload):
         if len(slides) != 1:
             raise SlidesValidationError("slides_element_ambiguous", "Name one slide when replacing text within an element.")
         element = resolve_element(slides[0], payload["element"])
-        if element.get("kind") != "shape" or element.get("text_truncated"):
+        if element.get("kind") not in ("shape", "callout") or element.get("text_truncated"):
             raise SlidesValidationError("slides_element_not_editable", "Read one untruncated text shape before replacing its text.")
         current = element.get("text", "")
+        target_id = element.get("_content_ref", element["ref"])
         if len(current) > 100_000:
             raise SlidesValidationError("slides_text_too_large", "This shape exceeds the bounded targeted-edit size. Use literal replacement on its slide instead of replacing the whole element text.")
         updated, requests = current, []
@@ -77,9 +78,9 @@ def replace_text_requests(snapshot, payload):
             # stay valid. Unmatched runs retain their provider-owned styling.
             for match in reversed(matches):
                 start, end = offsets[match.start()], offsets[match.end()]
-                requests.append({"deleteText": {"objectId": element["ref"], "textRange": {"type": "FIXED_RANGE", "startIndex": start, "endIndex": end}}})
+                requests.append({"deleteText": {"objectId": target_id, "textRange": {"type": "FIXED_RANGE", "startIndex": start, "endIndex": end}}})
                 if new:
-                    requests.append({"insertText": {"objectId": element["ref"], "text": new, "insertionIndex": start}})
+                    requests.append({"insertText": {"objectId": target_id, "text": new, "insertionIndex": start}})
                 if len(requests) > MAX_ELEMENT_EDIT_REQUESTS:
                     raise SlidesValidationError("slides_too_many_replacements", "Keep targeted edits within 1000 requests; narrow the replacement text or use a slide-wide literal replacement.")
             updated = pattern.sub(lambda _: new, updated)
