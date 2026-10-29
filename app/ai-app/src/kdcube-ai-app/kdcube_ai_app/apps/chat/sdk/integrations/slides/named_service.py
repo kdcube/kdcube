@@ -26,7 +26,7 @@ def slides_named_service_spec(*, bundle_id=None):
     return NamedServiceProviderSpec(
         provider_id="sdk.integrations.slides", namespace=SLIDES_NAMESPACE,
         bundle_id=bundle_id, refs=("slides:*",),
-        object_kinds=("slides.presentation", "slides.export", "slides.thumbnail"),
+        object_kinds=("slides.presentation", "slides.slide", "slides.export", "slides.thumbnail"),
         search_scopes=(NamedServiceSearchScope(namespace="slides", label="presentations", description="Find presentations by title or list recent decks."),),
         operations={name: {"transports": ("local", "api")} for name in SLIDES_SCHEMA["operations"]},
         label="Presentations", description="Read, copy, fill and edit connected presentations.", intro=SLIDES_INTRO,
@@ -82,7 +82,7 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
     def schema_object_kind_from_ref(self, object_ref):
         try:
             kind = parse_slides_ref(object_ref)["kind"]
-            return "slides." + ("presentation" if kind == "slide" else kind)
+            return "slides." + kind
         except SlidesValidationError:
             return None
 
@@ -137,6 +137,8 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
         obj = {**presentation_object(result, account), "snapshot": view}
         if parsed and parsed["kind"] == "slide":
             obj["ref"]=request.object_ref
+            obj["kind"]="slides.slide"
+            obj["title"]=view["slides"][0]["title"]
         response = NamedServiceResponse.ok_response(namespace="slides", object_ref=obj["ref"], object=obj, revision=result.get("revision_id"))
         if _materialize(request):
             data = json.dumps(view, ensure_ascii=False).encode()

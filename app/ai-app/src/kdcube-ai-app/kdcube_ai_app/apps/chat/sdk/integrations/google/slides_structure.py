@@ -85,7 +85,12 @@ def _font(shape, all_shapes, seen=None):
 def fit(shape, box, all_shapes):
     text = shape_text(shape)
     font = _font(shape, all_shapes)
-    width, height = max(1, box["width"] / 12700 - 2 * FIT_INSET_PT), max(1, box["height"] / 12700 - 2 * FIT_INSET_PT)
+    # Title placeholders can be only one line high. The body-box calibration's
+    # vertical inset falsely removes that line; retain horizontal padding and
+    # measure titles against their full transformed height.
+    title = shape.get("placeholder", {}).get("type") in {"TITLE", "CENTERED_TITLE"}
+    width = max(1, box["width"] / 12700 - 2 * FIT_INSET_PT)
+    height = max(1, box["height"] / 12700 - (0 if title else 2 * FIT_INSET_PT))
     def styles(current, seen=None):
         seen=set(seen or ())
         own=current.get("text", {}).get("textElements", [])
