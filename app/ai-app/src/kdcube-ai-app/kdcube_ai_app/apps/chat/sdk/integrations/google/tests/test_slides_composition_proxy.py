@@ -1,15 +1,20 @@
-import base64
 import copy
+import io
 import json
 
 import httpx
 import pytest
+from PIL import Image
 
 from kdcube_ai_app.apps.chat.sdk.integrations.google import slides_proxy as proxy
 from kdcube_ai_app.apps.chat.sdk.integrations.google.tests.test_slides_proxy import run
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.tests.test_composition import deck
 
-PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGZYAAAAASUVORK5CYII=")
+@pytest.fixture
+def png_bytes():
+    stream = io.BytesIO()
+    Image.new("RGB", (1, 1), (12, 34, 56)).save(stream, format="PNG")
+    return stream.getvalue()
 
 
 def test_compose_preview_resolves_targets_without_writing_or_returning_coordinates(monkeypatch):
@@ -25,12 +30,12 @@ def test_compose_preview_resolves_targets_without_writing_or_returning_coordinat
     assert "off_slide" in result["ret"] and "overlaps" in result["ret"]
 
 
-def test_public_image_is_checked_anonymously_before_google_write(monkeypatch):
+def test_public_image_is_checked_anonymously_before_google_write(monkeypatch, png_bytes):
     calls = []
     async def download(client, url, **kwargs):
         assert url == "https://example.test/image.png"
         calls.append("image-read")
-        return PNG, "image/png"
+        return png_bytes, "image/png"
     monkeypatch.setattr(proxy, "_download", download)
     def handler(request):
         calls.append(request.method)
@@ -46,10 +51,10 @@ def test_public_image_is_checked_anonymously_before_google_write(monkeypatch):
     assert result["ok"] and calls == ["GET", "image-read", "POST", "GET"]
 
 
-def test_unsupported_public_image_is_refused_before_google_batch(monkeypatch):
+def test_unsupported_public_image_is_refused_before_google_batch(monkeypatch, png_bytes):
     calls = []
     async def download(*args, **kwargs):
-        return PNG, "image/webp"
+        return png_bytes, "image/webp"
     monkeypatch.setattr(proxy, "_download", download)
     def handler(request):
         calls.append(request.method)

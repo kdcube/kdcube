@@ -227,7 +227,16 @@ def test_add_slide_preview_writes_nothing_and_predicts_fit_without_coordinates(m
     body_ref = changes["elements"][0]["ref"]
     assert any(r["element"] == body_ref and r["status"] == "overflow_risk" for r in result["ret"]["fit"])
     assert changes["position"] == 2
-    assert "geometry" not in json.dumps(result) and "scaleX" not in json.dumps(result)
+    def assert_no_coordinates(value):
+        if isinstance(value, dict):
+            assert not {"geometry", "transform", "scaleX", "scaleY", "translateX", "translateY"} & value.keys()
+            for child in value.values():
+                assert_no_coordinates(child)
+        elif isinstance(value, list):
+            for child in value:
+                assert_no_coordinates(child)
+    assert_no_coordinates(result)
+    assert result["ret"]["geometry_diagnostics_truncated"] is False
 
 
 @pytest.mark.parametrize("notes_status", [200, 400, 403])
