@@ -343,7 +343,7 @@ def staging_root_for_service():
         return None
 
 
-def load_staged_image(staged_ref: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+def load_staged_image(staged_ref: str, *, owner) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Read one staged image by ref. Returns ``(file, error)``."""
     from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import load_staged
 
@@ -354,7 +354,7 @@ def load_staged_image(staged_ref: str) -> tuple[dict[str, Any] | None, dict[str,
             "message": "This deployment has no upload staging configured.",
         }
     try:
-        filename, data = load_staged(root, staged_ref)
+        filename, data = load_staged(root, staged_ref, owner=owner)
     except (FileNotFoundError, ValueError) as exc:
         return None, {"code": "staged_file_missing", "message": str(exc), "staged_ref": staged_ref}
     file_obj = {"filename": filename, "data": data, "staged_ref": staged_ref}
@@ -983,10 +983,13 @@ class LinkedInTools:
         where: str = "linkedin.publish_staged",
     ) -> dict[str, Any]:
         """Publish a post from images already uploaded to a signed slot."""
+        from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_user_identity
+
+        owner = get_current_user_identity() or {}
         files: list[dict[str, Any]] = []
         consumed: list[str] = []
         for staged_ref in staged_refs or ():
-            file_obj, error = load_staged_image(str(staged_ref or "").strip())
+            file_obj, error = load_staged_image(str(staged_ref or "").strip(), owner=owner)
             if error is not None:
                 return _error_result(
                     code=str(error.get("code") or "staged_file_unavailable"),
@@ -1012,7 +1015,7 @@ class LinkedInTools:
             root = staging_root_for_service()
             if root is not None:
                 for staged_ref in consumed:
-                    delete_staged(root, staged_ref)
+                    delete_staged(root, staged_ref, owner=owner)
         return result
 
     @kernel_function(

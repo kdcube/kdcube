@@ -135,7 +135,7 @@ def test_send_text_reports_not_connected(monkeypatch):
 def test_send_images_staged_lane_consumes_on_success(tmp_path, monkeypatch):
     notify = _notify_module()
     staged_ref = new_staged_ref("shot.png")
-    save_staged(tmp_path, staged_ref, b"png-bytes")
+    save_staged(tmp_path, staged_ref, b"png-bytes", owner={"user_id": "u1", "tenant": "t", "project": "p"})
 
     async def fake_bot_token(_entrypoint):
         return "tok-1", {}
@@ -157,7 +157,7 @@ def test_send_images_staged_lane_consumes_on_success(tmp_path, monkeypatch):
     result = asyncio.run(
         notify.send_images(
             object(),
-            identity={"user_id": "u1"},
+            identity={"user_id": "u1", "tenant": "t", "project": "p"},
             payload={"images": [{"staged_ref": staged_ref}], "caption": "the chart"},
             storage_path=str(tmp_path),
         )

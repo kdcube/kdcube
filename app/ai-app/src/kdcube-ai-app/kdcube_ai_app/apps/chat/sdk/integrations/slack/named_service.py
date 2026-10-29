@@ -867,7 +867,6 @@ class SlackNamedServiceProvider(NamedServiceProvider):
             return None
 
     def _discard_upload(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        del ctx
         payload = dict(request.payload or {})
         staged_ref = _text(payload.get("staged_ref"))
         if not staged_ref:
@@ -881,7 +880,7 @@ class SlackNamedServiceProvider(NamedServiceProvider):
             )
         root = self._staging_root()
         if root is not None:
-            delete_staged(root, staged_ref)
+            delete_staged(root, staged_ref, owner=ctx)
         return NamedServiceResponse.ok_response(
             provider=self._provider_identity(),
             namespace=request.namespace or SLACK_NAMESPACE,
@@ -1620,7 +1619,7 @@ class SlackNamedServiceProvider(NamedServiceProvider):
                 else:
                     entry["content_base64"] = inline_content
                 try:
-                    resolved, consumed = resolve_payload_file_entries([entry], staging_root=self._staging_root())
+                    resolved, consumed = resolve_payload_file_entries([entry], staging_root=self._staging_root(), owner=ctx)
                     with inline_files_workspace() as artifact_root:
                         staged = materialize_inline_files(
                             artifact_root,
@@ -1640,7 +1639,7 @@ class SlackNamedServiceProvider(NamedServiceProvider):
                 if isinstance(result, Mapping) and result.get("ok"):
                     root = self._staging_root()
                     for ref in consumed if root is not None else []:
-                        delete_staged(root, ref)
+                        delete_staged(root, ref, owner=ctx)
             else:
                 file_path = _text(payload.get("file_path") or payload.get("path"))
                 if file_path.startswith("conv:fi:"):

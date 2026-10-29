@@ -44,7 +44,7 @@ def _png_with_html_tail() -> bytes:
 
 def _fetch(root: Path, *, filename: str, media_type: str):
     ref = new_staged_ref(filename)
-    save_staged(root, ref, _png_with_html_tail())
+    save_staged(root, ref, _png_with_html_tail(), owner={"user_id": "u1", "tenant": "t", "project": "p"})
     token, _expires = mint_file_download_token(
         SECRET,
         fi_ref=ref,
@@ -85,7 +85,7 @@ def test_active_content_is_never_served_inline(tmp_path) -> None:
 
 def test_a_token_for_another_ref_is_rejected(tmp_path) -> None:
     ref = new_staged_ref("image.png")
-    save_staged(tmp_path, ref, _png_with_html_tail())
+    save_staged(tmp_path, ref, _png_with_html_tail(), owner={"user_id": "u1", "tenant": "t", "project": "p"})
     token, _expires = mint_file_download_token(
         SECRET,
         fi_ref=new_staged_ref("image.png"),
