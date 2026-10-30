@@ -1236,7 +1236,6 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
         )
 
     def _discard_upload(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        del ctx
         staged_ref = _text(dict(request.payload or {}).get("staged_ref"))
         if not staged_ref:
             return NamedServiceResponse.error_response(
@@ -1248,7 +1247,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
             )
         root = self._staging_root()
         if root is not None:
-            delete_staged(root, staged_ref)
+            delete_staged(root, staged_ref, owner=ctx)
         return NamedServiceResponse.ok_response(
             provider=self._provider_identity(),
             namespace=request.namespace or LINKEDIN_NAMESPACE,
@@ -1268,6 +1267,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
 
     def _resolve_image_files(
         self,
+        ctx: NamedServiceContext,
         entries: list[Any],
     ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any] | None]:
         """Resolve ``files[]`` to ``[{filename, mime_type, data}]`` in input order.
@@ -1297,6 +1297,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
             resolved, consumed = resolve_payload_file_entries(
                 [entry for _index, entry in deferred],
                 staging_root=self._staging_root(),
+                owner=ctx,
             )
             with inline_files_workspace() as artifact_root:
                 staged = materialize_inline_files(artifact_root, resolved)
@@ -1310,6 +1311,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
 
     async def _publish(
         self,
+        ctx: NamedServiceContext,
         request: NamedServiceRequest,
         *,
         action: str,
@@ -1341,7 +1343,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
         root = self._staging_root()
         if root is not None:
             for staged_ref in consumed:
-                delete_staged(root, staged_ref)
+                delete_staged(root, staged_ref, owner=ctx)
 
         ret = dict(result.get("ret") or {})
         account_id = _text(ret.get("account_id"))
@@ -1355,7 +1357,6 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
         )
 
     async def _publish_post(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        del ctx
         payload = dict(request.payload or {})
         # A text post carries no media. Anything file-shaped in the payload
         # must not vanish silently — name it and point at the image action.
@@ -1373,10 +1374,9 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
                 namespace=request.namespace or LINKEDIN_NAMESPACE,
                 details={"action": ACTION_PUBLISH_IMAGE_POST, "rejected_keys": present},
             )
-        return await self._publish(request, action=ACTION_PUBLISH_POST, files=[], consumed=[])
+        return await self._publish(ctx, request, action=ACTION_PUBLISH_POST, files=[], consumed=[])
 
     async def _publish_image_post(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        del ctx
         payload = dict(request.payload or {})
         entries = list(payload.get("files") or [])
         if not entries:
@@ -1392,7 +1392,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
                 details={"action": ACTION_PUBLISH_POST},
             )
         try:
-            files, consumed, error = self._resolve_image_files(entries)
+            files, consumed, error = self._resolve_image_files(ctx, entries)
         except InlineFileError as exc:
             return NamedServiceResponse.error_response(
                 code="linkedin_invalid_files",
@@ -1411,11 +1411,10 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
                 details=dict(error),
             )
         return await self._publish(
-            request, action=ACTION_PUBLISH_IMAGE_POST, files=files, consumed=consumed
+            ctx, request, action=ACTION_PUBLISH_IMAGE_POST, files=files, consumed=consumed
         )
 
     async def _publish_article_post(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        del ctx
         payload = dict(request.payload or {})
         raw_article = payload.get("article")
         if not isinstance(raw_article, Mapping) or not _text(raw_article.get("source")):
@@ -1448,7 +1447,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
         consumed: list[str] = []
         if entries:
             try:
-                files, consumed, error = self._resolve_image_files(entries)
+                files, consumed, error = self._resolve_image_files(ctx, entries)
             except InlineFileError as exc:
                 return NamedServiceResponse.error_response(
                     code="linkedin_invalid_files",
@@ -1473,7 +1472,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
             "thumbnail_alt": _text(raw_article.get("thumbnail_alt") or raw_article.get("thumbnailAltText")),
         }
         return await self._publish(
-            request,
+            ctx, request,
             action=ACTION_PUBLISH_ARTICLE_POST,
             files=files,
             consumed=consumed,
@@ -1499,7 +1498,6 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
         self, ctx: NamedServiceContext, request: NamedServiceRequest, *, kind: str
     ) -> NamedServiceResponse:
         """document/video posts: exactly ONE file, resolved from any file lane."""
-        del ctx
         payload = dict(request.payload or {})
         action = ACTION_PUBLISH_DOCUMENT_POST if kind == "document" else ACTION_PUBLISH_VIDEO_POST
         entries = list(payload.get("files") or [])
@@ -1512,7 +1510,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
                 namespace=request.namespace or LINKEDIN_NAMESPACE,
             )
         try:
-            files, consumed, error = self._resolve_media_files(entries)
+            files, consumed, error = self._resolve_media_files(ctx, entries)
         except InlineFileError as exc:
             return NamedServiceResponse.error_response(
                 code="linkedin_invalid_files",
@@ -1549,11 +1547,11 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
             root = self._staging_root()
             if root is not None:
                 for staged_ref in consumed:
-                    delete_staged(root, staged_ref)
+                    delete_staged(root, staged_ref, owner=ctx)
         return response
 
     def _resolve_media_files(
-        self, entries: list[Any]
+        self, ctx: NamedServiceContext, entries: list[Any]
     ) -> tuple[list[dict[str, Any]], list[str], dict[str, Any] | None]:
         """Like _resolve_image_files but WITHOUT image typing: the file_path
         lane loads any workspace file; per-shape validation happens in the
@@ -1574,6 +1572,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
             resolved, consumed = resolve_payload_file_entries(
                 [entry for _index, entry in deferred],
                 staging_root=self._staging_root(),
+                owner=ctx,
             )
             with inline_files_workspace() as artifact_root:
                 staged = materialize_inline_files(artifact_root, resolved)
@@ -1614,7 +1613,6 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
         )
 
     async def _publish_org_post(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        del ctx
         payload = dict(request.payload or {})
         # Text-only, like publish_post: anything file-shaped must not vanish
         # silently. Org image posts are not offered until they are real.
@@ -1631,7 +1629,7 @@ class LinkedInNamedServiceProvider(NamedServiceProvider):
                 details={"rejected_keys": present},
             )
         return await self._publish(
-            request, action=ACTION_PUBLISH_ORG_POST, files=[], consumed=[], as_organization=True
+            ctx, request, action=ACTION_PUBLISH_ORG_POST, files=[], consumed=[], as_organization=True
         )
 
     async def _list_org_posts(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:

@@ -244,7 +244,7 @@ async def send_text(
 
 
 def _image_file_item(
-    image: dict[str, Any], *, staging_base: Any
+    image: dict[str, Any], *, staging_base: Any, owner
 ) -> tuple[dict[str, Any], str | None]:
     """(file item for the Telegram sender, staged ref to consume on success).
 
@@ -253,7 +253,7 @@ def _image_file_item(
     at INLINE_IMAGE_MAX_BYTES."""
     staged_ref = str(image.get("staged_ref") or "").strip()
     if staged_ref:
-        filename, data = load_staged(staging_base, staged_ref)
+        filename, data = load_staged(staging_base, staged_ref, owner=owner)
         mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         return (
             {
@@ -321,7 +321,7 @@ async def send_images(
     try:
         for position, image in enumerate(images):
             image = image if isinstance(image, dict) else {}
-            file_item, staged = _image_file_item(image, staging_base=staging_base)
+            file_item, staged = _image_file_item(image, staging_base=staging_base, owner=identity)
             if staged:
                 consumed.append(staged)
             mime = str(file_item.get("mime_type") or "")
@@ -341,7 +341,7 @@ async def send_images(
     if sent.get("ok"):
         for staged_ref in consumed:
             try:
-                delete_staged(staging_base, staged_ref)
+                delete_staged(staging_base, staged_ref, owner=identity)
             except Exception:  # the sweep collects leftovers; a send is not failed by cleanup
                 pass
     return {

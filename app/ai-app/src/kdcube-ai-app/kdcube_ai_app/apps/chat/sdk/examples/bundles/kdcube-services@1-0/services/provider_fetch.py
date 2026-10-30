@@ -68,7 +68,7 @@ def serve_provider_fetch(
             status=403, error={"error": "fetch_token_rejected", "message": str(exc)}
         )
     try:
-        _filename, data = load_staged(root, ref)
+        _filename, data = load_staged(root, ref, owner=None)
     except (FileNotFoundError, ValueError) as exc:
         # The window is one provider call; afterwards this is the answer.
         return ProviderFetchAnswer(

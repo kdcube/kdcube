@@ -162,6 +162,7 @@ def resolve_payload_file_entries(
     entries: list[Any],
     *,
     staging_root: pathlib.Path | None,
+    owner,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Normalize action payload file entries for staging.
 
@@ -185,7 +186,7 @@ def resolve_payload_file_entries(
             if staging_root is None:
                 raise InlineFileError("This deployment has no upload staging configured.")
             try:
-                filename, data = load_staged(staging_root, staged_ref)
+                filename, data = load_staged(staging_root, staged_ref, owner=owner)
             except (FileNotFoundError, ValueError) as exc:
                 raise InlineFileError(str(exc)) from exc
             normalized.append(

@@ -785,7 +785,6 @@ class MailNamedServiceProvider(NamedServiceProvider):
             return None
 
     def _discard_upload(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        del ctx
         payload = dict(request.payload or {})
         staged_ref = _text(payload.get("staged_ref"))
         if not staged_ref:
@@ -799,7 +798,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
             )
         root = self._staging_root()
         if root is not None:
-            delete_staged(root, staged_ref)
+            delete_staged(root, staged_ref, owner=ctx)
         return NamedServiceResponse.ok_response(
             provider=self._provider_identity(),
             namespace=request.namespace or MAIL_NAMESPACE,
@@ -1168,7 +1167,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
         return json.dumps(entries)
 
     async def _gmail_draft(
-        self, request: NamedServiceRequest, *, account_id: str, payload: Mapping[str, Any]
+        self, ctx: NamedServiceContext, request: NamedServiceRequest, *, account_id: str, payload: Mapping[str, Any]
     ) -> NamedServiceResponse:
         entries, entries_error = self._attachment_entries(request, payload)
         if entries_error is not None:
@@ -1190,7 +1189,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
         inline_only = self._inline_attachments_json(payload, "", [])
         if entries:
             try:
-                resolved, consumed = resolve_payload_file_entries(entries, staging_root=self._staging_root())
+                resolved, consumed = resolve_payload_file_entries(entries, staging_root=self._staging_root(), owner=ctx)
                 with inline_files_workspace() as artifact_root:
                     staged = materialize_inline_files(artifact_root, resolved)
                     result = await _draft(self._merged_attachment_paths(payload, staged), inline_only)
@@ -1199,7 +1198,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
             if isinstance(result, Mapping) and result.get("ok"):
                 root = self._staging_root()
                 for ref in consumed if root is not None else []:
-                    delete_staged(root, ref)
+                    delete_staged(root, ref, owner=ctx)
         else:
             result = await _draft(payload.get("attachment_paths") or "", inline_only)
         if not isinstance(result, Mapping) or not result.get("ok"):
@@ -1251,7 +1250,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
 
         if entries:
             try:
-                resolved, consumed = resolve_payload_file_entries(entries, staging_root=self._staging_root())
+                resolved, consumed = resolve_payload_file_entries(entries, staging_root=self._staging_root(), owner=ctx)
                 with inline_files_workspace() as artifact_root:
                     staged = materialize_inline_files(artifact_root, resolved)
                     result = await _run(self._inline_attachments_json(payload, artifact_root, staged))
@@ -1260,7 +1259,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
             if isinstance(result, Mapping) and result.get("ok"):
                 root = self._staging_root()
                 for ref in consumed if root is not None else []:
-                    delete_staged(root, ref)
+                    delete_staged(root, ref, owner=ctx)
         else:
             result = await _run(self._inline_attachments_json(payload, "", []))
         if not isinstance(result, Mapping) or not result.get("ok"):
@@ -2005,7 +2004,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
                     ctx, request, spec=spec, action=action, account_id=target_account_id, payload=payload,
                 )
             if action == ACTION_DRAFT:
-                return await self._gmail_draft(request, account_id=target_account_id, payload=payload)
+                return await self._gmail_draft(ctx, request, account_id=target_account_id, payload=payload)
             account_id = target_account_id
             entries, entries_error = self._attachment_entries(request, payload)
             if entries_error is not None:
@@ -2025,7 +2024,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
 
             if entries:
                 try:
-                    resolved, consumed = resolve_payload_file_entries(entries, staging_root=self._staging_root())
+                    resolved, consumed = resolve_payload_file_entries(entries, staging_root=self._staging_root(), owner=ctx)
                     with inline_files_workspace() as artifact_root:
                         staged = materialize_inline_files(artifact_root, resolved)
                         result = await _send(self._merged_attachment_paths(payload, staged))
@@ -2034,7 +2033,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
                 if isinstance(result, Mapping) and result.get("ok"):
                     root = self._staging_root()
                     for ref in consumed if root is not None else []:
-                        delete_staged(root, ref)
+                        delete_staged(root, ref, owner=ctx)
             else:
                 result = await _send(payload.get("attachment_paths") or "")
             if not isinstance(result, Mapping) or not result.get("ok"):
@@ -2077,7 +2076,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
 
             if entries:
                 try:
-                    resolved, consumed = resolve_payload_file_entries(entries, staging_root=self._staging_root())
+                    resolved, consumed = resolve_payload_file_entries(entries, staging_root=self._staging_root(), owner=ctx)
                     with inline_files_workspace() as artifact_root:
                         staged = materialize_inline_files(artifact_root, resolved)
                         result = await _forward(self._merged_attachment_paths(payload, staged))
@@ -2086,7 +2085,7 @@ class MailNamedServiceProvider(NamedServiceProvider):
                 if isinstance(result, Mapping) and result.get("ok"):
                     root = self._staging_root()
                     for ref in consumed if root is not None else []:
-                        delete_staged(root, ref)
+                        delete_staged(root, ref, owner=ctx)
             else:
                 result = await _forward(payload.get("attachment_paths") or "")
             if not isinstance(result, Mapping) or not result.get("ok"):

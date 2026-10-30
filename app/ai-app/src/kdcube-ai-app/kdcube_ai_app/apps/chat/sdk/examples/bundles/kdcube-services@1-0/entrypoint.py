@@ -30,6 +30,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.file_delivery import (
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import (
     MAX_STAGED_FILE_BYTES,
+    create_slot,
+    delete_staged,
     new_staged_ref,
     save_staged,
     staging_root,
@@ -639,14 +641,17 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                 CONV_FILE_DOWNLOAD_SECRET_KEY, self._named_services_bundle_id(),
             )
             return None
+        staged_ref = ""
+        root = None
         try:
             staged_ref = new_staged_ref(filename)
+            root = staging_root(str(getattr(self.settings, "STORAGE_PATH", "") or ""))
+            create_slot(root, staged_ref, ns_ctx)
             token, expires_at = mint_file_download_token(
                 secret,
                 fi_ref=staged_ref,
-                user_id=str(getattr(ns_ctx, "user_id", "") or ""),
-                tenant=str(getattr(ns_ctx, "tenant", "") or ""),
-                project=str(getattr(ns_ctx, "project", "") or ""),
+                user_id="",
+                include_identity=False,
             )
             url = bundle_operation_url(
                 tenant=str(getattr(ns_ctx, "tenant", "") or ""),
@@ -659,6 +664,8 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
                 strict=True,
             )
         except Exception:
+            if root is not None and staged_ref:
+                delete_staged(root, staged_ref, owner=ns_ctx)
             return None
         return {
             "upload_url": url,
@@ -786,8 +793,8 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
     async def integration_file_upload(self, request: Any = None, object_ref: str = "", upload_token: str = "", **kwargs):
         """Session-less signed upload of one inbound integration file.
 
-        The token (minted by ``request_upload``) binds the staged ref +
-        requester; the raw request body is the file. Bytes land in the shared
+        The token (minted by ``request_upload``) binds the staged ref and
+        expiry; the slot holds its server-recorded owner. Bytes land in the shared
         staging area and are consumed (single-use) by the send/upload action
         that references the staged ref."""
         del kwargs
@@ -807,20 +814,23 @@ class KDCubeServicesEntrypoint(BaseEntrypoint):
         if not secret:
             return JSONResponse(status_code=503, content={"error": "upload_not_configured"})
         try:
-            verify_file_download_token(secret, token, fi_ref=ref)
+            verify_file_download_token(secret, token, fi_ref=ref, require_user_scope=False)
         except ValueError as exc:
             return JSONResponse(status_code=403, content={"error": "upload_token_rejected", "message": str(exc)})
         data = await request.body()
         if not data:
             return JSONResponse(status_code=400, content={"error": "upload_body_empty"})
+        if len(data) > MAX_STAGED_FILE_BYTES:
+            return JSONResponse(status_code=413, content={"error": "upload_too_large"})
         try:
             save_staged(
                 staging_root(str(getattr(self.settings, "STORAGE_PATH", "") or "")),
                 ref,
                 data,
+                owner=None,  # The signed capability writes only a pre-created owned slot.
             )
-        except ValueError as exc:
-            return JSONResponse(status_code=413, content={"error": "upload_too_large", "message": str(exc)})
+        except (FileNotFoundError, ValueError):
+            return JSONResponse(status_code=404, content={"error": "upload_file_not_found"})
         return JSONResponse(
             status_code=200,
             content={"ok": True, "staged_ref": ref, "size_bytes": len(data)},

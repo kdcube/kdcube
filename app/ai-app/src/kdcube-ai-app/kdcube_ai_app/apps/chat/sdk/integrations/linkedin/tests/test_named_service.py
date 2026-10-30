@@ -406,7 +406,7 @@ async def test_staged_bytes_reach_publish_and_are_then_released(provider, ctx, m
     root = tmp_path / "staging"
     root.mkdir()
     staged_ref = file_staging.new_staged_ref("chart.png")
-    file_staging.save_staged(root, staged_ref, b"\x89PNG-staged-bytes")
+    file_staging.save_staged(root, staged_ref, b"\x89PNG-staged-bytes", owner=ctx)
 
     monkeypatch.setattr(provider, "_staging_root", lambda: root)
     captured: dict[str, Any] = {}
@@ -430,7 +430,7 @@ async def test_staged_bytes_reach_publish_and_are_then_released(provider, ctx, m
     assert captured["files"][0]["data"] == b"\x89PNG-staged-bytes"
     # Single-use: the post owns the bytes now.
     with pytest.raises((FileNotFoundError, ValueError)):
-        file_staging.load_staged(root, staged_ref)
+        file_staging.load_staged(root, staged_ref, owner=ctx)
 
 
 # --------------------------------------------------------------------------- #
@@ -952,7 +952,8 @@ async def test_video_post_routes_one_staged_file(provider, ctx, monkeypatch):
             "video_urn": "urn:li:video:V1", "processing": "async",
         }}
 
-    def _resolve(entries):
+    def _resolve(owner, entries):
+        assert owner is ctx
         return [{"filename": "clip.mp4", "mime_type": "video/mp4", "data": b"x" * 10}], [], None
 
     monkeypatch.setattr(provider._linkedin, "publish_video", _video)

@@ -2047,7 +2047,7 @@ def _staged(tmp_path, data: bytes, filename: str = "chart.png") -> tuple[Any, st
     )
 
     ref = new_staged_ref(filename)
-    save_staged(tmp_path, ref, data)
+    save_staged(tmp_path, ref, data, owner=_ctx())
     return tmp_path, ref
 
 
