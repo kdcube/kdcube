@@ -168,5 +168,3 @@ def predict(presentation, requests):
                     style=next((r["textRun"].get("style", {}) for r in runs if "textRun" in r), {})
                     element["shape"]["text"]={"textElements":[{"textRun":{"content":changed,"style":style}}]}
     return result
-
-

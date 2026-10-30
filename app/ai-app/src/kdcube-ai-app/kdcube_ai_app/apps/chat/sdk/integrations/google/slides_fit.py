@@ -54,5 +54,3 @@ def fit(shape, box, all_shapes):
     available = height / (font * max(.1,spacing) * FIT_LINE_PITCH)
     ratio = needed / available
     return {"status": "ok" if ratio <= .9 else "tight" if ratio <= 1 else "overflow_risk", "ratio": round(ratio, 3), "font_size_pt": font, "lines_needed": needed, "lines_available": round(available, 2)}
-
-
