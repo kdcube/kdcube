@@ -1099,6 +1099,8 @@ adapter; agents use returned refs, roles and relations.
 | `delete_slide` | `slide` or `slides` selectors; at least one slide must remain |
 | `skip_slide` | `slide` or `slides` selectors, `skipped: true` or `false` |
 
+Replacing empty notes or an empty text placeholder inserts directly. Clearing an already empty element is a no-op; the implicit terminal newline is preserved.
+
 `object.upsert` creates an empty presentation from `title`, or renames the
 presentation in `object_ref`. Every write supports `preview: true`. Templates
 discover `{{tags}}` before copying; an unknown tag returns

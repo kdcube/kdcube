@@ -248,7 +248,8 @@ def test_add_slide_reads_new_notes_id_and_chains_revision_without_recreating(mon
             return httpx.Response(200, json={"writeControl": {"requiredRevisionId": "r2"}})
         assert len(writes) == 2
         assert body["writeControl"] == {"requiredRevisionId": "r2"}
-        assert body["requests"][0]["deleteText"]["objectId"] == "provider_notes_1"
+        assert not any("deleteText" in item for item in body["requests"])
+        assert body["requests"][0]["insertText"] == {"objectId": "provider_notes_1", "text": "Speaker notes", "insertionIndex": 0}
         assert all("createSlide" not in r for r in body["requests"])
         if notes_status != 200:
             message = "The required revision ID does not match the latest revision." if notes_status == 400 else "Permission denied"
