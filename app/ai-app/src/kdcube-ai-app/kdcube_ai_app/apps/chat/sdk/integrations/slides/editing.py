@@ -57,7 +57,7 @@ def text_requests(object_id, current, value, *, mode="replace", new=False):
     else:
         index = 0
         after = inserted + terminal
-        requests = [] if new else [{"deleteText": {"objectId": object_id, "textRange": {"type": "ALL"}}}]
+        requests = [] if new or not existing else [{"deleteText": {"objectId": object_id, "textRange": {"type": "ALL"}}}]
     if len(after) > MAX_TEXT:
         raise SlidesValidationError("slides_text_too_large", "Keep the complete element text within 100000 characters.")
     if inserted:

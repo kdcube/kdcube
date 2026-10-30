@@ -190,3 +190,24 @@ def test_invalid_text_is_refused_during_compilation(payload):
 def test_notes_validation_happens_before_slide_creation():
     with pytest.raises(SlidesValidationError):
         compile("add_slide", {"layout": "title_and_body", "notes": "bad\rcontrol"})
+
+
+@pytest.mark.parametrize("current", ["", "\n"])
+@pytest.mark.parametrize("action", ["set_text", "set_notes"])
+@pytest.mark.parametrize("replacement", ["Written", ""])
+def test_replace_empty_shape_or_notes_never_deletes_the_implicit_newline(current, action, replacement):
+    raw = presentation()
+    slide = raw["slides"][0]
+    if action == "set_notes":
+        target = slide["slideProperties"]["notesPage"]["pageElements"][0]
+        payload = {"notes": replacement}
+    else:
+        target = slide["pageElements"][0]
+        payload = {"element": {"role": "title"}, "text": replacement}
+    target["shape"]["text"]["textElements"] = [{"textRun": {"content": current}}] if current else []
+    requests, plan = compile(action, {"slide": {"position": 1}, **payload}, raw)
+    assert not any("deleteText" in request for request in requests)
+    inserts = [request["insertText"] for request in requests if "insertText" in request]
+    assert inserts == ([{"objectId": target["objectId"], "text": replacement, "insertionIndex": 0}] if replacement else [])
+    assert plan["before"] == current
+    assert plan["after"] == replacement + ("\n" if current else "")

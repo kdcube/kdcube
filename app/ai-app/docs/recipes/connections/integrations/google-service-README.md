@@ -1109,6 +1109,8 @@ adapter; agents use returned refs, roles and relations.
 | `import` | one Drive `source_file` or deployment `file_ref`, optional title/folder; creates a new native deck |
 | `trash`, `restore` | marked service-created presentation; requires `slides:delete` |
 
+Replacing empty notes or an empty text placeholder inserts directly. Clearing an already empty element is a no-op; the implicit terminal newline is preserved.
+
 `object.upsert` creates an empty presentation from `title`, or renames the
 presentation in `object_ref`. Every write supports `preview: true`. Templates
 discover `{{tags}}` before copying; an unknown tag returns
