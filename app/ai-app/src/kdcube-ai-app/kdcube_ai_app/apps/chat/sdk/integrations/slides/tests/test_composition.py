@@ -219,3 +219,35 @@ def test_resizing_image_frame_keeps_child_aspect_and_full_cell_box():
     box = geometry(child, matrix(group["transform"]))
     assert box["width"] == pytest.approx(box["height"])
     assert geometry(group)["width"] > box["width"] or geometry(group)["height"] > box["height"]
+
+
+@pytest.mark.parametrize("action", ["compose", "add_shape"])
+@pytest.mark.parametrize("content", [{}, {"text": ""}, {"text": "\n"}])
+def test_textless_shape_emits_no_text_or_paragraph_style(action, content):
+    spec = {"shape": "rectangle", "fill": "theme.accent1", **content}
+    payload = {"cells": [{"at": [0, 0], "element": spec}]} if action == "compose" else spec
+    requests, _ = compile(action, payload)
+    assert any("createShape" in request for request in requests)
+    assert not any(key in request for request in requests for key in ("insertText", "updateTextStyle", "updateParagraphStyle", "deleteParagraphBullets"))
+
+
+def test_created_text_keeps_theme_default_unless_color_is_explicit():
+    raw = deck()
+    raw["slides"][0]["pageProperties"] = {"pageBackgroundFill": {"solidFill": {"color": {"themeColor": "DARK1"}}}}
+    for spec, expected in (({"text": "Theme default"}, None), ({"text": "Explicit light", "color": "theme.light1"}, "LIGHT1")):
+        requests, _ = compile("add_shape", spec, raw)
+        styles = [request["updateTextStyle"] for request in requests if "updateTextStyle" in request]
+        assert len(styles) == 1
+        if expected is None:
+            assert "foregroundColor" not in styles[0]["style"]
+            assert "foregroundColor" not in styles[0]["fields"]
+        else:
+            assert styles[0]["style"]["foregroundColor"] == {"opaqueColor": {"themeColor": expected}}
+
+
+def test_outline_only_shape_explicitly_has_no_default_fill():
+    requests, _ = compile("add_shape", {"shape": "rectangle", "outline": "theme.accent1"})
+    props = next(request["updateShapeProperties"] for request in requests if "updateShapeProperties" in request)
+    assert props["shapeProperties"]["shapeBackgroundFill"] == {"propertyState": "NOT_RENDERED"}
+    assert "shapeBackgroundFill" in props["fields"].split(",")
+    assert props["shapeProperties"]["outline"]["outlineFill"]["solidFill"]["color"] == {"themeColor": "ACCENT1"}

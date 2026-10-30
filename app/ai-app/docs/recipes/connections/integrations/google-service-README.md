@@ -1173,6 +1173,17 @@ deck, including decks created by older service versions. Drive metadata
 writes check a supplied Slides revision first but provide no atomic Slides
 revision compare-and-swap. A trashed deck can lack geometry until restored.
 
+The `compose`, `add_shape` and `add_image` action views include a structured
+`payload_schema`: selectors, text/items, shape and theme-colour choices, image
+sources, grid tracks/spans/nesting and placement fields are discoverable there.
+Textless shapes receive no text-style requests. Unspecified text colour uses
+the Slides editor default; use an explicit `theme.light1` or `theme.dark1` when
+a chosen fill needs a particular contrast. Shapes without `fill` are explicitly
+unfilled, including outline-only shapes.
+
+Prefer font-supported letters such as `n` or `n_i` to Unicode subscript glyphs
+such as U+2099 (`ₙ`), and inspect thumbnails or exports for missing glyphs.
+
 A slide ref constrains edits to that slide. Whole-presentation actions such
 as copy, export and rename require a presentation ref. Artifact refs support
 reads; they cannot become presentation write targets. A supplied `source`
@@ -1231,8 +1242,10 @@ Exports return `slides.export` refs; thumbnails return `slides.thumbnail`
 refs. Streaming `object.get` materializes the bytes. When configured, the app
 also supplies a short-lived signed download URL. Google's thumbnail
 `contentUrl` stays inside the adapter and is downloaded without the Google
-bearer. Canonical thumbnail refs default to SMALL; MEDIUM/LARGE delivery uses
-streaming `object.get` with `filters.size` to preserve the requested size.
+bearer. New thumbnail refs bind SMALL, MEDIUM or LARGE into the signed object
+ref, so each size supports a download URL and streaming `object.get` without
+extra filters. An override conflicting with the bound size is refused. Older
+refs without a size still default to SMALL.
 
 Images must be public HTTPS PNG/JPEG/GIF, smaller than 50 MB and at most
 25 megapixels. Deployment `file_ref` images have a 25 MB shared staging bound,

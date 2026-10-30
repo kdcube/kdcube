@@ -1,12 +1,14 @@
 """Discovery metadata and connected-account requirements for presentations."""
 
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.action_schemas import composition_payload_schema
+
 SLIDES_NAMESPACE = "slides"
 SLIDES_READ_CLAIM = "slides:read"
 SLIDES_WRITE_CLAIM = "slides:write"
 SLIDES_DELETE_CLAIM = "slides:delete"
 SLIDES_TRANSPORTS = ("local", "api")
 SLIDES_ACTIONS = ("export", "thumbnail", "copy", "fill_template", "replace_text", "replace_shapes_with_image", "add_slide", "set_text", "style_text", "set_notes", "move_slide", "delete_slide", "skip_slide", "compose", "add_shape", "add_image", "set_alt_text", "duplicate_slide_like", "import", "trash", "restore")
-SLIDES_INTRO = "Find a deck with object.search, then object.get its snapshot and revision_id. Address slides by position, title, tag, kind or a returned ref; address elements by role, text, kind/index or ref. Add slides using a listed theme layout, edit text or notes, style a quoted span and reorder slides. Pass revision_id when editing, use preview and inspect fit warnings. Export PDF/PPTX or request a thumbnail for visual checks."
+SLIDES_INTRO = "Find a deck with object.search, then object.get its snapshot and revision_id. Address slides by position, title, tag, kind or a returned ref; address elements by role, text, kind/index or ref. Add slides using a listed theme layout, edit text or notes, style a quoted span and reorder slides. Pass revision_id when editing, use preview and inspect fit warnings. Export PDF/PPTX or request a thumbnail for visual checks. Prefer font-supported text such as n or n_i to Unicode subscript glyphs such as ₙ; inspect the rendered result."
 _DESCRIPTIONS = {
     "provider.about": ("About presentations", "Learn how to use connected presentations."),
     "provider.capabilities": ("Presentation capabilities", "List supported presentation operations."),
@@ -41,7 +43,7 @@ _DESCRIPTIONS = {
 SLIDES_PRESENTATION = {name: {"label": label, "description": desc} for name,(label,desc) in _DESCRIPTIONS.items()}
 _INSTRUCTIONS = {
     "export": "Pass format pdf or pptx. The export ref supports streaming object.get and a deployment-signed download URL when configured.",
-    "thumbnail": "Pass one slide selector and size SMALL, MEDIUM or LARGE. The Google capability URL stays server-side; receive a slides.thumbnail artifact or stream its PNG bytes.",
+    "thumbnail": "Pass one slide selector and size SMALL, MEDIUM or LARGE. The Google capability URL stays server-side; receive a size-bound slides.thumbnail artifact with a signed download URL when configured, or stream its PNG bytes.",
     "copy": "Pass source (a presentation ref or link) and a new title. Preview before copying if needed; read and write claims are required. A parent_id additionally requires drive:write.",
     "fill_template": "Pass source, title, values as a tag-to-text map and optional images as a tag-to-image map (image_uri or file_ref). Tags are discovered before copying; missing tags and unreadable templates are refused. Pass preview to validate without creating a copy.",
     "replace_text": "Pass replacements as literal text-to-text pairs, optionally slides as selectors or slide plus element selector. Pass revision_id from object.get and preview to inspect changes without writing.",
@@ -64,7 +66,7 @@ _INSTRUCTIONS = {
 }
 SLIDES_SCHEMA = {
     "namespace": "slides", "snapshot_schema": "kdcube.slides.snapshot.v1",
-    "refs": ["slides:google:<account_id>:presentation:<presentation_id>", "slides:google:<account_id>:slide:<slide_id>:<presentation_id>", "slides:google:<account_id>:export:<pdf|pptx>:<presentation_id>", "slides:google:<account_id>:thumbnail:<slide_id>:<presentation_id>"],
+    "refs": ["slides:google:<account_id>:presentation:<presentation_id>", "slides:google:<account_id>:slide:<slide_id>:<presentation_id>", "slides:google:<account_id>:export:<pdf|pptx>:<presentation_id>", "slides:google:<account_id>:thumbnail:<SMALL|MEDIUM|LARGE>:<slide_id>:<presentation_id>"],
     "object_kinds": {"slides.presentation": {"description": "A native presentation with a theme and slides."}, "slides.slide": {"description": "One slide in a native presentation."}, "slides.export": {"description": "PDF or PowerPoint bytes."}, "slides.thumbnail": {"description": "A rendered PNG slide."}},
     "operations": {name: {**meta, "instruction": SLIDES_INTRO} for name,meta in SLIDES_PRESENTATION.items() if "." in name},
     "actions": {name: {"label": SLIDES_PRESENTATION[name]["label"], "description": _INSTRUCTIONS[name]} for name in SLIDES_ACTIONS},
@@ -73,6 +75,11 @@ SLIDES_SCHEMA = {
     "connected_account_claims": ["slides:read", "slides:write", "slides:delete"],
     "limitations": ["Animations, transitions and master/theme editing are outside this service.", "Fit flags are geometric estimates. Text written through the API does not automatically shrink.", "New tables/videos, comments and typed raw requests follow in later stages.", "Trash/restore refuses decks created before the service creation marker existed."],
 }
+
+
+for _action in ("compose", "add_shape", "add_image"):
+    _payload = composition_payload_schema(_action)
+    SLIDES_SCHEMA["actions"][_action].update(payload=list(_payload["properties"]), payload_schema=_payload)
 
 
 def action_claims(action, payload=None):

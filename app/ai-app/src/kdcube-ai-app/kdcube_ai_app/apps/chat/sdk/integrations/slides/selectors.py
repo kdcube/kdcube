@@ -28,8 +28,12 @@ def presentation_id(value):
     raise SlidesValidationError("slides_invalid_ref", "Pass a presentation ref or a Google Slides link.")
 
 
-def slides_ref(account_id, deck_id, *, kind="presentation", detail=""):
+def slides_ref(account_id, deck_id, *, kind="presentation", detail="", size=""):
     parts = ["slides", "google", str(account_id), kind]
+    if kind == "thumbnail" and size:
+        if size not in ("SMALL", "MEDIUM", "LARGE"):
+            raise SlidesValidationError("slides_invalid_thumbnail_size", "Use SMALL, MEDIUM or LARGE.")
+        parts.append(size)
     if detail:
         parts.append(str(detail))
     parts.append(str(deck_id))
@@ -38,10 +42,15 @@ def slides_ref(account_id, deck_id, *, kind="presentation", detail=""):
 
 def parse_slides_ref(value):
     parts = str(value or "").strip().split(":")
-    if len(parts) not in (5, 6) or parts[:2] != ["slides", "google"] or not parts[2]:
+    if len(parts) not in (5, 6, 7) or parts[:2] != ["slides", "google"] or not parts[2]:
         raise SlidesValidationError("slides_invalid_ref", "Use a slides:google account-bound ref returned by this service.")
     kind = parts[3]
-    if kind == "presentation" and len(parts) == 5:
+    size = ""
+    if kind == "thumbnail" and len(parts) == 7:
+        size, detail = parts[4:6]
+        if size not in ("SMALL", "MEDIUM", "LARGE"):
+            raise SlidesValidationError("slides_invalid_thumbnail_size", "Use SMALL, MEDIUM or LARGE.")
+    elif kind == "presentation" and len(parts) == 5:
         detail = ""
     elif kind in ("slide", "thumbnail", "export") and len(parts) == 6:
         detail = parts[4]
@@ -49,9 +58,9 @@ def parse_slides_ref(value):
             raise SlidesValidationError("slides_invalid_ref", "Export format must be pdf or pptx.")
     else:
         raise SlidesValidationError("slides_invalid_ref", "Unsupported presentation object ref.")
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", parts[-1]) or (detail and not re.fullmatch(r"[A-Za-z0-9_-]+", detail)):
+    if (kind != "presentation" and not detail) or not re.fullmatch(r"[A-Za-z0-9_-]+", parts[-1]) or (detail and not re.fullmatch(r"[A-Za-z0-9_-]+", detail)):
         raise SlidesValidationError("slides_invalid_ref", "The presentation handle is invalid.")
-    return {"account_id": parts[2], "presentation_id": parts[-1], "kind": kind, "detail": detail}
+    return {"account_id": parts[2], "presentation_id": parts[-1], "kind": kind, "detail": detail, **({"size": size} if size else {})}
 
 
 def _one(matches, target, selector):

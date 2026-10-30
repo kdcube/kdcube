@@ -69,10 +69,9 @@ def compile_new_element(raw_slide, spec, box, *, image_sizes=None):
         invalid("Choose text_box, rectangle, round_rectangle or ellipse.")
     object_id = new_id()
     requests = [{"createShape": {"objectId": object_id, "shapeType": SHAPES[kind], "elementProperties": element_properties(raw_slide["objectId"], box)}}]
-    props, fields = {}, []
+    props, fields = {"shapeBackgroundFill": {"propertyState": "NOT_RENDERED"}}, ["shapeBackgroundFill"]
     if "fill" in spec:
         props["shapeBackgroundFill"] = {"solidFill": {"color": theme_color(spec["fill"])}}
-        fields.append("shapeBackgroundFill")
     if "outline" in spec:
         props["outline"] = {"outlineFill": {"solidFill": {"color": theme_color(spec["outline"])}}}
         fields.append("outline")
@@ -80,8 +79,9 @@ def compile_new_element(raw_slide, spec, box, *, image_sizes=None):
         requests.append({"updateShapeProperties": {"objectId": object_id, "shapeProperties": props, "fields": ",".join(fields)}})
     value = spec.get("items", spec.get("text", ""))
     plain, _ = content(value)
+    has_text = bool(plain[:-1] if plain.endswith("\n") else plain)
     text_id = object_id
-    if kind != "text_box" and plain and "fill" in spec:
+    if kind != "text_box" and has_text and "fill" in spec:
         inset = TEXT_INSET_PT*EMU_PER_PT
         if min(box["width"], box["height"]) <= 2*inset:
             invalid("The shape is too small for its text inset; enlarge its grid cell.")
@@ -91,11 +91,17 @@ def compile_new_element(raw_slide, spec, box, *, image_sizes=None):
     edits, change = text_requests(text_id, "\n", value, new=True)
     requests.extend(edits)
     font = font_size(spec)
-    requests.append({"updateTextStyle": {"objectId": text_id, "textRange": {"type": "ALL"}, "style": {"fontSize": {"magnitude": font, "unit": "PT"}, "foregroundColor": {"opaqueColor": theme_color(spec.get("color", "theme.dark1"))}}, "fields": "fontSize,foregroundColor"}})
+    # Let Slides use the editor/theme text default unless a color was chosen.
+    color = theme_color(spec["color"]) if "color" in spec else None
     align = spec.get("align", "start")
     if align not in ("start", "center", "end"):
         invalid("Text align is start, center or end.")
-    requests.append({"updateParagraphStyle": {"objectId": text_id, "textRange": {"type": "ALL"}, "style": {"alignment": align.upper()}, "fields": "alignment"}})
+    if has_text:
+        style = {"fontSize": {"magnitude": font, "unit": "PT"}}
+        if color is not None:
+            style["foregroundColor"] = {"opaqueColor": color}
+        requests.append({"updateTextStyle": {"objectId": text_id, "textRange": {"type": "ALL"}, "style": style, "fields": ",".join(style)}})
+        requests.append({"updateParagraphStyle": {"objectId": text_id, "textRange": {"type": "ALL"}, "style": {"alignment": align.upper()}, "fields": "alignment"}})
     if text_id != object_id:
         group_id = new_id()
         requests.append(title_request(object_id, FRAME_TITLE))

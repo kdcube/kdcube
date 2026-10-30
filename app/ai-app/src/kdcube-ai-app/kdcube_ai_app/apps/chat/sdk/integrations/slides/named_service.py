@@ -233,17 +233,21 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
 
     async def _artifact(self, ctx, request, parsed, *, materialize):
         kind = parsed["kind"]
-        ref = slides_ref(parsed["account_id"], parsed["presentation_id"], kind=kind, detail=parsed["detail"])
         payload = {"presentation_ref": parsed["presentation_id"]}
         if kind == "export":
             payload["format"] = parsed["detail"]
             extension, mime = parsed["detail"], EXPORT_FORMATS[parsed["detail"]]
         else:
-            payload.update(slide={"ref": parsed["detail"]}, size=str(request.payload.get("size") or request.filters.get("size") or "SMALL").upper())
+            requested = [str(value).upper() for value in (request.payload.get("size"), request.filters.get("size")) if value]
+            bound = parsed.get("size")
+            if len(set(requested)) > 1 or (bound and any(value != bound for value in requested)):
+                raise SlidesValidationError("slides_thumbnail_size_mismatch", "Use the size bound into this thumbnail ref; request another thumbnail for a different size.")
+            payload.update(slide={"ref": parsed["detail"]}, size=bound or (requested[0] if requested else "SMALL"))
             if payload["size"] not in ("SMALL", "MEDIUM", "LARGE"):
                 raise SlidesValidationError("slides_invalid_thumbnail_size", "Use SMALL, MEDIUM or LARGE.")
             extension, mime = "png", "image/png"
-        filename = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{parsed['presentation_id']}-{parsed['detail']}.{extension}")
+        ref = slides_ref(parsed["account_id"], parsed["presentation_id"], kind=kind, detail=parsed["detail"], size=payload.get("size", ""))
+        filename = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{parsed['presentation_id']}-{parsed['detail']}{'-'+payload['size'] if kind == 'thumbnail' else ''}.{extension}")
         obj = {"ref": ref, "kind": f"slides.{kind}", "filename": filename, "mime_type": mime}
         if materialize:
             result, error = await self._execute(request, kind, payload, parsed["account_id"])
@@ -258,10 +262,9 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
             obj.update({k: result[k] for k in ("width", "height", "byte_size") if k in result})
             response = NamedServiceResponse.ok_response(namespace="slides", object_ref=ref, object=obj, attrs={"materialization": {"media_type": mime, "filename": filename, "size_bytes": len(data), "complete": True}})
             return NamedServiceStreamResult(response=response, chunks=_chunks(data), filename=filename, media_type=mime)
-        # The canonical thumbnail ref names a slide, with SMALL as its default.
-        # Other sizes are explicitly streamed using filters.size, so a signed
-        # URL cannot silently serve a different size from its metadata.
-        if self._file_url_factory and (kind == "export" or payload["size"] == "SMALL"):
+        # A thumbnail's signed reference includes its exact size. The public
+        # download route can therefore reconstruct it without extra filters.
+        if self._file_url_factory:
             download = self._file_url_factory(ctx, {"ref": ref})
             if hasattr(download, "__await__"):
                 download = await download

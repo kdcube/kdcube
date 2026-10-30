@@ -123,12 +123,51 @@ def test_react_pull_materializes_export_instead_of_returning_another_reference()
     asyncio.run(exercise())
 
 
-def test_nondefault_thumbnail_size_explicitly_streams_instead_of_wrong_url():
-    async def execute(**kwargs):return {"ok":True,"ret":{"presentation_id":"deck","account_id":"account","snapshot":snapshot()}}
-    response=asyncio.run(provider(execute,file_url_factory=lambda *args:{"url":"https://files.example/default-size"}).dispatch(NamedServiceContext(),request("object.action",action="thumbnail",object_ref="slides:google:account:presentation:deck",payload={"slide":{"position":1},"size":"MEDIUM"})))
-    assert response.ok
-    assert "download" not in response.ret["object"]
-    assert response.ret["object"]["delivery"]["filters"] == {"size":"MEDIUM"}
+@pytest.mark.parametrize("size", ["SMALL", "MEDIUM", "LARGE"])
+def test_all_thumbnail_sizes_get_a_bound_signed_ref_and_materialize_the_same_size(size):
+    calls, signed = [], []
+    async def execute(**kwargs):
+        calls.append(kwargs)
+        if kwargs["operation"] == "get":
+            return {"ok": True, "ret": {"presentation_id": "deck", "account_id": "account", "snapshot": snapshot()}}
+        assert kwargs["operation"] == "thumbnail"
+        return {"ok": True, "ret": {"content_base64": base64.b64encode(size.encode()).decode()}}
+    def sign(ctx, info):
+        signed.append(info["ref"])
+        return {"url": "https://files.example/signed"}
+    async def exercise():
+        p = provider(execute, file_url_factory=sign)
+        response = await p.dispatch(NamedServiceContext(), request("object.action", action="thumbnail", object_ref="slides:google:account:presentation:deck", payload={"slide": {"position": 1}, "size": size}))
+        assert response.ok
+        obj = response.ret["object"]
+        assert obj["ref"] == f"slides:google:account:thumbnail:{size}:slide_a:deck"
+        assert signed == [obj["ref"]]
+        assert obj["download"]["url"] == "https://files.example/signed"
+        # The signed download reconstructs size from the ref with no filters.
+        materialized = await p.dispatch(NamedServiceContext(), request("object.get", object_ref=obj["ref"], response_mode="stream"))
+        assert isinstance(materialized, NamedServiceStreamResult)
+        assert b"".join([chunk async for chunk in materialized.chunks]) == size.encode()
+        assert calls[-1]["payload"]["size"] == size
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("filters,payload", [({"size": "SMALL"}, {}), ({}, {"size": "MEDIUM"})])
+def test_thumbnail_ref_size_cannot_be_overridden(filters, payload):
+    async def execute(**kwargs):
+        raise AssertionError("A bound artifact must be rejected before provider access")
+    response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.get", object_ref="slides:google:account:thumbnail:LARGE:slide_a:deck", filters=filters, payload=payload, response_mode="stream")))
+    assert not response.ok and response.error.code == "slides_thumbnail_size_mismatch"
+
+
+def test_legacy_thumbnail_ref_still_materializes_small():
+    async def execute(**kwargs):
+        assert kwargs["payload"]["size"] == "SMALL"
+        return {"ok": True, "ret": {"content_base64": base64.b64encode(b"small").decode()}}
+    async def exercise():
+        response = await provider(execute).dispatch(NamedServiceContext(), request("object.get", object_ref="slides:google:account:thumbnail:slide_a:deck", response_mode="stream"))
+        assert isinstance(response, NamedServiceStreamResult)
+        assert b"".join([chunk async for chunk in response.chunks]) == b"small"
+    asyncio.run(exercise())
 
 
 def test_account_override_is_refused_before_provider_call():
