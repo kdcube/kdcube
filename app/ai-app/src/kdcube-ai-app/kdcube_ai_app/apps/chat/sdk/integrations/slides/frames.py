@@ -6,20 +6,21 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesVali
 
 IMAGE_GROUP = "kdcube:image-frame"
 CALLOUT_GROUP = "kdcube:callout"
-FRAME_TITLE = "kdcube:frame"
 
 
 def frame_content(element):
     children = element.get("elementGroup", {}).get("children", [])
-    if len(children) != 2 or element.get("title") not in (IMAGE_GROUP, CALLOUT_GROUP):
+    if len(children) != 2:
         return None
-    frames = [child for child in children if child.get("title") == FRAME_TITLE and "shape" in child]
+    frames = [child for child in children if child.get("title") in (IMAGE_GROUP, CALLOUT_GROUP) and "shape" in child]
     if len(frames) != 1:
         return None
     content = next(child for child in children if child is not frames[0])
-    if element["title"] == IMAGE_GROUP and "image" in content:
+    frame = frames[0]
+    shape_type = frame["shape"].get("shapeType")
+    if frame["title"] == IMAGE_GROUP and shape_type == "RECTANGLE" and "image" in content:
         return "image", content
-    if element["title"] == CALLOUT_GROUP and "shape" in content:
+    if frame["title"] == CALLOUT_GROUP and shape_type in {"RECTANGLE", "ROUND_RECTANGLE", "ELLIPSE"} and content.get("shape", {}).get("shapeType") == "TEXT_BOX":
         return "callout", content
     return None
 

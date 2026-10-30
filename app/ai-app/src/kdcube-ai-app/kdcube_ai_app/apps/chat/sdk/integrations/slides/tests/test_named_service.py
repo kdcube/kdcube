@@ -229,16 +229,17 @@ def test_file_ref_uses_owned_copy_and_cleans_it_after_provider_failure(tmp_path)
     buffer=io.BytesIO()
     Image.new("RGB",(4,4)).save(buffer,"PNG")
     source=new_staged_ref("source.png")
-    save_staged(tmp_path,source,buffer.getvalue())
+    ctx = NamedServiceContext(user_id="user", tenant="tenant", project="project")
+    save_staged(tmp_path,source,buffer.getvalue(), owner=ctx)
     minted=[]
     def mint(ctx,info):
         minted.append(info["staged_ref"])
         return {"url":"https://fetch.example/private-capability"}
     async def execute(**kwargs):
         assert kwargs["payload"]["image_uri"] == "https://fetch.example/private-capability"
-        assert load_staged(tmp_path,minted[0])[1] == buffer.getvalue()
+        assert load_staged(tmp_path,minted[0], owner=ctx)[1] == buffer.getvalue()
         return {"ok":False,"error":{"code":"google_slides_rate_limited","message":"Rate limited"},"ret":{"retryable":True}}
-    response=asyncio.run(provider(execute,staging_root_factory=lambda:tmp_path,provider_fetch_url_factory=mint).dispatch(NamedServiceContext(user_id="user"),request("object.action",action="replace_shapes_with_image",object_ref="slides:google:account:presentation:deck",payload={"tag":"{{IMAGE}}","file_ref":source})))
+    response=asyncio.run(provider(execute,staging_root_factory=lambda:tmp_path,provider_fetch_url_factory=mint).dispatch(ctx,request("object.action",action="replace_shapes_with_image",object_ref="slides:google:account:presentation:deck",payload={"tag":"{{IMAGE}}","file_ref":source})))
     assert not response.ok and "private-capability" not in json.dumps(response.to_dict())
-    assert load_staged(tmp_path,source)[1] == buffer.getvalue()
-    with pytest.raises((FileNotFoundError,ValueError)):load_staged(tmp_path,minted[0])
+    assert load_staged(tmp_path,source, owner=ctx)[1] == buffer.getvalue()
+    with pytest.raises((FileNotFoundError,ValueError)):load_staged(tmp_path,minted[0], owner=ctx)

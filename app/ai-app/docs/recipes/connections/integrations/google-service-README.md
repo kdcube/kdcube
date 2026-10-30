@@ -1143,15 +1143,19 @@ inset. Preview and writes return fit, overlap and off-slide diagnostics.
 
 An aspect-fit image that leaves space in its grid cell is grouped with a
 transparent cell rectangle. A filled callout groups its background with an
-inset text box. Groups have recognizable Slides-panel titles
-`kdcube:image-frame` and `kdcube:callout`; their frame is `kdcube:frame`.
+inset text box. The inner frame shape carries the reserved title
+`kdcube:image-frame` or `kdcube:callout`, visible in that shape's Alt text
+panel. Recognition requires that exact title and the expected two child types:
+a rectangle with an image, or a filled background shape with a text box.
 Image frames have no fill or outline unless `border: true`. Images filling
 their cells, plain text and unfilled shapes stay single elements. Snapshots
 show one image/callout with the group's cell box and hide its frame. Selectors
-address that one ref; alt text edits target the inner image and text edits
-target the inset box. Movement and deletion of the group affect the whole
-element. Renaming structural titles or changing the group's child structure
-makes it an ordinary group on the next read.
+address that one ref; alt text edits target the content child and text edits
+target the inset box, preserving the frame's reserved title. Movement and
+deletion of the group affect the whole element. Removing or renaming the frame
+title or changing the expected child types makes it an ordinary group on the
+next read. Ungrouping exposes ordinary elements. Similar unmarked groups
+retain their ordinary group representation.
 
 Grid readback derives tracks, gutters and spans from ordinary content boxes;
 each group counts once. It stores no layout metadata in alt text. Alignment

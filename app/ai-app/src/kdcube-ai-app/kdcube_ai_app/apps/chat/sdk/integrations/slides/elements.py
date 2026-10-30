@@ -9,7 +9,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.grid import invalid
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.layouts import new_id
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.placement import contained, font_size
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError
-from kdcube_ai_app.apps.chat.sdk.integrations.slides.frames import IMAGE_GROUP, CALLOUT_GROUP, FRAME_TITLE, title_request
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.frames import IMAGE_GROUP, CALLOUT_GROUP, title_request
 
 SHAPES = {"text_box": "TEXT_BOX", "rectangle": "RECTANGLE", "round_rectangle": "ROUND_RECTANGLE", "ellipse": "ELLIPSE"}
 THEME_COLORS = {"dark1", "light1", "dark2", "light2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hyperlink", "followed_hyperlink"}
@@ -54,9 +54,8 @@ def compile_new_element(raw_slide, spec, box, *, image_sizes=None):
             requests.extend([
                 {"createShape": {"objectId": frame_id, "shapeType": "RECTANGLE", "elementProperties": element_properties(raw_slide["objectId"], cell)}},
                 {"updateShapeProperties": {"objectId": frame_id, "shapeProperties": {"shapeBackgroundFill": {"propertyState": "NOT_RENDERED"}, "outline": outline}, "fields": "shapeBackgroundFill,outline"}},
-                title_request(frame_id, FRAME_TITLE),
+                title_request(frame_id, IMAGE_GROUP),
                 {"groupObjects": {"groupObjectId": group_id, "childrenObjectIds": [frame_id, object_id]}},
-                title_request(group_id, IMAGE_GROUP),
             ])
             return requests, {"ref": group_id, "kind": "image"}, cell
         if spec.get("border"):
@@ -104,9 +103,8 @@ def compile_new_element(raw_slide, spec, box, *, image_sizes=None):
         requests.append({"updateParagraphStyle": {"objectId": text_id, "textRange": {"type": "ALL"}, "style": {"alignment": align.upper()}, "fields": "alignment"}})
     if text_id != object_id:
         group_id = new_id()
-        requests.append(title_request(object_id, FRAME_TITLE))
+        requests.append(title_request(object_id, CALLOUT_GROUP))
         requests.append({"groupObjects": {"groupObjectId": group_id, "childrenObjectIds": [object_id, text_id]}})
-        requests.append(title_request(group_id, CALLOUT_GROUP))
         object_id = group_id
     if "footer" in spec and type(spec["footer"]) is not bool:
         invalid("Pass footer as true or false.")

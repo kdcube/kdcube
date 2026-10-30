@@ -45,6 +45,8 @@ def compile_composition(presentation, view, action, payload, *, image_sizes=None
     raw = next(s for s in presentation["slides"] if s["objectId"] == slide["ref"])
     if action == "set_alt_text":
         element = resolve_element(slide, payload.get("element"))
+        if element["kind"] == "group":
+            raise SlidesValidationError("slides_group_alt_text_unsupported", "Select a shape or image inside this ordinary group to edit its alt text.")
         updates = {key: payload[key] for key in ("title", "description") if key in payload}
         if not updates or any(not isinstance(value, str) or len(value) > 12000 for value in updates.values()):
             invalid("Pass title or description text of at most 12000 characters.")

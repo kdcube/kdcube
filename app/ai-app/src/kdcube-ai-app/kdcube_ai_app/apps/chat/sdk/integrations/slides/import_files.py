@@ -21,7 +21,7 @@ async def import_file_payload(ctx, payload, staging_root_factory):
         if str(ref).startswith(STAGED_REF_PREFIX):
             if not staging_root_factory:
                 raise SlidesValidationError("slides_import_file_missing", "The deployment's staging area is unavailable.")
-            filename, data = load_staged(staging_root_factory(), ref)
+            filename, data = load_staged(staging_root_factory(), ref, owner=ctx)
         else:
             async with materialized_conversation_file_ref(ref, tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id or "", conversation_id=ctx.conversation_id or "") as materialized:
                 path = Path(materialized["path"])

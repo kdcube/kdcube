@@ -38,7 +38,7 @@ async def image_payload(ctx, payload, *, staging_root_factory, provider_fetch_ur
         raise SlidesValidationError("slides_image_hosting_unavailable", "Configure the deployment's image staging area.")
     try:
         if str(file_ref).startswith(STAGED_REF_PREFIX):
-            filename, data = load_staged(root, file_ref)
+            filename, data = load_staged(root, file_ref, owner=ctx)
         else:
             async with materialized_conversation_file_ref(file_ref, tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id or "", conversation_id=ctx.conversation_id or "") as materialized:
                 path = Path(materialized["path"])
@@ -77,7 +77,7 @@ async def image_payload(ctx, payload, *, staging_root_factory, provider_fetch_ur
     staged = new_staged_ref("image" + extensions[mime])
     try:
         try:
-            save_staged(root, staged, data)
+            save_staged(root, staged, data, owner=ctx)
         except (OSError, ValueError) as exc:
             raise SlidesValidationError("slides_image_hosting_unavailable", "The deployment could not stage its owned image copy.") from exc
         try:
@@ -93,7 +93,7 @@ async def image_payload(ctx, payload, *, staging_root_factory, provider_fetch_ur
         yield result
     finally:
         try:
-            delete_staged(root, staged)
+            delete_staged(root, staged, owner=ctx)
         except Exception as exc:
             # Preserve the write outcome; the staging store's expiry is the
             # recovery path if filesystem cleanup is temporarily unavailable.

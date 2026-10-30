@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import io
 import json
@@ -9,6 +10,7 @@ from PIL import Image
 from kdcube_ai_app.apps.chat.sdk.integrations.google import slides_proxy as proxy
 from kdcube_ai_app.apps.chat.sdk.integrations.google.tests.test_slides_proxy import run
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.tests.test_composition import deck
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.prediction import predict
 
 @pytest.fixture
 def png_bytes():
@@ -62,6 +64,38 @@ def test_unsupported_public_image_is_refused_before_google_batch(monkeypatch, pn
     result = run(monkeypatch, "add_image", {"presentation_ref": "deck1", "slide": {"position": 1}, "image_uri": "https://example.test/image.webp"}, handler)
     assert result["error"]["code"] == "slides_image_unexpected_type"
     assert calls == ["GET"]
+
+
+@pytest.mark.parametrize("kind", ["image", "callout"])
+def test_frame_composition_succeeds_when_provider_refuses_group_alt_text(monkeypatch, png_bytes, kind):
+    state = deck()
+    posted = []
+    async def download(*args, **kwargs):
+        return png_bytes, "image/png"
+    monkeypatch.setattr(proxy, "_download", download)
+    def handler(request):
+        nonlocal state
+        if request.method == "GET":
+            return httpx.Response(200, json=state)
+        body = json.loads(request.content)
+        posted.append(body)
+        groups = {r["groupObjects"]["groupObjectId"] for r in body["requests"] if "groupObjects" in r}
+        for item in body["requests"]:
+            if item.get("updatePageElementAltText", {}).get("objectId") in groups:
+                return httpx.Response(400, json={"error": {"code": 400, "message": "Updating alt text on groups is unsupported"}})
+        state = predict(state, body["requests"])
+        state["revisionId"] = "r2"
+        return httpx.Response(200, json={"writeControl": {"requiredRevisionId": "r2"}, "replies": [{} for _ in body["requests"]]})
+    element = {"image": {"image_uri": "https://example.test/image.png"}} if kind == "image" else {"shape": "round_rectangle", "fill": "theme.accent1", "text": "Callout"}
+    result = run(monkeypatch, "compose", {"presentation_ref": "deck1", "slide": {"position": 1}, "cells": [{"at": [0, 0], "element": element}]}, handler)
+    assert result["ok"] and len(posted) == 1
+    groups = {r["groupObjects"]["groupObjectId"] for r in posted[0]["requests"] if "groupObjects" in r}
+    assert len(groups) == 1
+    assert not any(r.get("updatePageElementAltText", {}).get("objectId") in groups for r in posted[0]["requests"])
+    read = asyncio.run(proxy.execute_google_slides_operation(operation="get", access_token="fixture", payload={"presentation_ref": "deck1"}))
+    assert read["ok"]
+    logical = next(e for e in read["ret"]["snapshot"]["slides"][0]["elements"] if e["ref"] in groups)
+    assert logical["kind"] == kind
 
 
 def test_duplicate_notes_followup_failure_reports_new_slide_and_never_recreates(monkeypatch):
