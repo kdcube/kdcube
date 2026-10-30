@@ -131,6 +131,9 @@ def granted(monkeypatch, sent):
     async def _accounts(**_kwargs):
         return [ACCOUNT]
 
+    from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx
+    monkeypatch.setattr(comm_ctx, "get_current_user_identity", lambda: {"user_id": "u1", "tenant_id": "t", "project_id": "p"})
+
     monkeypatch.setattr(linkedin_tools, "resolve_connected_account_claim", _resolve)
     monkeypatch.setattr(linkedin_tools, "connected_linkedin_accounts", _accounts)
     monkeypatch.setattr(linkedin_tools.httpx, "AsyncClient", lambda **kw: _Client(sent))
@@ -390,7 +393,7 @@ async def test_publish_staged_reads_bytes_and_releases_the_slot(granted, sent, m
     root = tmp_path / "staging"
     root.mkdir()
     ref = file_staging.new_staged_ref("chart.png")
-    file_staging.save_staged(root, ref, PNG)
+    file_staging.save_staged(root, ref, PNG, owner={"user_id": "u1", "tenant": "t", "project": "p"})
     monkeypatch.setattr(linkedin_tools, "staging_root_for_service", lambda: root)
 
     result = await linkedin_tools.LinkedInTools().publish_staged(
@@ -402,7 +405,7 @@ async def test_publish_staged_reads_bytes_and_releases_the_slot(granted, sent, m
     assert body["content"] == {"media": {"id": "urn:li:image:IMG", "altText": "chart"}}
     # Staged bytes are single-use.
     with pytest.raises((FileNotFoundError, ValueError)):
-        file_staging.load_staged(root, ref)
+        file_staging.load_staged(root, ref, owner={"user_id": "u1", "tenant": "t", "project": "p"})
 
 
 @pytest.mark.asyncio
@@ -426,7 +429,7 @@ async def test_publish_staged_refuses_a_non_image(granted, sent, monkeypatch, tm
     root = tmp_path / "staging"
     root.mkdir()
     ref = file_staging.new_staged_ref("notes.pdf")
-    file_staging.save_staged(root, ref, b"%PDF-1.4")
+    file_staging.save_staged(root, ref, b"%PDF-1.4", owner={"user_id": "u1", "tenant": "t", "project": "p"})
     monkeypatch.setattr(linkedin_tools, "staging_root_for_service", lambda: root)
 
     result = await linkedin_tools.LinkedInTools().publish_staged(text="x", staged_refs=[ref])
@@ -597,7 +600,7 @@ async def test_staged_image_upload_consumes_auth_marker_before_returning(
     root = tmp_path / "staging"
     root.mkdir()
     ref = file_staging.new_staged_ref("chart.png")
-    file_staging.save_staged(root, ref, PNG)
+    file_staging.save_staged(root, ref, PNG, owner={"user_id": "u1", "tenant": "t", "project": "p"})
     monkeypatch.setattr(linkedin_tools, "staging_root_for_service", lambda: root)
     monkeypatch.setattr(connected_accounts, "refresh_connected_account_claim", _refresh)
     monkeypatch.setattr(

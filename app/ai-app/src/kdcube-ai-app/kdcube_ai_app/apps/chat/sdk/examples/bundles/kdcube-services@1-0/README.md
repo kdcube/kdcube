@@ -415,7 +415,9 @@ and legacy MCP clients on the same endpoint.
 For the complete ownership map, including conversation read-through storage,
 provider-owned bytes, temporary upload staging, Redis coordination, generated
 UI output, and the signing secret, see
-[docs/storage/README.md](docs/storage/README.md).
+[docs/storage/README.md](docs/storage/README.md). Upload slots retain their authenticated
+owner on the server; upload URLs carry a reference and expiry, and consuming
+actions verify the same user and deployment scope.
 
 ## Extension Rule
 

@@ -2528,7 +2528,7 @@ class DocsNamedServiceProvider(NamedServiceProvider):
         if file_ref.startswith(STAGED_REF_PREFIX):
             source_staged_ref = file_ref
             try:
-                filename, data = load_staged(root, file_ref)
+                filename, data = load_staged(root, file_ref, owner=ctx)
             except (FileNotFoundError, ValueError) as exc:
                 return None, _image_refusal(
                     request,
@@ -2582,7 +2582,7 @@ class DocsNamedServiceProvider(NamedServiceProvider):
         # for that media type.
         staged_ref = new_staged_ref("image" + DOCS_IMAGE_EXTENSIONS[media_type])
         try:
-            save_staged(root, staged_ref, data)
+            save_staged(root, staged_ref, data, owner=ctx)
         except ValueError as exc:
             return None, _image_refusal(
                 request,
@@ -2596,7 +2596,7 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                 if not ref:
                     continue
                 try:
-                    delete_staged(root, ref)
+                    delete_staged(root, ref, owner=ctx)
                 except Exception:
                     LOGGER.warning("docs staged image not removed: %s", ref)
 

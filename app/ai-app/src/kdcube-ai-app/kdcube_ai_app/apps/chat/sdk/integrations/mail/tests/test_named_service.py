@@ -792,7 +792,7 @@ async def test_request_upload_returns_slot_and_send_consumes_staged_ref(tmp_path
     assert slot.ret["extra"]["upload_url"].startswith("https://runtime.test/upload")
 
     # the client PUTs bytes to upload_url out-of-band; simulate the route's write
-    save_staged(tmp_path, staged_ref, b"png-bytes")
+    save_staged(tmp_path, staged_ref, b"png-bytes", owner=_ctx())
 
     captured: dict[str, Any] = {}
 

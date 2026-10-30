@@ -431,9 +431,11 @@ paths:
       tags: [Signed Files]
       summary: Upload one integration file into short-lived staging.
       description: |
-        Session-less raw-byte upload. A prior authorized named-service call
-        mints a signed upload token bound to the exact `staged:` ref and user.
-        The staged ref is single-use and expires through the staging sweep.
+        Session-less raw-byte upload into an existing owned slot. A prior
+        authorized request_upload records the user, tenant and project on the
+        server and mints a token containing only fi_ref, exp and v. The later
+        consuming action verifies the same authenticated owner. Slots expire
+        after one hour and are deleted after successful consumption.
       operationId: integration_file_upload
       security:
         - SignedUploadToken: []
@@ -455,6 +457,7 @@ paths:
               schema: { $ref: "#/components/schemas/StagedUploadResult" }
         "400": { $ref: "#/components/responses/JsonError" }
         "403": { $ref: "#/components/responses/JsonError" }
+        "404": { $ref: "#/components/responses/JsonError" }
         "413": { $ref: "#/components/responses/JsonError" }
 
   /bundles/{tenant}/{project}/{bundle_id}/public/integration_file_download:
