@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import io
 import json
 import zipfile
@@ -87,7 +88,7 @@ def test_invalid_file_image_is_refused_before_credentials_or_google(tmp_path):
     assert not response.ok and response.error.code == "slides_image_unexpected_type"
 
 
-def test_file_image_honors_shared_staging_bound_before_provider_execution(tmp_path, monkeypatch):
+def test_oversized_staged_image_is_unavailable_before_provider_execution(tmp_path, monkeypatch):
     from kdcube_ai_app.apps.chat.sdk.integrations import file_staging
     source = staged_png(tmp_path, (4, 2))
     monkeypatch.setattr(file_staging, "MAX_STAGED_FILE_BYTES", 1)
@@ -95,7 +96,30 @@ def test_file_image_honors_shared_staging_bound_before_provider_execution(tmp_pa
         pytest.fail("an oversized file must not reach provider execution")
     provider = make_slides_named_service_provider(execute_operation=execute, staging_root_factory=lambda: tmp_path, provider_fetch_url_factory=lambda *args: pytest.fail("must not mint"))
     response = asyncio.run(provider.dispatch(OWNER, NamedServiceRequest(operation="object.action", namespace="slides", action="add_image", object_ref="slides:google:account:presentation:deck1", payload=action_payload("add_image", source))))
+    assert not response.ok and response.error.code == "slides_image_file_missing"
+
+
+def test_conversation_image_honors_shared_staging_bound_before_provider_execution(tmp_path, monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations import file_staging, inline_files
+    stream = io.BytesIO()
+    Image.new("RGB", (4, 2)).save(stream, format="PNG")
+    path = tmp_path / "conversation.png"
+    path.write_bytes(stream.getvalue())
+    source = "conv:fi:conversation-image"
+    ctx = NamedServiceContext(user_id="user", tenant="tenant", project="project", conversation_id="conversation")
+    @contextlib.asynccontextmanager
+    async def materialize(ref, **kwargs):
+        assert ref == source
+        assert kwargs == {"user_id": "user", "tenant": "tenant", "project": "project", "conversation_id": "conversation"}
+        yield {"path": str(path)}
+    monkeypatch.setattr(inline_files, "materialized_conversation_file_ref", materialize)
+    monkeypatch.setattr(file_staging, "MAX_STAGED_FILE_BYTES", 1)
+    async def execute(**kwargs):
+        pytest.fail("an oversized conversation file must not reach provider execution")
+    provider = make_slides_named_service_provider(execute_operation=execute, staging_root_factory=lambda: tmp_path / "staging", provider_fetch_url_factory=lambda *args: pytest.fail("must not mint"))
+    response = asyncio.run(provider.dispatch(ctx, NamedServiceRequest(operation="object.action", namespace="slides", action="add_image", object_ref="slides:google:account:presentation:deck1", payload=action_payload("add_image", source))))
     assert not response.ok and response.error.code == "slides_image_too_large"
+    assert not (tmp_path / "staging").exists()
 
 
 @pytest.mark.parametrize("field", ["user_id", "tenant", "project"])
