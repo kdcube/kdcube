@@ -4940,7 +4940,7 @@ def test_provider_backed_config_import_applies_all_scopes_without_staging_secret
         (target_config / "assembly.yaml").read_text(encoding="utf-8")
     )
     assert applied_assembly["platform"]["ref"] == "incoming"
-    assert applied_assembly["secrets"] == target_assembly["secrets"]
+    assert applied_assembly["secrets"] == {**target_assembly["secrets"], "url": "http://kdcube-secrets:7777"}
     output_text = capsys.readouterr().out
     assert "user-import-canary" not in output_text
 

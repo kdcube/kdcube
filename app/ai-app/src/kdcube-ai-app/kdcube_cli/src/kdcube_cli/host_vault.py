@@ -180,6 +180,23 @@ def _valid_runtime_policy(policy: object, *, namespaces: list[str], encoded: str
     return True
 
 
+def _refuse_fixed_runtime_policy(provider: str, policy: str) -> None:
+    if provider == "secrets-service" and policy:
+        raise HostVaultConfigurationError(
+            "secrets.runtime.scope_policy names fixed credential digests, but this runtime "
+            "mints new service tokens on every start, so it cannot match; omit scope_policy "
+            "to use the policy computed per start (explicit namespaces without a policy stay closed)"
+        )
+
+
+def runtime_configuration_from_assembly(assembly: Mapping[str, object]) -> dict[str, object]:
+    """Validate local custody composition without host-vault startup preflight."""
+    secrets = _mapping(assembly.get("secrets"))
+    runtime = _runtime_configuration(secrets)
+    _refuse_fixed_runtime_policy(_provider_name(secrets.get("provider")), str(runtime.get("runtime_scope_policy") or ""))
+    return runtime
+
+
 def config_from_assembly(assembly: Mapping[str, object]) -> HostVaultRuntimeConfig:
     secrets = _mapping(assembly.get("secrets"))
     service = _mapping(secrets.get("service"))
@@ -205,7 +222,7 @@ def config_from_assembly(assembly: Mapping[str, object]) -> HostVaultRuntimeConf
         server_name=_text(vault.get("server_name")),
         identity_dir=identity_dir,
         exec_network_mode=_text(exec_config.get("py_code_exec_network_mode")),
-        **_runtime_configuration(secrets),
+        **runtime_configuration_from_assembly(assembly),
     )
     validate_configuration(config, check_identity=False)
     return config
@@ -217,12 +234,7 @@ def validate_configuration(
     check_identity: bool,
     workdir: Path | None = None,
 ) -> None:
-    if config.provider == "secrets-service" and config.runtime_scope_policy:
-        raise HostVaultConfigurationError(
-            "secrets.runtime.scope_policy names fixed credential digests, but this runtime "
-            "mints new service tokens on every start, so it cannot match; omit scope_policy "
-            "to use the policy computed per start (explicit namespaces without a policy stay closed)"
-        )
+    _refuse_fixed_runtime_policy(config.provider, config.runtime_scope_policy)
     if config.backend not in {EPHEMERAL_BACKEND, HOST_VAULT_BACKEND}:
         raise HostVaultConfigurationError(
             "secrets.service.backend must be 'ephemeral' or 'host-vault'"
@@ -320,7 +332,7 @@ def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_d
     location), never the container path. Processors already mount ``/config``; only the secrets service
     binds the host root, at the container root.
     """
-    runtime = _runtime_configuration(_mapping(assembly.get("secrets")))
+    runtime = runtime_configuration_from_assembly(assembly)
     container_root = PurePosixPath(str(runtime.get("runtime_root") or DEFAULT_CONTAINER_RUNTIME_ROOT))
     try:
         relative = container_root.relative_to(CONTAINER_CONFIG_DIR)

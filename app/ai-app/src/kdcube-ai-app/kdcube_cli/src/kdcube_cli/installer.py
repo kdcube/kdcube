@@ -2685,15 +2685,17 @@ RUNTIME_PROJECTION_KEYS = (
 
 def _default_runtime_scope_overrides(assembly: dict, overrides: Dict[str, str]) -> Dict[str, str]:
     """Grant defaults to this launch's proc reader and admin writer only."""
-    config = host_vault_config_from_assembly(assembly)
+    from .host_vault import runtime_configuration_from_assembly
+
+    config = runtime_configuration_from_assembly(assembly)
     result = {"KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": ""}
-    if not config.runtime_defaulted:
+    if not config.get("runtime_defaulted"):
         return result
     read_token, write_token = overrides.get("SECRETS_TOKEN_PROC"), overrides.get("SECRETS_ADMIN_TOKEN")
     if not read_token or not write_token:
         return result
     result["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"] = default_runtime_scope_policy(
-        read_token=read_token, write_token=write_token, namespaces=config.runtime_namespaces)
+        read_token=read_token, write_token=write_token, namespaces=config["runtime_namespaces"])
     return result
 
 
@@ -2703,7 +2705,8 @@ def prepare_runtime_secrets(config_dir: Path) -> dict:
 
     assembly_path = config_dir / "assembly.yaml"
     assembly = load_release_descriptor(assembly_path)
-    host_vault_config_from_assembly(assembly)  # Refuse fixed digests before writing.
+    # Validate only custody composition here; actual start owns vault identity
+    # and network checks. Fixed digest policies still refuse before any write.
     runtime = host_vault.runtime_compose_environment(assembly, host_config_dir=config_dir.resolve())
     root = Path(runtime.get("HOST_KDCUBE_RUNTIME_SECRETS_ROOT", str(config_dir / "secrets")))
     root.mkdir(mode=0o700, parents=True, exist_ok=True)

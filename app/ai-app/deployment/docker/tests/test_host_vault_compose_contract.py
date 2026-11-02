@@ -162,12 +162,18 @@ def test_local_compose_mounts_identity_only_into_secrets_broker():
         assert serialized_broker.count("/run/kdcube-host-vault-identity/") == 3
         # W670 K2: the runtime-secrets folder is the broker's one writable bind (it stores runtime
         # records there); every identity file stays read-only.
-        runtime_bind = "${KDCUBE_SECRETS_RUNTIME_ROOT:-/run/kdcube-runtime-secrets}"
-        identity = [item for item in broker["volumes"] if item.get("target") != runtime_bind]
+        runtime_bind = "${KDCUBE_SECRETS_RUNTIME_ROOT:-/config/secrets}"
+        assert len(broker["volumes"]) == 5
+        identity = [item for item in broker["volumes"]
+                    if item.get("target", "").startswith("/run/kdcube-host-vault-identity/")]
         assert len(identity) == 3
         assert all(item["read_only"] is True for item in identity)
-        assert [item.get("read_only") for item in broker["volumes"]
-                if item.get("target") == runtime_bind] == [None]
+        assert {"type": "bind",
+                "source": "${HOST_KDCUBE_RUNTIME_SECRETS_ROOT:-${KDCUBE_CONFIG_DIR:-./config}/secrets}",
+                "target": runtime_bind, "bind": {"create_host_path": False}} in broker["volumes"]
+        assert {"type": "bind", "source": "${KDCUBE_CONFIG_DIR:-./config}/assembly.yaml",
+                "target": "/config/assembly.yaml", "read_only": True,
+                "bind": {"create_host_path": False}} in broker["volumes"]
         assert broker["healthcheck"]["test"][0:2] == ["CMD", "python"]
         assert services["chat-ingress"]["depends_on"]["kdcube-secrets"] == {
             "condition": "service_healthy"

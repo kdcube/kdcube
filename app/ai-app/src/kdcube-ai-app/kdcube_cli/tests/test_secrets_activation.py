@@ -318,6 +318,7 @@ def test_interrupted_activation_leaves_secret_free_marker_and_recovery_is_repeat
     assembly = yaml.safe_load((config_dir / "assembly.yaml").read_text())
     assert assembly["secrets"] == {
         "provider": "secrets-file",
+        "url": "http://kdcube-secrets:7777",
         "service": {"backend": "ephemeral"},
     }
     assert recovery_runtime.events == [
@@ -425,6 +426,7 @@ def test_compose_runtime_uses_one_token_overlay_and_secret_safe_probe(
 ):
     env_file = tmp_path / ".env"
     env_file.write_text("BASE=1\n", encoding="utf-8")
+    (tmp_path / "assembly.yaml").write_text("secrets: {provider: secrets-service, url: 'http://kdcube-secrets:7777'}\n")
     docker_dir = tmp_path / "docker"
     docker_dir.mkdir()
     calls: list[tuple[list[str], dict[str, object]]] = []

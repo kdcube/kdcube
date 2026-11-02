@@ -2927,7 +2927,6 @@ def _apply_platform_config_descriptors(
         if isinstance(current.get("secrets"), dict):
             incoming["secrets"] = current["secrets"]
     try:
-        installer_mod.host_vault_config_from_assembly(incoming)
         host_runtime_compose_environment(incoming, host_config_dir=config_dir.resolve())
     except HostVaultConfigurationError as exc:
         raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
