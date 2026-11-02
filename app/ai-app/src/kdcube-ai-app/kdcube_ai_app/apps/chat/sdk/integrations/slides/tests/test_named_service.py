@@ -247,3 +247,15 @@ def test_file_ref_uses_owned_copy_and_cleans_it_after_provider_failure(tmp_path,
     assert response.error.code == "google_slides_rate_limited"
     assert load_staged(tmp_path,source, owner=ctx)[1] == buffer.getvalue()
     with pytest.raises((FileNotFoundError,ValueError)):load_staged(tmp_path,minted[0], owner=ctx)
+
+
+@pytest.mark.parametrize("target", ["slides:google:account:presentation:deck", "slides:google:account:slide:slide_a:deck"])
+def test_import_schema_and_refusal_name_the_targetless_call_route(target):
+    assert SLIDES_SCHEMA["actions"]["import"]["object_ref"] == "none"
+    assert "named_services_call" in SLIDES_SCHEMA["actions"]["import"]["description"]
+    async def execute(**kwargs):
+        raise AssertionError("a target-bearing import must not reach the provider")
+    result = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action="import", object_ref=target, payload={"source_file": "source"})))
+    assert result.error.code == "slides_import_target_forbidden"
+    assert "named_services_call" in result.error.message
+    assert "without object_ref" in result.error.message

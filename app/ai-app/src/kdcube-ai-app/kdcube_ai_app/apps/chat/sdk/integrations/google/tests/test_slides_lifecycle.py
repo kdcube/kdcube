@@ -112,7 +112,8 @@ def test_lifecycle_marks_only_trashed_metadata_and_reports_geometry_when_availab
     assert result["ok"] and result["ret"]["trashed"] == (operation == "trash")
     assert calls.count("PATCH") == (0 if preview else 1)
     if not was_trashed or not preview:
-        assert result["ret"]["fit"]
+        assert result["ret"]["diagnostics_summary"]["slides"] == 1
+        assert result["ret"]["fit"] == []  # metadata changes touch no slide content
     else:
         assert result["ret"]["geometry_unavailable"] == "trashed_presentation"
 

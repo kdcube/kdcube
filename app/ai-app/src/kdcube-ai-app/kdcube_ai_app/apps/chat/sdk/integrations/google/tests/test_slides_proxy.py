@@ -151,7 +151,8 @@ def test_template_preview_is_read_only(monkeypatch):
         return httpx.Response(200, json=deck())
     result = run(monkeypatch, "fill_template", {"source": "deck", "title": "Copy", "values": {"NAME": "Ada"}, "preview": True}, handler)
     assert result["ok"] and result["ret"]["preview"]
-    assert result["ret"]["fit_predicted"] and result["ret"]["fit"]
+    assert result["ret"]["diagnostics_summary"]["predicted"]
+    assert "fit" not in result["ret"]
 
 
 def test_unreadable_template_is_actionable_and_does_not_create(monkeypatch):

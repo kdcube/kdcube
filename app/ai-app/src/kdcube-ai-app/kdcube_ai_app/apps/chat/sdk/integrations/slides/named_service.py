@@ -172,7 +172,7 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
         payload = dict(request.payload or {})
         if action == "import":
             if request.object_ref:
-                raise SlidesValidationError("slides_import_target_forbidden", "Import creates a new presentation. Pass its Drive source_file or deployment file_ref without a target object_ref.")
+                raise SlidesValidationError("slides_import_target_forbidden", "Import creates a new presentation. Call named_services_call in namespace slides with operation object.action and action import, without object_ref; pass its Drive source_file or deployment file_ref in payload.")
             account = str(payload.get("account_id") or request.filters.get("account_id") or "")
             source = payload.get("source_file", payload.get("source"))
             if str(source or "").startswith("slides:"):

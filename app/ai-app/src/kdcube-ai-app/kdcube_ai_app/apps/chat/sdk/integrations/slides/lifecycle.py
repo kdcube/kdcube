@@ -83,7 +83,7 @@ async def import_presentation(api, payload):
         data, mime = import_bytes(payload)
         metadata["name"] = validate_title(payload.get("title"))
         if payload.get("preview"):
-            return {"preview": True, "title": metadata["name"], "source_format": payload["source_format"], "byte_size": len(data), "fit": [], "overlaps": [], "off_slide": []}
+            return {"preview": True, "title": metadata["name"], "source_format": payload["source_format"], "byte_size": len(data), "diagnostics_summary": {"available": False, "reason": "import_preview"}}
         boundary = "slides_"+uuid.uuid4().hex
         content = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode()+json.dumps(metadata).encode()+f"\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n".encode()+data+f"\r\n--{boundary}--\r\n".encode())
         result = await api.request("POST", "https://www.googleapis.com/upload/drive/v3/files", operation="import", mutating=True, params={"uploadType": "multipart", "fields": "id,name,mimeType"}, headers={"Content-Type": f"multipart/related; boundary={boundary}"}, content=content)
@@ -94,7 +94,7 @@ async def import_presentation(api, payload):
             raise SlidesValidationError("slides_import_format_unsupported", "Choose a PPTX, ODP or native Slides file in Drive.")
         metadata["name"] = validate_title(payload.get("title", original.get("name")))
         if payload.get("preview"):
-            return {"preview": True, "source_file": source_id, "title": metadata["name"], "fit": [], "overlaps": [], "off_slide": []}
+            return {"preview": True, "source_file": source_id, "title": metadata["name"], "diagnostics_summary": {"available": False, "reason": "import_preview"}}
         result = await api.request("POST", f"{DRIVE_API}/files/{source_id}/copy", operation="import", mutating=True, params={"fields": "id,name,mimeType"}, json=metadata)
     if not result.get("id"):
         raise SlidesValidationError("google_slides_invalid_response", "Google accepted import but returned no identity. Inspect recent files before importing again.", details={"outcome_unknown": True})
@@ -118,5 +118,5 @@ async def trash_or_restore(api, operation, payload, *, diagnostics):
         await api.request("PATCH", f"{DRIVE_API}/files/{deck_id}", operation=operation, mutating=True, json={"trashed": trashed}, params={"fields": "id,trashed"})
         if not trashed:
             current = await api.get(deck_id)
-    flags = await diagnostics(api, current, predicted=bool(payload.get("preview"))) if current else {"fit": [], "overlaps": [], "off_slide": [], "geometry_unavailable": "trashed_presentation"}
+    flags = await diagnostics(api, current, predicted=bool(payload.get("preview"))) if current else {"diagnostics_summary": {"available": False, "reason": "trashed_presentation"}, "geometry_unavailable": "trashed_presentation"}
     return {"presentation_id": deck_id, "title": metadata.get("name", ""), "trashed": trashed, "before_trashed": bool(metadata.get("trashed")), "preview": bool(payload.get("preview")), **flags}

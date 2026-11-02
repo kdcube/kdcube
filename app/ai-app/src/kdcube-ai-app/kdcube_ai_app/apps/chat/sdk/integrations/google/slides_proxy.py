@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.lifecycle import CREATED_PR
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.composition import COMPOSITION_ACTIONS, compile_composition
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.reference import duplicate_slide_requests
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.media import image_sources
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.mutation_diagnostics import mutation_diagnostics, touched_slide_ids
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.templates import replace_text_requests, image_requests, template_requests
 
 SLIDES_API = "https://slides.googleapis.com/v1"
@@ -194,12 +195,9 @@ async def validate_image_uri(client, uri):
     return {"width": measured["width"], "height": measured["height"]}
 
 
-async def _fit_flags(api, presentation, *, predicted=False):
-    view=await api.all_snapshot(presentation)
-    flags=[{"slide":s["ref"],"element":e["ref"],**e["fit"]} for s in view["slides"] for e in s["elements"] if e.get("fit")]
-    overlaps = [{"slide": s["ref"], "elements": pair} for s in view["slides"] for pair in s["overlaps"]]
-    off_slide = [{"slide": s["ref"], "element": ref} for s in view["slides"] for ref in s["off_slide"]]
-    return {"fit":flags[:1000],"fit_truncated":len(flags)>1000,"fit_predicted":predicted, "overlaps": overlaps[:1000], "off_slide": off_slide[:1000], "geometry_diagnostics_truncated": len(overlaps)>1000 or len(off_slide)>1000 or any(s["geometry_diagnostics_truncated"] for s in view["slides"])}
+async def _fit_flags(api, presentation, *, touched=(), predicted=False, summary_only=False):
+    view = await api.all_snapshot(presentation)
+    return mutation_diagnostics(view, touched=touched, predicted=predicted, summary_only=summary_only)
 
 
 async def _run(api, operation, payload):
@@ -223,13 +221,13 @@ async def _run(api, operation, payload):
     if operation == "create":
         title = _title(payload.get("title"))
         if payload.get("preview"):
-            return {"preview": True, "title": title, "fit": [], "overlaps": [], "off_slide": []}
+            return {"preview": True, "title": title, "diagnostics_summary": {"slides": 0, "fit": {"ok": 0, "tight": 0, "overflow_risk": 0}, "overlaps": 0, "off_slide": 0}}
         result = await api.request("POST", f"{SLIDES_API}/presentations", operation="create", mutating=True, json={"title": title})
         if not result.get("presentationId"):
             raise SlidesValidationError("google_slides_invalid_response", "Google accepted creation but returned no identity. Inspect recent presentations before creating another deck.", details={"outcome_unknown":True})
         api.created_id=result["presentationId"]
         await mark_created(api, api.created_id)
-        return {"presentation_id": result["presentationId"], "title": title, "fit": [], "overlaps": [], "off_slide": []}
+        return {"presentation_id": result["presentationId"], "title": title, "diagnostics_summary": {"slides": 0, "fit": {"ok": 0, "tight": 0, "overflow_risk": 0}, "overlaps": 0, "off_slide": 0}}
     if operation in ("trash", "restore"):
         return await trash_or_restore(api, operation, payload, diagnostics=_fit_flags)
     if operation == "import":
@@ -237,7 +235,7 @@ async def _run(api, operation, payload):
         if imported.get("preview"):
             return imported
         native = await api.get(imported["presentation_id"])
-        return {**imported, "revision_id": native.get("revisionId"), **await _fit_flags(api, native)}
+        return {**imported, "revision_id": native.get("revisionId"), **await _fit_flags(api, native, summary_only=True)}
     deck_id = presentation_id(payload.get("presentation_ref") or payload.get("source"))
     if operation == "export":
         await api.get(deck_id)  # Native-only, including direct adapter callers.
@@ -285,10 +283,10 @@ async def _run(api, operation, payload):
     if operation == "copy":
         _title(payload.get("title"))
         if payload.get("preview"):
-            return {"preview": True, "source_presentation_id": deck_id, "title": payload["title"], **await _fit_flags(api,presentation,predicted=True)}
+            return {"preview": True, "source_presentation_id": deck_id, "title": payload["title"], **await _fit_flags(api,presentation,predicted=True,summary_only=True)}
         copied=await api.copy(deck_id,payload)
         copied_presentation=await api.get(copied["presentation_id"])
-        return {**copied,"revision_id":copied_presentation.get("revisionId"), **await _fit_flags(api,copied_presentation)}
+        return {**copied,"revision_id":copied_presentation.get("revisionId"), **await _fit_flags(api,copied_presentation,summary_only=True)}
     if operation not in ("fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS, *COMPOSITION_ACTIONS, "duplicate_slide_like"):
         raise SlidesValidationError("slides_unsupported_operation", "Choose an operation declared by the Slides schema.")
     image_sizes = {}
@@ -318,7 +316,9 @@ async def _run(api, operation, payload):
         else:
             requests, plan = image_requests(view, payload), {"tag": payload.get("tag", payload.get("text"))}
         if payload.get("preview"):
-            return {"preview": True, "presentation_id": deck_id, "title": presentation.get("title", ""), "changes": plan, "request_count": len(requests), "revision_id": presentation.get("revisionId"), **await _fit_flags(api,_predict(presentation,requests),predicted=True)}
+            predicted = _predict(presentation, requests)
+            touched = touched_slide_ids(presentation, predicted, requests)
+            return {"preview": True, "presentation_id": deck_id, "title": presentation.get("title", ""), "changes": plan, "request_count": len(requests), "revision_id": presentation.get("revisionId"), **await _fit_flags(api,predicted,touched=touched,predicted=True,summary_only=operation == "fill_template")}
         for request in requests:
             if "replaceAllShapesWithImage" in request:
                 await validate_image_uri(api.client, request["replaceAllShapesWithImage"]["imageUrl"])
@@ -344,7 +344,7 @@ async def _run(api, operation, payload):
             followup = await api.write_batches(deck_id, notes, written["revision_id"], operation=operation)
             written = {"revision_id": followup["revision_id"], "replies": written["replies"]+followup["replies"]}
             after = await api.get(deck_id)
-        return {"presentation_id": deck_id, "title": after.get("title", ""), "revision_id": written["revision_id"], "observed_revision_id":after.get("revisionId"), "changes": plan, **await _fit_flags(api,after), "replies": written["replies"]}
+        return {"presentation_id": deck_id, "title": after.get("title", ""), "revision_id": written["revision_id"], "observed_revision_id":after.get("revisionId"), "changes": plan, **await _fit_flags(api,after,touched=touched_slide_ids(presentation,after,requests),summary_only=operation == "fill_template"), "replies": written["replies"]}
 
 
 async def execute_google_slides_operation(*, operation, access_token, payload=None):

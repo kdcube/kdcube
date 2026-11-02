@@ -60,7 +60,7 @@ _INSTRUCTIONS = {
     "add_image": "Pass slide, exactly one public HTTPS image_uri or deployment file_ref, and a region, single relative anchor or element to replace. PNG/JPEG/GIF, under 50 MB and at most 25 megapixels. The adapter validates bytes and computes an aspect-preserving box. Pass preview and revision_id; inspect geometry warnings.",
     "set_alt_text": "Pass slide and element selectors plus title or description. Use human-readable accessibility content. Pass preview and revision_id.",
     "duplicate_slide_like": "Pass like as one reference-slide selector, optional before/after selector and replacements by title/subtitle/body/body_2, notes or selected images. Unnamed content remains and is listed in kept_from_reference. Pass preview and revision_id; inspect fit before extending the deck.",
-    "import": "Create a new presentation without target object_ref. Pass one Drive source_file (ID/link) or deployment file_ref, optional title and parent_id. Deployment PPTX/ODP uploads are bounded to 5 MB and validated before Google. Preview converts nothing. An account-bound source ref must match the selected account.",
+    "import": "Call named_services_call in namespace slides with operation object.action and action import, without object_ref, to create a new presentation. Pass one Drive source_file (ID/link) or deployment file_ref, optional title and parent_id. Deployment PPTX/ODP uploads are bounded to 5 MB and validated before Google. Preview converts nothing. An account-bound source ref must match the selected account.",
     "trash": "Address a presentation carrying this service's private creation marker and grant slides:delete. Preview before moving it to Drive trash. Older unmarked decks are refused; the Drive metadata write is not an atomic Slides revision compare-and-swap.",
     "restore": "Address a marked service-created presentation and grant slides:delete. Preview before restoring it from Drive trash. Older unmarked decks are refused; geometry may be unavailable while the deck is trashed.",
 }
@@ -71,10 +71,14 @@ SLIDES_SCHEMA = {
     "operations": {name: {**meta, "instruction": SLIDES_INTRO} for name,meta in SLIDES_PRESENTATION.items() if "." in name},
     "actions": {name: {"label": SLIDES_PRESENTATION[name]["label"], "description": _INSTRUCTIONS[name]} for name in SLIDES_ACTIONS},
     "selectors": {"slide": ["position", "title", "title_contains", "tag", "kind", "ref", "last"], "element": ["role", "text_contains", "alt_text", "kind", "index", "ref"]},
+    "diagnostics": "Mutation results include diagnostics_summary for the whole deck and detailed fit, overlaps and off_slide only for touched slides. Whole-deck creations (create, import, copy, fill_template) return the summary only. Read object.get for full per-element diagnostics. Preview summaries are predicted; import previews report diagnostics unavailable before conversion.",
     "pagination": "object.get filters.start_slide (1-based) and slide_limit (1..50); next_slide names the next range. Search/list uses cursor/next_cursor.",
     "connected_account_claims": ["slides:read", "slides:write", "slides:delete"],
     "limitations": ["Animations, transitions and master/theme editing are outside this service.", "Fit flags are geometric estimates. Text written through the API does not automatically shrink.", "New tables/videos, comments and typed raw requests follow in later stages.", "Trash/restore refuses decks created before the service creation marker existed."],
 }
+
+
+SLIDES_SCHEMA["actions"]["import"]["object_ref"] = "none"
 
 
 for _action in ("compose", "add_shape", "add_image"):

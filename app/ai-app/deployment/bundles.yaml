@@ -2138,6 +2138,17 @@ bundles:
                     description: Find, read, create, copy and edit connected presentations.
                     authority_id: delegated_client
                     tools:
+                      call:
+                        label: Import a presentation
+                        description: Create a new presentation from a Drive source or deployment file without a target object_ref.
+                        operations:
+                          object.action.import:
+                            label: Import a presentation
+                            description: Convert a PPTX or ODP source into a new native presentation.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
                       about:
                         operation: provider.about
                         label: About presentations

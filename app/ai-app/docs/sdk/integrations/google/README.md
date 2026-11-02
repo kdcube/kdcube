@@ -27,6 +27,8 @@ Use these docs in this order:
   grant, and verification.
 - [Public Reachability Of Provider-Fetched Files](../public-reachability-README.md) -
   staged image `file_ref` serving, public-origin configuration and deployment refusals.
+- [Connected Presentations](slides-README.md) - targetless imports, slide edits,
+  and mutation diagnostics with deck-wide counts.
 
 The external operator setup (Google Cloud project, OAuth client, redirect URIs,
 and per-service API enablement) lives in the bundle-local
