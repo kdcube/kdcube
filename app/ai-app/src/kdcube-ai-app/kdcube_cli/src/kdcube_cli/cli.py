@@ -79,6 +79,7 @@ from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
     materialize_service_url,
     runtime_compose_environment as host_runtime_compose_environment,
+    runtime_secrets_paths,
 )
 from kdcube_cli.host_vault import (
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
@@ -2655,12 +2656,12 @@ def _runtime_secrets_host_root(config_dir: Path) -> Path:
     else ``<config folder>/secrets`` (W670 K2), resolved exactly as the installer mounts it."""
     assembly = installer_mod.load_release_descriptor_soft(config_dir / "assembly.yaml")
     try:
-        runtime_env = host_runtime_compose_environment(
+        _, host_root = runtime_secrets_paths(
             assembly, host_config_dir=Path(config_dir).expanduser().resolve()
         )
     except HostVaultConfigurationError as exc:
         raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
-    return Path(runtime_env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"])
+    return host_root
 
 
 _USER_PROPS_EXPORT_SCRIPT = """

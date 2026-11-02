@@ -323,8 +323,10 @@ CONTAINER_CONFIG_DIR = PurePosixPath("/config")
 DEFAULT_CONTAINER_RUNTIME_ROOT = CONTAINER_CONFIG_DIR / "secrets"
 
 
-def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_dir: str | Path) -> dict[str, str]:
-    """W670 K2: the runtime-secrets folder for Compose, on every provider.
+def runtime_secrets_paths(
+    assembly: Mapping[str, object], *, host_config_dir: str | Path,
+) -> tuple[PurePosixPath, Path]:
+    """Resolve custody paths for folder creation, Compose and export alike.
 
     Operator, 2026-10-09: the folder lives "in config folder. make the folder secrets". The container root is
     ``secrets.runtime.root`` or, when absent, ``/config/secrets``; it must lie inside the container config
@@ -332,7 +334,7 @@ def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_d
     location), never the container path. Processors already mount ``/config``; only the secrets service
     binds the host root, at the container root.
     """
-    runtime = runtime_configuration_from_assembly(assembly)
+    runtime = _runtime_configuration(_mapping(assembly.get("secrets")))
     container_root = PurePosixPath(str(runtime.get("runtime_root") or DEFAULT_CONTAINER_RUNTIME_ROOT))
     try:
         relative = container_root.relative_to(CONTAINER_CONFIG_DIR)
@@ -343,11 +345,18 @@ def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_d
     host_config = Path(host_config_dir).expanduser()
     if not host_config.is_absolute():
         raise HostVaultConfigurationError("the host config folder must be an absolute path")
+    return container_root, host_config.joinpath(*relative.parts)
+
+
+def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_dir: str | Path) -> dict[str, str]:
+    """Only non-conventional roots require Compose mount overrides."""
+    runtime_configuration_from_assembly(assembly)
+    container_root, host_root = runtime_secrets_paths(assembly, host_config_dir=host_config_dir)
     if container_root == DEFAULT_CONTAINER_RUNTIME_ROOT:
         return {}
     return {
         "KDCUBE_SECRETS_RUNTIME_ROOT": str(container_root),
-        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": str(host_config.joinpath(*relative.parts)),
+        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": str(host_root),
     }
 
 

@@ -2708,7 +2708,7 @@ def prepare_runtime_secrets(config_dir: Path) -> dict:
     # Validate only custody composition here; actual start owns vault identity
     # and network checks. Fixed digest policies still refuse before any write.
     runtime = host_vault.runtime_compose_environment(assembly, host_config_dir=config_dir.resolve())
-    root = Path(runtime.get("HOST_KDCUBE_RUNTIME_SECRETS_ROOT", str(config_dir / "secrets")))
+    _, root = host_vault.runtime_secrets_paths(assembly, host_config_dir=config_dir.resolve())
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if host_vault.materialize_service_url(assembly):
         write_descriptor_text(assembly_path, yaml.safe_dump(assembly, sort_keys=False))
@@ -4922,10 +4922,11 @@ def gather_configuration(
     try:
         runtime_env = _host_vault.runtime_compose_environment(
             assembly_data, host_config_dir=Path(ctx.config_dir).expanduser().resolve())
+        _, host_runtime_root = _host_vault.runtime_secrets_paths(
+            assembly_data, host_config_dir=Path(ctx.config_dir).expanduser().resolve())
     except HostVaultConfigurationError as exc:
         raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
     # Created private (0700), as the runtime store requires; an existing folder is never re-moded here.
-    host_runtime_root = Path(runtime_env.get("HOST_KDCUBE_RUNTIME_SECRETS_ROOT", str(ctx.config_dir / "secrets")))
     if host_runtime_root.exists() and not host_runtime_root.is_dir():
         raise ValueError(f"Host runtime secrets root must be a directory path, got existing file: {host_runtime_root}")
     host_runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)

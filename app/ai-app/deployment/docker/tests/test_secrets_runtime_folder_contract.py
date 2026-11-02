@@ -70,6 +70,17 @@ def test_a_declared_root_inside_config_maps_to_the_host_config_folder():
     assert set(env) == {"KDCUBE_SECRETS_RUNTIME_ROOT", "HOST_KDCUBE_RUNTIME_SECRETS_ROOT"}
 
 
+@pytest.mark.parametrize("root,relative", [(None, "secrets"), ("/config/runtime/records", "runtime/records")])
+def test_export_resolves_host_root_independently_of_optional_mount_overrides(tmp_path, root, relative):
+    from kdcube_cli.cli import _runtime_secrets_host_root
+
+    secrets = {"provider": "secrets-file"}
+    if root is not None:
+        secrets["runtime"] = {"root": root}
+    (tmp_path / "assembly.yaml").write_text(json.dumps({"secrets": secrets}))
+    assert _runtime_secrets_host_root(tmp_path) == tmp_path / relative
+
+
 @pytest.mark.parametrize("root", ["/config", "/srv/kdcube/runtime-secrets", "/configuration/secrets"])
 def test_a_root_outside_the_config_folder_is_refused(root):
     from kdcube_cli.host_vault import HostVaultConfigurationError
