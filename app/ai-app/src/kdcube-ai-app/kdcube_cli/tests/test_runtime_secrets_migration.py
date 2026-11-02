@@ -1,18 +1,20 @@
 """Old local runtimes are repaired through refresh and config apply, without Docker."""
 from __future__ import annotations
 
-import json
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
 import yaml
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from rich.console import Console
 
 from kdcube_cli import cli, installer
 from kdcube_cli.host_vault import DEFAULT_RUNTIME_NAMESPACES
-from kdcube_ai_app.infra.secrets.runtime_bootstrap import runtime_configuration
-from kdcube_ai_app.infra.secrets.runtime_contract import POLICY_SCHEMA, RuntimeScopePolicy
+from kdcube_ai_app.infra.secrets import runtime_bootstrap, runtime_contract, runtime_file
+from kdcube_ai_app.infra.secrets.runtime_contract import POLICY_SCHEMA
 
 
 def _runtime(tmp_path, *, runtime=None):
@@ -28,22 +30,32 @@ def _runtime(tmp_path, *, runtime=None):
     return config
 
 
-def _launch(config):
+def _launch(config, monkeypatch):
     tokens = {"SECRETS_TOKEN_PROC": "synthetic-proc", "SECRETS_ADMIN_TOKEN": "synthetic-admin",
               "SECRETS_TOKEN_INGRESS": "synthetic-ingress"}
     overlay = installer.write_env_overlay(config / ".env", tokens)
     try:
         env = {key: value for key, (_, value) in installer.load_env_file(overlay).entries.items()}
         env["ASSEMBLY_YAML_DESCRIPTOR_PATH"] = str(config / "assembly.yaml")
-        namespaces, root, raw_policy = runtime_configuration(env)
-        assert namespaces == DEFAULT_RUNTIME_NAMESPACES
-        assert root == "/config/secrets"
-        policy = RuntimeScopePolicy(raw_policy)
-        for namespace in namespaces:
-            assert policy.authorized(namespace=namespace, token=tokens["SECRETS_TOKEN_PROC"], kind="read")
-            assert policy.authorized(namespace=namespace, token=tokens["SECRETS_ADMIN_TOKEN"], kind="write")
-            for kind in ("read", "write"):
-                assert not policy.authorized(namespace=namespace, token=tokens["SECRETS_TOKEN_INGRESS"], kind=kind)
+        # Translate only the synthetic container bind and filesystem classifier.
+        # Real routes, policy, file store and records run; this is not mount proof.
+        monkeypatch.setattr(runtime_contract, "persistent_filesystem", lambda root: True)
+        monkeypatch.setattr(runtime_bootstrap, "RuntimeFileStore", lambda **kw: runtime_file.RuntimeFileStore(
+            **{**kw, "root": config / "secrets"}))
+        app = FastAPI()
+        runtime_bootstrap.install_configured_runtime_routes(app, environ=env)
+        client = TestClient(app)
+        read = {"X-KDCUBE-SECRET-TOKEN": tokens["SECRETS_TOKEN_PROC"]}
+        write = {"X-KDCUBE-ADMIN-TOKEN": tokens["SECRETS_ADMIN_TOKEN"]}
+        for namespace in DEFAULT_RUNTIME_NAMESPACES:
+            base = f"/runtime-secrets/{namespace}"
+            assert client.get(base + "/qualification", headers={**read, **write}).status_code == 200
+            payload = {"secret_ref": "a" * 32, "value": "synthetic-value", "expires_at": int(time.time()) + 60}
+            assert client.post(base + "/create", headers=write, json=payload).status_code == 200
+            assert client.get(base + "/secret/" + "a" * 32, headers=read).json() == {"value": "synthetic-value"}
+            for headers in ({"X-KDCUBE-SECRET-TOKEN": tokens["SECRETS_TOKEN_INGRESS"]},
+                            {"X-KDCUBE-ADMIN-TOKEN": tokens["SECRETS_TOKEN_INGRESS"]}):
+                assert client.get(base + "/qualification", headers=headers).status_code == 403
     finally:
         overlay.unlink()
 
@@ -64,7 +76,7 @@ def _refresh(monkeypatch, config):
     monkeypatch.setattr(cli, "_parse_workdir_namespace", lambda path: ("sample", "project"))
     monkeypatch.setattr(cli, "stop_compose_stack", lambda *a, **kw: calls.append("stop"))
     monkeypatch.setattr(cli, "_check_before_start", lambda *a, **kw: None)
-    monkeypatch.setattr(cli, "start_compose_stack", lambda *a, **kw: _launch(config))
+    monkeypatch.setattr(cli, "start_compose_stack", lambda *a, **kw: _launch(config, monkeypatch))
     return calls
 
 
@@ -115,13 +127,15 @@ def test_auth_config_apply_backfills_service_url_with_two_line_env(monkeypatch, 
     assert assembly["secrets"]["url"] == "http://kdcube-secrets:7777"
     for name in (".env.proc", ".env.ingress"):
         assert len((config / name).read_text().splitlines()) == 2
-    _launch(config)
+    _launch(config, monkeypatch)
 
 
 def test_config_apply_refuses_fixed_policy_before_overwriting_descriptors(tmp_path):
     config = _runtime(tmp_path / "target")
     source = _runtime(tmp_path / "incoming", runtime={"scope_policy": {
         "schema": POLICY_SCHEMA, "read": {}, "write": {}}})
+    for name in cli.PLATFORM_DESCRIPTOR_FILENAMES[1:]:
+        (source / name).write_text("{}\n")
     before = (config / "assembly.yaml").read_bytes()
     with pytest.raises(SystemExit, match=r"secrets.runtime.scope_policy.*fixed credential digests"):
         cli._apply_platform_config_descriptors(Console(quiet=True), config_dir=config, descriptors_location=source)
