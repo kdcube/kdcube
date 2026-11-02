@@ -223,9 +223,12 @@ def test_conflicting_source_cannot_change_the_addressed_deck():
     assert not result.ok and result.error.code == "slides_source_mismatch"
 
 
-def test_file_ref_uses_owned_copy_and_cleans_it_after_provider_failure(tmp_path):
+def test_file_ref_uses_owned_copy_and_cleans_it_after_provider_failure(tmp_path, monkeypatch):
     from PIL import Image
     from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import new_staged_ref,save_staged,load_staged
+    import httpx
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(lambda req: httpx.Response(200, headers={"content-type": "image/png"})), **kw))
     buffer=io.BytesIO()
     Image.new("RGB",(4,4)).save(buffer,"PNG")
     source=new_staged_ref("source.png")
@@ -241,5 +244,6 @@ def test_file_ref_uses_owned_copy_and_cleans_it_after_provider_failure(tmp_path)
         return {"ok":False,"error":{"code":"google_slides_rate_limited","message":"Rate limited"},"ret":{"retryable":True}}
     response=asyncio.run(provider(execute,staging_root_factory=lambda:tmp_path,provider_fetch_url_factory=mint).dispatch(ctx,request("object.action",action="replace_shapes_with_image",object_ref="slides:google:account:presentation:deck",payload={"tag":"{{IMAGE}}","file_ref":source})))
     assert not response.ok and "private-capability" not in json.dumps(response.to_dict())
+    assert response.error.code == "google_slides_rate_limited"
     assert load_staged(tmp_path,source, owner=ctx)[1] == buffer.getvalue()
     with pytest.raises((FileNotFoundError,ValueError)):load_staged(tmp_path,minted[0], owner=ctx)

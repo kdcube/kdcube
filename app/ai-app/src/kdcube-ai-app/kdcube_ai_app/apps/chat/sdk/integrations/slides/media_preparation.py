@@ -14,7 +14,7 @@ async def prepare_action_images(ctx, action, payload, stack, *, staging_root_fac
     image_sources(action, result)  # Validate bounded traversal before staging.
 
     async def prepare(source):
-        return await stack.enter_async_context(image_payload(ctx, {**source, "preview": preview}, staging_root_factory=staging_root_factory, provider_fetch_url_factory=provider_fetch_url_factory))
+        return await stack.enter_async_context(image_payload(ctx, {**source, "preview": preview}, staging_root_factory=staging_root_factory, provider_fetch_url_factory=provider_fetch_url_factory, purpose=f"slides.{action}"))
 
     async def grid(spec):
         for cell in spec.get("cells", []):

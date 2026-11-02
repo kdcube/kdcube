@@ -38,7 +38,9 @@ def action_payload(action, source):
 
 
 @pytest.mark.parametrize("action", ["add_image", "compose", "duplicate_slide_like"])
-def test_new_image_actions_preserve_source_and_clean_owned_copies_after_failure(tmp_path, action):
+def test_new_image_actions_preserve_source_and_clean_owned_copies_after_failure(tmp_path, action, monkeypatch):
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(lambda req: httpx.Response(200, headers={"content-type": "image/png"})), **kw))
     source = staged_png(tmp_path, (4, 2))
     owned = []
     def mint(ctx, info):
@@ -51,6 +53,7 @@ def test_new_image_actions_preserve_source_and_clean_owned_copies_after_failure(
     provider = make_slides_named_service_provider(execute_operation=execute, staging_root_factory=lambda: tmp_path, provider_fetch_url_factory=mint)
     response = asyncio.run(provider.dispatch(OWNER, NamedServiceRequest(operation="object.action", namespace="slides", action=action, object_ref="slides:google:account:presentation:deck1", payload=action_payload(action, source))))
     assert not response.ok and "private-image-capability" not in json.dumps(response.to_dict())
+    assert response.error.code == "google_slides_rate_limited"
     assert load_staged(tmp_path, source, owner=OWNER)[1]
     with pytest.raises((FileNotFoundError, ValueError)):
         load_staged(tmp_path, owned[0], owner=OWNER)

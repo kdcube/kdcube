@@ -8,12 +8,15 @@ import uuid
 from pathlib import Path
 
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError
+from kdcube_ai_app.apps.chat.sdk.integrations.public_reachability import (
+    PublicURLExpectation, deployment_origin_error, probe_public_url,
+)
 
 LOGGER=logging.getLogger("kdcube.sdk.integrations.slides.images")
 
 
 @asynccontextmanager
-async def image_payload(ctx, payload, *, staging_root_factory, provider_fetch_url_factory):
+async def image_payload(ctx, payload, *, staging_root_factory, provider_fetch_url_factory, purpose="slides.image"):
     """Produce a private URL only for this call; remove only the copy we own."""
     from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import MAX_STAGED_FILE_BYTES, STAGED_REF_PREFIX, load_staged, new_staged_ref, save_staged, delete_staged
     from kdcube_ai_app.apps.chat.sdk.integrations.inline_files import materialized_conversation_file_ref, InlineFileError
@@ -89,6 +92,12 @@ async def image_payload(ctx, payload, *, staging_root_factory, provider_fetch_ur
         url = str((minted or {}).get("url") or "")
         if not url.startswith("https://"):
             raise SlidesValidationError("slides_image_hosting_unavailable", "Configure the deployment's public HTTPS provider-fetch origin.")
+        reachability = await probe_public_url(
+            url, caller="browser", expect=PublicURLExpectation(media_prefix="image/")
+        )
+        error = deployment_origin_error(reachability, purpose=purpose)
+        if error is not None:
+            raise error
         result["image_uri"] = url
         yield result
     finally:

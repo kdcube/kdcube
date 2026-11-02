@@ -15,10 +15,14 @@ deployment can hold valid image bytes while its public tunnel serves a warning
 page or login screen. The SDK checks the minted URL before the write so the
 agent receives a diagnosis the runtime administrator can act on.
 
-Docs `embed_image` with `file_ref` stages an authorized copy and mints a
+Docs `embed_image` and Slides image actions with `file_ref` stage an authorized copy and mint a
 short-lived provider-fetch URL. It probes that URL as an anonymous browser-like
 caller, expecting HTTP 200 and an `image/` content type. Only a matching
-response proceeds to the provider write. The existing file validation,
+response proceeds to the provider write. Slides applies this to `add_image`,
+`compose`, `fill_template`, `replace_shapes_with_image` and image replacements
+in `duplicate_slide_like`. Its image-byte validation fetch uses the same
+browser-like headers, while retaining SSRF, size and content checks for image
+URLs. The existing file validation,
 authorization and staging cleanup still apply.
 
 Configure the serving origin through the `kdcube-services` property
@@ -26,7 +30,7 @@ Configure the serving origin through the `kdcube-services` property
 origin must serve the signed file URL publicly over HTTPS without an
 interstitial or interactive login. A probe confirms the response from this
 deployment's network location; provider-side reachability still needs a live
-check. Other provider-file consumers, including Slides, can use this helper.
+check.
 
 ## Deployment Refusals
 

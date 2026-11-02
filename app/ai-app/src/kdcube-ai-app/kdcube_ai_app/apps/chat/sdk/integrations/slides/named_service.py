@@ -7,6 +7,7 @@ import re
 from contextlib import AsyncExitStack
 
 from kdcube_ai_app.apps.chat.sdk.integrations.named_service_consent import tool_error_response
+from kdcube_ai_app.apps.chat.sdk.integrations.public_reachability import DeploymentOriginError
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.images import image_payload
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.import_files import import_file_payload
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.media_preparation import prepare_action_images
@@ -78,6 +79,8 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
     async def dispatch(self, ctx, request):
         try:
             return await super().dispatch(ctx, request)
+        except DeploymentOriginError as exc:
+            return exc.as_response(request, provider=self.provider_identity())
         except SlidesValidationError as exc:
             return NamedServiceResponse.error_response(code=exc.code, message=str(exc), details=exc.details, namespace="slides", object_ref=request.object_ref)
 
@@ -216,7 +219,7 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
             if action in ("add_image", "compose", "duplicate_slide_like"):
                 payload = await prepare_action_images(ctx, action, payload, stack, staging_root_factory=self._staging_root_factory, provider_fetch_url_factory=self._provider_fetch_url_factory)
             elif action == "replace_shapes_with_image":
-                payload = await stack.enter_async_context(image_payload(ctx, payload, staging_root_factory=self._staging_root_factory, provider_fetch_url_factory=self._provider_fetch_url_factory))
+                payload = await stack.enter_async_context(image_payload(ctx, payload, staging_root_factory=self._staging_root_factory, provider_fetch_url_factory=self._provider_fetch_url_factory, purpose=f"slides.{action}"))
             elif action == "fill_template":
                 images = payload.get("images", {})
                 if not isinstance(images, dict):
@@ -226,7 +229,7 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
                     if not isinstance(image, (str, dict)):
                         raise SlidesValidationError("slides_invalid_template", "Each image must be a URL or a map with file_ref or image_uri.")
                     image = {"image_uri": image} if isinstance(image, str) else dict(image)
-                    mapped[tag] = await stack.enter_async_context(image_payload(ctx, {**image, "preview": bool(payload.get("preview"))}, staging_root_factory=self._staging_root_factory, provider_fetch_url_factory=self._provider_fetch_url_factory))
+                    mapped[tag] = await stack.enter_async_context(image_payload(ctx, {**image, "preview": bool(payload.get("preview"))}, staging_root_factory=self._staging_root_factory, provider_fetch_url_factory=self._provider_fetch_url_factory, purpose=f"slides.{action}"))
                 payload["images"] = mapped
             result, error = await self._execute(request, action, {**payload, "presentation_ref": deck_id}, account)
         return error if error is not None else self._mutation(request, result, account)

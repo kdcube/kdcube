@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import snapshot
+from kdcube_ai_app.apps.chat.sdk.integrations.public_reachability import public_fetch_headers
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.prediction import predict as _predict
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.editing import EDIT_ACTIONS, compile_edit
 from kdcube_ai_app.apps.chat.sdk.integrations.provider_errors import provider_failure_from_response, provider_failure_from_exception
@@ -158,7 +159,7 @@ async def _download(client, url, *, max_bytes, google_thumbnail=False):
         verdict = await ssrf_guard.check_url(url)
         if not verdict.allowed:
             raise SlidesValidationError("slides_image_uri_blocked", "The image host is not reachable through the public image policy.")
-        async with client.stream("GET", url, follow_redirects=False) as response:
+        async with client.stream("GET", url, follow_redirects=False, headers=public_fetch_headers("browser")) as response:
             if response.is_redirect:
                 url = urljoin(url, response.headers.get("location", ""))
                 continue
