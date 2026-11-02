@@ -25,6 +25,8 @@ Use these docs in this order:
 - [Google Services Through KDCube (Gmail, Sheets, Docs)](../../../recipes/connections/integrations/google-service-README.md) -
   the end-to-end deployment recipe: provider claims, per-service wiring, connect,
   grant, and verification.
+- [Public Reachability Of Provider-Fetched Files](../public-reachability-README.md) -
+  staged image `file_ref` serving, public-origin configuration and deployment refusals.
 
 The external operator setup (Google Cloud project, OAuth client, redirect URIs,
 and per-service API enablement) lives in the bundle-local
