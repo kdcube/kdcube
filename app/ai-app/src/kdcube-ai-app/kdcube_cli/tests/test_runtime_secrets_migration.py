@@ -106,7 +106,7 @@ def test_refresh_refuses_fixed_digest_policy_before_stop_or_writes(monkeypatch, 
     assert not (config / "secrets").exists()
 
 
-def test_auth_config_apply_backfills_service_url_with_two_line_env(monkeypatch, tmp_path):
+def test_platform_import_backfills_service_url_with_two_line_env(monkeypatch, tmp_path):
     config = _runtime(tmp_path / "target")
     source = _runtime(tmp_path / "incoming")
     incoming = yaml.safe_load((source / "assembly.yaml").read_text())
@@ -130,7 +130,7 @@ def test_auth_config_apply_backfills_service_url_with_two_line_env(monkeypatch, 
     _launch(config, monkeypatch)
 
 
-def test_config_apply_refuses_fixed_policy_before_overwriting_descriptors(tmp_path):
+def test_platform_import_refuses_fixed_policy_before_overwriting_descriptors(tmp_path):
     config = _runtime(tmp_path / "target")
     source = _runtime(tmp_path / "incoming", runtime={"scope_policy": {
         "schema": POLICY_SCHEMA, "read": {}, "write": {}}})
@@ -139,4 +139,47 @@ def test_config_apply_refuses_fixed_policy_before_overwriting_descriptors(tmp_pa
     before = (config / "assembly.yaml").read_bytes()
     with pytest.raises(SystemExit, match=r"secrets.runtime.scope_policy.*fixed credential digests"):
         cli._apply_platform_config_descriptors(Console(quiet=True), config_dir=config, descriptors_location=source)
+    assert (config / "assembly.yaml").read_bytes() == before
+
+
+def _config_apply(monkeypatch, config):
+    monkeypatch.setattr(sys, "argv", ["kdcube", "config", "apply", "--quiet", "--workdir", str(config.parent),
+        "--auth-type", "cognito", "--cognito-region", "eu-west-1", "--cognito-user-pool-id", "synthetic_pool",
+        "--cognito-app-client-id", "synthetic_client"])
+    monkeypatch.setattr(cli, "_load_cli_defaults", lambda: {})
+    monkeypatch.setattr(cli, "_resolve_subcommand_workdir", lambda *a, **kw: config.parent)
+    monkeypatch.setattr(cli, "_resolve_cli_workdir", lambda *a, **kw: config.parent)
+    monkeypatch.setattr(cli, "_canonical_descriptor_dir_from_initialized_workdir", lambda path: config)
+    monkeypatch.setattr(cli, "_resolve_subcommand_repo", lambda *a, **kw: config.parent / "repo")
+    monkeypatch.setattr(cli, "_config_apply_env_from_config_dir", lambda *a: None)
+    monkeypatch.setenv("KDCUBE_CLI_NONINTERACTIVE", "1")
+    monkeypatch.setattr(cli, "_parse_workdir_namespace", lambda path: ("sample", "project"))
+
+
+def test_config_apply_auth_switch_materializes_service_url_before_regeneration(monkeypatch, tmp_path):
+    config = _runtime(tmp_path)
+    _config_apply(monkeypatch, config)
+    calls = []
+
+    def regenerate(*args):
+        # The real installer producer is covered by test_cli_descriptors. This
+        # pins the actual config-apply command boundary before it invokes it.
+        assembly = yaml.safe_load((config / "assembly.yaml").read_text())
+        assert assembly["auth"]["type"] == "cognito"
+        assert assembly["secrets"]["url"] == "http://kdcube-secrets:7777"
+        calls.append("regenerate")
+
+    monkeypatch.setattr(cli, "run_installer", regenerate)
+    cli.main()
+    assert calls == ["regenerate"]
+    _launch(config, monkeypatch)
+
+
+def test_config_apply_refuses_fixed_policy_before_auth_write(monkeypatch, tmp_path):
+    config = _runtime(tmp_path, runtime={"scope_policy": {"schema": POLICY_SCHEMA, "read": {}, "write": {}}})
+    _config_apply(monkeypatch, config)
+    before = (config / "assembly.yaml").read_bytes()
+    monkeypatch.setattr(cli, "run_installer", lambda *a: pytest.fail("must refuse before regeneration"))
+    with pytest.raises(SystemExit, match=r"secrets.runtime.scope_policy.*fixed credential digests"):
+        cli.main()
     assert (config / "assembly.yaml").read_bytes() == before

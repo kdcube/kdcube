@@ -77,6 +77,7 @@ from kdcube_cli.runtime_secrets_export import (
 )
 from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
+    materialize_service_url,
     runtime_compose_environment as host_runtime_compose_environment,
 )
 from kdcube_cli.host_vault import (
@@ -7480,6 +7481,11 @@ def main() -> None:
                     )
                 _assembly_path = _config_dir / "assembly.yaml"
                 _assembly = installer_mod.load_release_descriptor_soft(_assembly_path)
+                try:
+                    host_runtime_compose_environment(_assembly, host_config_dir=_config_dir.resolve())
+                except HostVaultConfigurationError as exc:
+                    raise SystemExit(f"Config apply secrets preflight failed: {exc}") from exc
+                materialize_service_url(_assembly)
                 _apply_auth_flags(_op_console, _assembly, args)
                 _effective_type = str(_get_nested(_assembly, "auth", "type") or "").strip().lower()
                 _supported_types = {"bundle", "cognito", "simple", "delegated"}
