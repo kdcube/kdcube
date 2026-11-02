@@ -45,6 +45,15 @@ kdcube secrets backend host-vault prepare|stage|activate|recover
 The former `kdcube secrets host-vault ...` spelling remains a compatibility
 alias. New procedures use `kdcube secrets backend host-vault ...`.
 
+Local service composition keeps `secrets.provider` and `secrets.url` in
+`assembly.yaml`. Init, refresh, config apply and host-vault activation fill a
+missing URL with `http://kdcube-secrets:7777`; they do not persist these settings
+in service env files. Runtime namespace selection also comes from the descriptor.
+The default credential policy exists only in the temporary per-launch overlay.
+Local `secrets-service` launches temporarily refuse a declared
+`secrets.runtime.scope_policy`, whose fixed digests cannot match freshly minted
+tokens. See [runtime-service startup](host-vault-README.md#common-runtime-service-startup-source-checkpoint-not-activation).
+
 ## Command Matrix
 
 | Command | Authority | Value handling |

@@ -196,10 +196,11 @@ def test_activation_switches_consumers_and_retains_plaintext_source(tmp_path: Pa
 
     assembly = yaml.safe_load((config_dir / "assembly.yaml").read_text())
     assert assembly["secrets"]["provider"] == "secrets-service"
+    assert assembly["secrets"]["url"] == "http://kdcube-secrets:7777"
     for name in (".env.ingress", ".env.proc"):
         text = (config_dir / name).read_text()
-        assert "SECRETS_PROVIDER=secrets-service" in text
-        assert "SECRETS_URL=http://kdcube-secrets:7777" in text
+        assert "SECRETS_PROVIDER=" not in text
+        assert "SECRETS_URL=" not in text
     assert (config_dir / "secrets.yaml").exists()
     assert not (config_dir / HOST_VAULT_ACTIVATION_MARKER).exists()
     assert result.to_dict()["plaintext_source_retained"] is True

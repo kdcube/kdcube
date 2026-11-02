@@ -16,6 +16,7 @@ _CREDENTIAL_DIGEST = re.compile(r"[0-9a-f]{64}")
 # a consumer-contract test keeps the two equal.
 DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refresh-tokens")
 RUNTIME_SCOPE_SCHEMA = "kdcube.runtime_secret_scopes.v1"
+DEFAULT_SECRETS_SERVICE_URL = "http://kdcube-secrets:7777"
 
 EPHEMERAL_BACKEND = "ephemeral"
 HOST_VAULT_BACKEND = "host-vault"
@@ -155,7 +156,8 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
         if not _valid_runtime_policy(policy, namespaces=namespaces, encoded=raw_policy):
             raise HostVaultConfigurationError("secrets.runtime.scope_policy must grant only declared namespaces")
     # The per-run own-credential grant applies only to defaulted namespaces without a declared policy;
-    # declared namespaces without a policy stay closed, and a declared policy is projected as it is.
+    # Declared namespaces without a policy stay closed. Local service launches
+    # refuse fixed credential digests below because they mint new credentials.
     return {"runtime_root": root, "runtime_namespaces": tuple(namespaces),
             "runtime_scope_policy": raw_policy,
             "runtime_defaulted": namespaces_defaulted and "scope_policy" not in runtime}
@@ -215,6 +217,12 @@ def validate_configuration(
     check_identity: bool,
     workdir: Path | None = None,
 ) -> None:
+    if config.provider == "secrets-service" and config.runtime_scope_policy:
+        raise HostVaultConfigurationError(
+            "secrets.runtime.scope_policy names fixed credential digests, but this runtime "
+            "mints new service tokens on every start, so it cannot match; omit scope_policy "
+            "to use the policy computed per start (explicit namespaces without a policy stay closed)"
+        )
     if config.backend not in {EPHEMERAL_BACKEND, HOST_VAULT_BACKEND}:
         raise HostVaultConfigurationError(
             "secrets.service.backend must be 'ephemeral' or 'host-vault'"
@@ -281,11 +289,6 @@ def compose_environment(config: HostVaultRuntimeConfig) -> dict[str, str]:
         "HOST_KDCUBE_HOST_VAULT_CLIENT_CERT_PATH": "",
         "HOST_KDCUBE_HOST_VAULT_CLIENT_KEY_PATH": "",
         "HOST_KDCUBE_HOST_VAULT_CA_PATH": "",
-        "KDCUBE_SECRETS_RUNTIME_ROOT": config.runtime_root,
-        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": config.runtime_root,
-        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(config.runtime_namespaces), separators=(",", ":")),
-        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": config.runtime_scope_policy,
-        "KDCUBE_SECRETS_RUNTIME_DEFAULTED": "1" if config.runtime_defaulted else "",
     }
     if not config.enabled:
         return values
@@ -328,13 +331,23 @@ def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_d
     host_config = Path(host_config_dir).expanduser()
     if not host_config.is_absolute():
         raise HostVaultConfigurationError("the host config folder must be an absolute path")
+    if container_root == DEFAULT_CONTAINER_RUNTIME_ROOT:
+        return {}
     return {
         "KDCUBE_SECRETS_RUNTIME_ROOT": str(container_root),
         "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": str(host_config.joinpath(*relative.parts)),
-        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(runtime.get("runtime_namespaces") or ()),
-                                                        separators=(",", ":")),
-        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": str(runtime.get("runtime_scope_policy") or ""),
     }
+
+
+def materialize_service_url(assembly: dict[str, object]) -> bool:
+    """Keep the local sidecar address in the descriptor, including old runtimes."""
+    secrets = assembly.get("secrets")
+    if (not isinstance(secrets, dict)
+            or _provider_name(secrets.get("provider")) != "secrets-service"
+            or _text(secrets.get("url"))):
+        return False
+    secrets["url"] = DEFAULT_SECRETS_SERVICE_URL
+    return True
 
 
 def validate_assembly_for_start(

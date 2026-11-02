@@ -41,10 +41,14 @@ def _load(backend, monkeypatch, tmp_path, *, configured=True):
     monkeypatch.setenv("SECRETS_STORE_PATH", str(tmp_path / "ordinary.json"))
     monkeypatch.setenv("SECRETS_READ_TOKENS", "synthetic-legacy-reader")
     monkeypatch.setenv("SECRETS_ADMIN_TOKEN", "synthetic-legacy-admin")
+    assembly = tmp_path / "assembly.yaml"
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly))
     if configured:
-        monkeypatch.setenv("KDCUBE_SECRETS_RUNTIME_ROOT", str(root))
-        monkeypatch.setenv("KDCUBE_SECRETS_RUNTIME_NAMESPACES", json.dumps([NS]))
-        monkeypatch.setenv("KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY", _policy())
+        assembly.write_text(json.dumps({"secrets": {"runtime": {
+            "root": str(root), "namespaces": [NS], "scope_policy": json.loads(_policy()),
+        }}}))
+    else:
+        assembly.unlink(missing_ok=True)
     path = SERVERS / "secrets_server.py"
     if backend == "host-vault":
         identity = tmp_path / "identity"
@@ -139,8 +143,11 @@ def test_secrets_image_and_compose_project_common_bootstrap_without_tmpfs_custod
         assert f"infra/secrets/{name}" in dockerfile
     import yaml
     service = yaml.safe_load((SERVERS.parent / "docker-compose.yaml").read_text())["services"]["kdcube-secrets"]
-    for name in ("ROOT", "NAMESPACES", "SCOPE_POLICY"):
-        assert any(value.startswith(f"KDCUBE_SECRETS_RUNTIME_{name}=") for value in service["environment"])
+    assert "ASSEMBLY_YAML_DESCRIPTOR_PATH=/config/assembly.yaml" in service["environment"]
+    assert any(value.startswith("KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY=") for value in service["environment"])
+    assert not any(value.startswith("KDCUBE_SECRETS_RUNTIME_NAMESPACES=") for value in service["environment"])
+    descriptor = next(value for value in service["volumes"] if value.get("target") == "/config/assembly.yaml")
+    assert descriptor["read_only"] is True
     mount = next(value for value in service["volumes"] if "HOST_KDCUBE_RUNTIME_SECRETS_ROOT" in value.get("source", ""))
     assert mount["type"] == "bind" and mount.get("read_only", False) is False
     assert mount["bind"]["create_host_path"] is False
@@ -204,12 +211,18 @@ def test_actual_native_bootstrap_uses_enrolled_broker_and_requalifies_each_opera
 
 @pytest.mark.parametrize("raw", ["custody", '"custody"', '["custody","custody"]',
                                   '["Custody"]', '[true]', '["custody",null]'])
-def test_malformed_generated_namespace_policy_cannot_open_storage(raw, monkeypatch, tmp_path):
+def test_malformed_descriptor_namespaces_cannot_open_storage(raw, monkeypatch, tmp_path):
     from fastapi import FastAPI
     from kdcube_ai_app.infra.secrets.runtime_bootstrap import install_configured_runtime_routes
     app = FastAPI()
     root = tmp_path / "never-opened"
+    descriptor = tmp_path / "assembly.yaml"
+    namespaces = json.loads(raw) if raw.startswith(('"', '[')) else raw
+    descriptor.write_text(json.dumps({"secrets": {"runtime": {
+        "root": str(root), "namespaces": namespaces, "scope_policy": json.loads(_policy()),
+    }}}))
     install_configured_runtime_routes(app, environ={
+        "ASSEMBLY_YAML_DESCRIPTOR_PATH": str(descriptor),
         "KDCUBE_SECRETS_RUNTIME_ROOT": str(root),
         "KDCUBE_SECRETS_RUNTIME_NAMESPACES": raw,
         "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": _policy(),

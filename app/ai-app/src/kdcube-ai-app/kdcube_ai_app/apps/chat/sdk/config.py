@@ -1166,6 +1166,10 @@ class Settings(PLATFORM_CONFIG):
             )
         if not self._env_present("SECRETS_URL") and not self.SECRETS_URL:
             self.SECRETS_URL = self._assembly_str("secrets.url")
+        if (str(self.SECRETS_PROVIDER or "").strip().lower().replace("_", "-")
+                in {"local", "service", "sidecar", "secrets-service"}
+                and not str(self.SECRETS_URL or "").strip()):
+            raise ValueError("secrets.url is required when secrets.provider is secrets-service")
         # Runtime custody roots and grants are operator descriptor policy;
         # ambient environment must not create or override that authority.
         self.SECRETS_RUNTIME_ROOT = self._assembly_str("secrets.runtime.root")

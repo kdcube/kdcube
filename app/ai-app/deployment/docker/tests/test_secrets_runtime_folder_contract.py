@@ -16,11 +16,10 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSEMBLIES = ("all_in_one_kdcube", "custom-ui-managed-infra")
-RUNTIME_BIND = {"type": "bind", "source": "${HOST_KDCUBE_RUNTIME_SECRETS_ROOT:-/dev/null}",
-                "target": "${KDCUBE_SECRETS_RUNTIME_ROOT:-/run/kdcube-runtime-secrets}",
+RUNTIME_BIND = {"type": "bind", "source": "${HOST_KDCUBE_RUNTIME_SECRETS_ROOT:-${KDCUBE_CONFIG_DIR:-./config}/secrets}",
+                "target": "${KDCUBE_SECRETS_RUNTIME_ROOT:-/config/secrets}",
                 "bind": {"create_host_path": False}}
-RUNTIME_ENV = {"KDCUBE_SECRETS_RUNTIME_ROOT=${KDCUBE_SECRETS_RUNTIME_ROOT:-}",
-               "KDCUBE_SECRETS_RUNTIME_NAMESPACES=${KDCUBE_SECRETS_RUNTIME_NAMESPACES:-}",
+RUNTIME_ENV = {"ASSEMBLY_YAML_DESCRIPTOR_PATH=/config/assembly.yaml",
                "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY=${KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY:-}"}
 HOST_CONFIG = "/srv/workdir/config"
 
@@ -35,6 +34,10 @@ def test_the_secrets_service_binds_the_host_folder_and_receives_the_runtime_poli
     assert RUNTIME_BIND in service["volumes"]
     assert not any(isinstance(volume, str) and volume.endswith(":/config") for volume in service["volumes"])
     assert RUNTIME_ENV <= set(service["environment"])
+    assert {"type": "bind", "source": "${KDCUBE_CONFIG_DIR:-./config}/assembly.yaml",
+            "target": "/config/assembly.yaml", "read_only": True,
+            "bind": {"create_host_path": False}} in service["volumes"]
+    assert not any(value.startswith("KDCUBE_SECRETS_RUNTIME_NAMESPACES=") for value in service["environment"])
 
 
 @pytest.mark.parametrize("assembly", ASSEMBLIES)
@@ -56,19 +59,15 @@ def _env(runtime=None, provider="secrets-file", host_config=HOST_CONFIG):
 
 @pytest.mark.parametrize("provider", ["secrets-file", "secrets-service"])
 def test_no_runtime_configuration_defaults_to_config_secrets(provider):
-    env = _env(provider=provider)
-    assert env["KDCUBE_SECRETS_RUNTIME_ROOT"] == "/config/secrets"
-    assert env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"] == f"{HOST_CONFIG}/secrets"
-    assert env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"] != env["KDCUBE_SECRETS_RUNTIME_ROOT"]
-    assert json.loads(env["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == [
-        "login-attempts", "card-credentials", "oauth-refresh-tokens"]
+    assert _env(provider=provider) == {}
+    assert _env({"root": "/config/secrets"}, provider=provider) == {}
 
 
 def test_a_declared_root_inside_config_maps_to_the_host_config_folder():
     env = _env({"root": "/config/runtime/records", "namespaces": ["card-credentials"]})
     assert env["KDCUBE_SECRETS_RUNTIME_ROOT"] == "/config/runtime/records"
     assert env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"] == f"{HOST_CONFIG}/runtime/records"
-    assert json.loads(env["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == ["card-credentials"]
+    assert set(env) == {"KDCUBE_SECRETS_RUNTIME_ROOT", "HOST_KDCUBE_RUNTIME_SECRETS_ROOT"}
 
 
 @pytest.mark.parametrize("root", ["/config", "/srv/kdcube/runtime-secrets", "/configuration/secrets"])

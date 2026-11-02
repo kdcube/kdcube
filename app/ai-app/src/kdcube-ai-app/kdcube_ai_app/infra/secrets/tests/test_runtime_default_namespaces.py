@@ -12,7 +12,8 @@ from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 from kdcube_ai_app.infra.secrets.runtime_contract import (
     DEFAULT_RUNTIME_NAMESPACES, runtime_section_namespaces, valid_namespace,
 )
-from kdcube_cli.host_vault import compose_environment, config_from_assembly
+from kdcube_cli.host_vault import config_from_assembly
+from kdcube_ai_app.infra.secrets.runtime_bootstrap import runtime_configuration
 
 import json
 
@@ -57,11 +58,12 @@ def test_settings_and_the_cli_projection_enroll_the_same(monkeypatch, tmp_path, 
     assembly.write_text(json.dumps({"secrets": secrets}), encoding="utf-8")
     monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly))
     settings = sdk_config.Settings()
-    projected = compose_environment(config_from_assembly({"secrets": secrets}))
-    assert settings.SECRETS_RUNTIME_NAMESPACES == tuple(json.loads(projected["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]))
+    configured = config_from_assembly({"secrets": secrets})
+    sidecar_namespaces, _, _ = runtime_configuration({"ASSEMBLY_YAML_DESCRIPTOR_PATH": str(assembly)})
+    assert settings.SECRETS_RUNTIME_NAMESPACES == configured.runtime_namespaces == sidecar_namespaces
     assert (settings.SECRETS_RUNTIME_NAMESPACES == DEFAULT_RUNTIME_NAMESPACES) is defaults
     # The per-run own-credential grant goes with defaulted namespaces when no policy is declared.
-    assert projected["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ("1" if defaults else "")
+    assert configured.runtime_defaulted is defaults
 
 
 def test_an_unsupported_field_is_closed_in_settings_and_refused_by_the_cli(monkeypatch, tmp_path):
@@ -73,3 +75,23 @@ def test_an_unsupported_field_is_closed_in_settings_and_refused_by_the_cli(monke
     assert sdk_config.Settings().SECRETS_RUNTIME_NAMESPACES == ()
     with pytest.raises(HostVaultConfigurationError):
         config_from_assembly({"secrets": secrets})
+
+
+@pytest.mark.parametrize("url", [None, "", "   "])
+def test_service_settings_require_url_and_name_descriptor_key(monkeypatch, tmp_path, url):
+    monkeypatch.delenv("SECRETS_URL", raising=False)
+    monkeypatch.delenv("SECRETS_PROVIDER", raising=False)
+    assembly = tmp_path / "assembly.yaml"
+    assembly.write_text(json.dumps({"secrets": {"provider": "secrets-service", "url": url}}))
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly))
+    with pytest.raises(ValueError, match=r"secrets.url is required"):
+        sdk_config.Settings()
+
+
+def test_service_settings_read_descriptor_url(monkeypatch, tmp_path):
+    monkeypatch.delenv("SECRETS_URL", raising=False)
+    monkeypatch.delenv("SECRETS_PROVIDER", raising=False)
+    assembly = tmp_path / "assembly.yaml"
+    assembly.write_text(json.dumps({"secrets": {"provider": "secrets-service", "url": "http://kdcube-secrets:7777"}}))
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly))
+    assert sdk_config.Settings().SECRETS_URL == "http://kdcube-secrets:7777"

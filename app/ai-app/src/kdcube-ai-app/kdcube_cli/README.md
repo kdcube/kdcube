@@ -376,7 +376,17 @@ assembly.yaml / bundles.yaml / ...       --path / --upstream / --latest / --rele
                   http://localhost:<port>/platform/chat
 ```
 
-Refresh is for an already initialized runtime. It preserves staged descriptors:
+Refresh is for an already initialized runtime. It preserves staged descriptors,
+with one compatibility migration: for `secrets-service`, a missing `secrets.url`
+is filled with `http://kdcube-secrets:7777`. Init and config apply materialize the
+same default. Provider and URL stay in `assembly.yaml`, not generated service
+env files. Refresh also creates the conventional `config/secrets` directory for
+older runtimes; namespace selection comes directly from the descriptor and the
+default policy is computed from fresh tokens in a temporary launch overlay.
+Init, start, refresh and config apply temporarily refuse declared
+`secrets.runtime.scope_policy` for the service provider, because its fixed
+digests cannot match the tokens minted per launch. Explicit namespaces without
+a policy remain closed. See [runtime-service startup](../../../docs/service/secrets/host-vault-README.md#common-runtime-service-startup-source-checkpoint-not-activation).
 
 ```text
 existing runtime workdir
@@ -445,7 +455,7 @@ kdcube config import \
 
 `config import --include-platform-descriptors` treats the reviewed descriptor
 directory as the local runtime authority and overwrites `assembly.yaml`,
-`secrets.yaml`, and `gateway.yaml` exactly. It also stages bundle descriptors
+`secrets.yaml`, and `gateway.yaml` (with the service URL migration above). It also stages bundle descriptors
 and regenerates runtime env/config files from the imported platform
 descriptors. Restart the stack after importing platform descriptors so running
 services pick up service-level env changes.
