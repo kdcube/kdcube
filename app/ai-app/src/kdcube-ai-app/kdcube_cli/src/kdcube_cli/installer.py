@@ -2489,6 +2489,8 @@ def ensure_compose_log_dirs(logs_dir: Path) -> None:
 
 def compose_env(env_file: Path) -> Dict[str, str]:
     env = os.environ.copy()
+    for key in (*RUNTIME_PROJECTION_KEYS, "KDCUBE_SECRETS_RUNTIME_ROOT", "HOST_KDCUBE_RUNTIME_SECRETS_ROOT"):
+        env.pop(key, None)
     env["COMPOSE_ENV_FILES"] = str(env_file)
     try:
         entries = parse_env(env_file.read_text().splitlines())
@@ -2655,7 +2657,17 @@ def generate_runtime_tokens() -> Dict[str, str]:
 
 def write_env_overlay(base_env: Path, overrides: Dict[str, str]) -> Path:
     env = load_env_file(base_env)
-    for key, value in {**overrides, **_default_runtime_scope_overrides(env, overrides)}.items():
+    assembly = load_release_descriptor(base_env.parent / "assembly.yaml")
+    from . import host_vault
+
+    # Old init projections must not select namespaces or survive an explicit
+    # closed descriptor. Even ambient Compose interpolation gets an empty policy.
+    for key in RUNTIME_PROJECTION_KEYS:
+        remove_env_key(env, key)
+    runtime = host_vault.runtime_compose_environment(assembly, host_config_dir=base_env.parent.resolve())
+    for key in ("KDCUBE_SECRETS_RUNTIME_ROOT", "HOST_KDCUBE_RUNTIME_SECRETS_ROOT"):
+        remove_env_key(env, key)
+    for key, value in {**overrides, **runtime, **_default_runtime_scope_overrides(assembly, overrides)}.items():
         update_env_value(env, key, value)
     fd, tmp_path = tempfile.mkstemp(prefix="kdcube-env-", suffix=".env")
     os.close(fd)
@@ -2664,21 +2676,56 @@ def write_env_overlay(base_env: Path, overrides: Dict[str, str]) -> Path:
     return env.path
 
 
-def _default_runtime_scope_overrides(env: "EnvFile", overrides: Dict[str, str]) -> Dict[str, str]:
-    """W673: with no secrets.runtime (KDCUBE_SECRETS_RUNTIME_DEFAULTED=1), each fresh token set grants the
-    default namespaces to exactly this run's proc read and writer credentials (Infra contract). A declared
-    runtime configuration keeps its own policy untouched; no other token is ever granted."""
-    if (env.entries.get("KDCUBE_SECRETS_RUNTIME_DEFAULTED", (None, None))[1] or "").strip() != "1":
-        return {}
+RUNTIME_PROJECTION_KEYS = (
+    "KDCUBE_SECRETS_RUNTIME_NAMESPACES",
+    "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY",
+    "KDCUBE_SECRETS_RUNTIME_DEFAULTED",
+)
+
+
+def _default_runtime_scope_overrides(assembly: dict, overrides: Dict[str, str]) -> Dict[str, str]:
+    """Grant defaults to this launch's proc reader and admin writer only."""
+    from .host_vault import runtime_configuration_from_assembly
+
+    config = runtime_configuration_from_assembly(assembly)
+    result = {"KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": ""}
+    if not config.get("runtime_defaulted"):
+        return result
     read_token, write_token = overrides.get("SECRETS_TOKEN_PROC"), overrides.get("SECRETS_ADMIN_TOKEN")
     if not read_token or not write_token:
-        return {}
-    try:
-        namespaces = tuple(json.loads(env.entries.get("KDCUBE_SECRETS_RUNTIME_NAMESPACES", (None, "[]"))[1] or "[]"))
-    except (TypeError, ValueError):
-        return {}
-    policy = default_runtime_scope_policy(read_token=read_token, write_token=write_token, namespaces=namespaces)
-    return {"KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": policy} if policy else {}
+        return result
+    result["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"] = default_runtime_scope_policy(
+        read_token=read_token, write_token=write_token, namespaces=config["runtime_namespaces"])
+    return result
+
+
+def prepare_runtime_secrets(config_dir: Path) -> dict:
+    """Migrate local runtime composition before refresh stops any service."""
+    from . import host_vault
+
+    assembly_path = config_dir / "assembly.yaml"
+    assembly = load_release_descriptor(assembly_path)
+    # Validate only custody composition here; actual start owns vault identity
+    # and network checks. Fixed digest policies still refuse before any write.
+    runtime = host_vault.runtime_compose_environment(assembly, host_config_dir=config_dir.resolve())
+    _, root = host_vault.runtime_secrets_paths(assembly, host_config_dir=config_dir.resolve())
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if host_vault.materialize_service_url(assembly):
+        write_descriptor_text(assembly_path, yaml.safe_dump(assembly, sort_keys=False))
+    for name in (".env", ".env.ingress", ".env.proc", ".env.metrics"):
+        path = config_dir / name
+        if not path.exists():
+            continue
+        env = load_env_file(path)
+        for key in (*RUNTIME_PROJECTION_KEYS, "SECRETS_PROVIDER", "SECRETS_URL"):
+            remove_env_key(env, key)
+        if name == ".env":
+            for key in ("KDCUBE_SECRETS_RUNTIME_ROOT", "HOST_KDCUBE_RUNTIME_SECRETS_ROOT"):
+                remove_env_key(env, key)
+            for key, value in runtime.items():
+                update_env_value(env, key, value)
+        save_env_file(env)
+    return assembly
 
 
 def load_env_file(path: Path) -> EnvFile:
@@ -3642,16 +3689,17 @@ def gather_configuration(
         default="secrets-service",
     )
     _set_nested(assembly_data, ["secrets", "provider"], secrets_provider)
-    update_env_value(env_ingress, "SECRETS_PROVIDER", secrets_provider)
-    update_env_value(env_proc, "SECRETS_PROVIDER", secrets_provider)
-    update_env_value(env_metrics, "SECRETS_PROVIDER", secrets_provider)
+    from .host_vault import materialize_service_url
+
+    materialize_service_url(assembly_data)
+    for env in (env_main, env_ingress, env_proc, env_metrics):
+        for key in ("SECRETS_PROVIDER", "SECRETS_URL", *RUNTIME_PROJECTION_KEYS):
+            remove_env_key(env, key)
     if secrets_provider == "secrets-file":
         for env in (env_ingress, env_proc, env_metrics):
             update_env_value(env, "GLOBAL_SECRETS_YAML", "file:///config/secrets.yaml")
             update_env_value(env, "BUNDLE_SECRETS_YAML", "file:///config/bundles.secrets.yaml")
     if secrets_provider == "secrets-service":
-        update_if_placeholder(env_ingress, "SECRETS_URL", "http://kdcube-secrets:7777")
-        update_if_placeholder(env_proc, "SECRETS_URL", "http://kdcube-secrets:7777")
         # Ensure proc can set secrets (bundle secrets admin flow).
         proc_admin = env_proc.entries.get("SECRETS_ADMIN_TOKEN", (None, None))[1]
         if is_placeholder(proc_admin) or not (proc_admin or "").strip():
@@ -4874,13 +4922,16 @@ def gather_configuration(
     try:
         runtime_env = _host_vault.runtime_compose_environment(
             assembly_data, host_config_dir=Path(ctx.config_dir).expanduser().resolve())
+        _, host_runtime_root = _host_vault.runtime_secrets_paths(
+            assembly_data, host_config_dir=Path(ctx.config_dir).expanduser().resolve())
     except HostVaultConfigurationError as exc:
         raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
     # Created private (0700), as the runtime store requires; an existing folder is never re-moded here.
-    host_runtime_root = Path(runtime_env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"])
     if host_runtime_root.exists() and not host_runtime_root.is_dir():
         raise ValueError(f"Host runtime secrets root must be a directory path, got existing file: {host_runtime_root}")
     host_runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for key in ("KDCUBE_SECRETS_RUNTIME_ROOT", "HOST_KDCUBE_RUNTIME_SECRETS_ROOT"):
+        remove_env_key(env_main, key)
     for key, value in runtime_env.items():
         update_env_value(env_main, key, value)
     update_env_value(env_main, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
@@ -6287,7 +6338,7 @@ def run_setup(
             token_overrides = generate_runtime_tokens()
             runtime_env = write_env_overlay(config_dir / ".env", token_overrides)
             runtime_secrets_provider = normalize_secrets_provider(
-                env_proc.entries.get("SECRETS_PROVIDER", (None, None))[1],
+                _get_nested(start_assembly, "secrets", "provider"),
                 default="secrets-service",
             )
             use_secrets_service_runtime = runtime_secrets_provider == "secrets-service"

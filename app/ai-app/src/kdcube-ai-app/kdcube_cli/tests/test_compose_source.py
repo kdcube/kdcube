@@ -26,6 +26,8 @@ def _file(path: Path) -> Path:
 
 def _refresh(monkeypatch, repo: Path, cwd: Path, config: Path) -> list[str]:
     calls: list[str] = []
+    if not (config / "assembly.yaml").exists():
+        (config / "assembly.yaml").write_text("secrets: {provider: secrets-file}\n", encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["kdcube", "refresh", "--quiet", "--workdir", str(config.parent), "--build"])
     monkeypatch.setattr(cli, "_load_cli_defaults", lambda: {})
     monkeypatch.setattr(cli, "_resolve_namespaced_runtime_target", lambda **kw: (config.parent, "sample", "project"))

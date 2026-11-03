@@ -1596,6 +1596,8 @@ class SecretsServiceSecretsManager(ISecretsManager):
 
     def __init__(self, config: SecretsManagerConfig) -> None:
         self._url = (config.url or "").rstrip("/")
+        if not self._url.strip():
+            raise SecretsManagerError("secrets.url is required when secrets.provider is secrets-service")
         self._token = config.token
         self._admin_token = config.admin_token
         self._read_timeout = float(config.read_timeout_seconds)
@@ -2486,6 +2488,8 @@ def build_secrets_manager_config(settings: Any | None = None) -> SecretsManagerC
         ),
         url=url,
     )
+    if provider == "secrets-service" and not url:
+        raise SecretsManagerError("secrets.url is required when secrets.provider is secrets-service")
     if provider == "in-memory" and (global_secrets_yaml or bundle_secrets_yaml):
         provider = "secrets-file"
     tenant = _first_non_empty(getattr(settings, "TENANT", None))

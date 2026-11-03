@@ -545,9 +545,10 @@ The policy uses schema `kdcube.runtime_secret_scopes.v1` with `read` and `write`
 maps from SHA-256 credential identifiers to lists of declared namespaces.
 It contains identifiers, not raw credentials. Ordinary door tokens are **not**
 automatically granted custody access; missing policy remains closed.
-The CLI validates and projects these descriptor values into the internal
-`KDCUBE_SECRETS_RUNTIME_ROOT`, `KDCUBE_SECRETS_RUNTIME_NAMESPACES` and
-`KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY` service inputs.
+The sidecar reads these values directly from a read-only mount of the single
+`assembly.yaml` file. Namespace lists and declared policies are not copied to
+persistent `.env` files. Descriptor values take precedence over stale runtime
+environment projections.
 
 Defaults when `secrets.runtime` or its `namespaces` is absent (W673, operator 2026-10-09: "it
 simply must work regardless of the backend"). The platform's own runtime-record
@@ -557,9 +558,9 @@ settings and the CLI projection use the same list, and `users` is reserved for
 per-user secret folders). OAuth original issuance no longer stores issued
 bearers (2026-10-09), so nothing writes `oauth-refresh-tokens` any more; it stays
 enrolled only so records written before that remain reachable for an
-operator-requested cleanup. The CLI marks the projection
-`KDCUBE_SECRETS_RUNTIME_DEFAULTED=1`, and every fresh token set written at
-install or refresh (`write_env_overlay`) carries a scope policy granting exactly
+operator-requested cleanup. The CLI reads default mode from the descriptor.
+Every fresh token set created at init, start or refresh (`write_env_overlay`)
+carries a temporary scope policy granting exactly
 those namespaces to this run's own proc credentials: `read` for the proc read
 token (`SECRETS_TOKEN_PROC`) and `write` for the writer token
 (`SECRETS_ADMIN_TOKEN`), by SHA-256 identifier only. The ingress read token
@@ -570,22 +571,30 @@ also gives it to chat-ingress and the secrets service, so every holder of
 boundary, not a per-process or per-bundle one. The same rule
 applies when a declared `secrets.runtime` omits `namespaces` (for example a
 root-only section). An explicit namespace list, the empty one included, is
-exact; declared namespaces without a `scope_policy` get no default grant, and a
-declared `scope_policy` is projected unchanged. A section with any field other
+exact; declared namespaces without a `scope_policy` get no default grant.
+Local Compose temporarily refuses a declared `scope_policy` when
+`secrets.provider` is `secrets-service`: its fixed credential digests cannot
+match the new service tokens minted on every start. The refusal names
+`secrets.runtime.scope_policy`; refresh checks it before stopping the stack,
+and config apply checks it before replacing platform descriptors. Omit both
+`scope_policy` and `namespaces` to use the policy computed per start. Removing
+only the policy while retaining an explicit namespace list leaves access closed.
+Direct service composition still accepts descriptor-supplied digest policies;
+this change adds no role matching or token reuse mode.
+A section with any field other
 than `root`, `namespaces` and `scope_policy` is malformed: the CLI refuses it and
 the SDK enrolls nothing.
-The file runtime root default is the secrets-file manager's own rule
-(`resolve_runtime_secrets_root`). Ambient inputs do not
-override the descriptor during projection. A server snapshots those inputs at
-startup, not from requests or subsequent environment changes.
+The file runtime root defaults to `/config/secrets`. The sidecar snapshots the
+descriptor at startup, not from requests or subsequent environment changes.
 
-Compose binds `HOST_KDCUBE_RUNTIME_SECRETS_ROOT` to the exact configured root,
-separately from the legacy `/run/kdcube-secrets` tmpfs. It does not create a
-missing host directory automatically. File qualification requires a
+Compose binds `<config directory>/secrets` to `/config/secrets`, separately from
+the legacy `/run/kdcube-secrets` tmpfs. Only a non-default `secrets.runtime.root`
+inside `/config` needs the generated host/container mount-path env overrides.
+Init and refresh create the host directory privately; Compose itself does not
+create a missing host directory automatically. File qualification requires a
 service-owned private directory on a recognized persistent filesystem. The
 native path additionally requires its exact enrollment/root-key/storage proof.
-The CLI projection itself creates no root, credentials or enrollment and
-does not start or activate any runtime.
+These source contracts do not prove a deployed mount or host-vault enrollment.
 
 Source tests import the actual deployment servers and exercise file restart,
 conflict, expiry/tombstones, transient-store refusal before record I/O and

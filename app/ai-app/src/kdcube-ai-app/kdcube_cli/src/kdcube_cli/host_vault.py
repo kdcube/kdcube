@@ -16,6 +16,7 @@ _CREDENTIAL_DIGEST = re.compile(r"[0-9a-f]{64}")
 # a consumer-contract test keeps the two equal.
 DEFAULT_RUNTIME_NAMESPACES = ("login-attempts", "card-credentials", "oauth-refresh-tokens")
 RUNTIME_SCOPE_SCHEMA = "kdcube.runtime_secret_scopes.v1"
+DEFAULT_SECRETS_SERVICE_URL = "http://kdcube-secrets:7777"
 
 EPHEMERAL_BACKEND = "ephemeral"
 HOST_VAULT_BACKEND = "host-vault"
@@ -155,7 +156,8 @@ def _runtime_configuration(secrets: Mapping[str, object]) -> dict[str, object]:
         if not _valid_runtime_policy(policy, namespaces=namespaces, encoded=raw_policy):
             raise HostVaultConfigurationError("secrets.runtime.scope_policy must grant only declared namespaces")
     # The per-run own-credential grant applies only to defaulted namespaces without a declared policy;
-    # declared namespaces without a policy stay closed, and a declared policy is projected as it is.
+    # Declared namespaces without a policy stay closed. Local service launches
+    # refuse fixed credential digests below because they mint new credentials.
     return {"runtime_root": root, "runtime_namespaces": tuple(namespaces),
             "runtime_scope_policy": raw_policy,
             "runtime_defaulted": namespaces_defaulted and "scope_policy" not in runtime}
@@ -176,6 +178,23 @@ def _valid_runtime_policy(policy: object, *, namespaces: list[str], encoded: str
                     or any(type(value) is not str or value not in namespaces for value in values)):
                 return False
     return True
+
+
+def _refuse_fixed_runtime_policy(provider: str, policy: str) -> None:
+    if provider == "secrets-service" and policy:
+        raise HostVaultConfigurationError(
+            "secrets.runtime.scope_policy names fixed credential digests, but this runtime "
+            "mints new service tokens on every start, so it cannot match; omit scope_policy "
+            "to use the policy computed per start (explicit namespaces without a policy stay closed)"
+        )
+
+
+def runtime_configuration_from_assembly(assembly: Mapping[str, object]) -> dict[str, object]:
+    """Validate local custody composition without host-vault startup preflight."""
+    secrets = _mapping(assembly.get("secrets"))
+    runtime = _runtime_configuration(secrets)
+    _refuse_fixed_runtime_policy(_provider_name(secrets.get("provider")), str(runtime.get("runtime_scope_policy") or ""))
+    return runtime
 
 
 def config_from_assembly(assembly: Mapping[str, object]) -> HostVaultRuntimeConfig:
@@ -203,7 +222,7 @@ def config_from_assembly(assembly: Mapping[str, object]) -> HostVaultRuntimeConf
         server_name=_text(vault.get("server_name")),
         identity_dir=identity_dir,
         exec_network_mode=_text(exec_config.get("py_code_exec_network_mode")),
-        **_runtime_configuration(secrets),
+        **runtime_configuration_from_assembly(assembly),
     )
     validate_configuration(config, check_identity=False)
     return config
@@ -215,6 +234,7 @@ def validate_configuration(
     check_identity: bool,
     workdir: Path | None = None,
 ) -> None:
+    _refuse_fixed_runtime_policy(config.provider, config.runtime_scope_policy)
     if config.backend not in {EPHEMERAL_BACKEND, HOST_VAULT_BACKEND}:
         raise HostVaultConfigurationError(
             "secrets.service.backend must be 'ephemeral' or 'host-vault'"
@@ -281,11 +301,6 @@ def compose_environment(config: HostVaultRuntimeConfig) -> dict[str, str]:
         "HOST_KDCUBE_HOST_VAULT_CLIENT_CERT_PATH": "",
         "HOST_KDCUBE_HOST_VAULT_CLIENT_KEY_PATH": "",
         "HOST_KDCUBE_HOST_VAULT_CA_PATH": "",
-        "KDCUBE_SECRETS_RUNTIME_ROOT": config.runtime_root,
-        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": config.runtime_root,
-        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(config.runtime_namespaces), separators=(",", ":")),
-        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": config.runtime_scope_policy,
-        "KDCUBE_SECRETS_RUNTIME_DEFAULTED": "1" if config.runtime_defaulted else "",
     }
     if not config.enabled:
         return values
@@ -308,8 +323,10 @@ CONTAINER_CONFIG_DIR = PurePosixPath("/config")
 DEFAULT_CONTAINER_RUNTIME_ROOT = CONTAINER_CONFIG_DIR / "secrets"
 
 
-def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_dir: str | Path) -> dict[str, str]:
-    """W670 K2: the runtime-secrets folder for Compose, on every provider.
+def runtime_secrets_paths(
+    assembly: Mapping[str, object], *, host_config_dir: str | Path,
+) -> tuple[PurePosixPath, Path]:
+    """Resolve custody paths for folder creation, Compose and export alike.
 
     Operator, 2026-10-09: the folder lives "in config folder. make the folder secrets". The container root is
     ``secrets.runtime.root`` or, when absent, ``/config/secrets``; it must lie inside the container config
@@ -328,13 +345,30 @@ def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_d
     host_config = Path(host_config_dir).expanduser()
     if not host_config.is_absolute():
         raise HostVaultConfigurationError("the host config folder must be an absolute path")
+    return container_root, host_config.joinpath(*relative.parts)
+
+
+def runtime_compose_environment(assembly: Mapping[str, object], *, host_config_dir: str | Path) -> dict[str, str]:
+    """Only non-conventional roots require Compose mount overrides."""
+    runtime_configuration_from_assembly(assembly)
+    container_root, host_root = runtime_secrets_paths(assembly, host_config_dir=host_config_dir)
+    if container_root == DEFAULT_CONTAINER_RUNTIME_ROOT:
+        return {}
     return {
         "KDCUBE_SECRETS_RUNTIME_ROOT": str(container_root),
-        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": str(host_config.joinpath(*relative.parts)),
-        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": json.dumps(list(runtime.get("runtime_namespaces") or ()),
-                                                        separators=(",", ":")),
-        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": str(runtime.get("runtime_scope_policy") or ""),
+        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": str(host_root),
     }
+
+
+def materialize_service_url(assembly: dict[str, object]) -> bool:
+    """Keep the local sidecar address in the descriptor, including old runtimes."""
+    secrets = assembly.get("secrets")
+    if (not isinstance(secrets, dict)
+            or _provider_name(secrets.get("provider")) != "secrets-service"
+            or _text(secrets.get("url"))):
+        return False
+    secrets["url"] = DEFAULT_SECRETS_SERVICE_URL
+    return True
 
 
 def validate_assembly_for_start(

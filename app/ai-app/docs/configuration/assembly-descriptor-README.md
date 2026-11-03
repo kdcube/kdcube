@@ -82,6 +82,7 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | Env var | `assembly.yaml` path | Primary API | Modes |
 |---|---|---|---|
 | `SECRETS_PROVIDER` | `secrets.provider` | `get_settings()` | all modes |
+| `SECRETS_URL` | `secrets.url` | `get_settings()` | required for `secrets-service` |
 | `AUTH_PROVIDER` | `auth.connection_hub` selects the Connection Hub sign-in entry | `get_settings()` | effective runtime value |
 | `COGNITO_REGION` | selected Connection Hub authenticator `authenticator.region` | `get_settings()` | CLI local compose, AWS deployment |
 | `COGNITO_USER_POOL_ID` | selected Connection Hub authenticator `authenticator.user_pool_id` | `get_settings()` | CLI local compose, AWS deployment |
@@ -125,6 +126,35 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `APPLICATION_PREPARATION_RETRY_INITIAL_SECONDS` | `platform.services.proc.bundles.application_preparation_retry_initial_seconds` | `get_settings().PLATFORM.APPLICATIONS` | proc in all modes |
 | `APPLICATION_PREPARATION_RETRY_MAX_SECONDS` | `platform.services.proc.bundles.application_preparation_retry_max_seconds` | `get_settings().PLATFORM.APPLICATIONS` | proc in all modes |
 | `BUNDLE_SCHEDULER_RECONCILE_INTERVAL_SECONDS` | `platform.services.proc.bundles.bundle_scheduler_reconcile_interval_seconds` | `get_settings().PLATFORM.APPLICATIONS` | proc in all modes |
+
+## Secrets service and runtime custody
+
+For the service provider, the descriptor must contain the service address:
+
+```yaml
+secrets:
+  provider: secrets-service
+  url: http://kdcube-secrets:7777
+```
+
+Local CLI init, refresh, config apply and host-vault activation fill a missing
+`secrets.url` with this Compose address. An explicit address is preserved.
+SDK settings and the service manager reject a missing address at startup with
+an error naming `secrets.url`. Local generated service env files do not store
+`SECRETS_PROVIDER` or `SECRETS_URL`.
+
+`secrets.runtime` is a closed section containing only `root`, `namespaces` and
+`scope_policy`. The sidecar reads it from a read-only `assembly.yaml` mount;
+the SDK and sidecar use the same namespace-selection contract. Missing or null
+namespaces enroll the three platform defaults; an explicit list, including
+`[]`, is exact. Local service launches temporarily refuse a declared fixed-digest
+`scope_policy`, because each launch mints fresh service tokens. With default
+namespaces the CLI computes policy in a temporary launch overlay; explicit
+namespaces without a policy remain closed. The default root `/config/secrets`
+uses the conventional config-directory bind without mount-path overrides.
+
+[Runtime-service startup](../service/secrets/host-vault-README.md#common-runtime-service-startup-source-checkpoint-not-activation)
+owns the credential grants, refusal and storage guarantees.
 
 ## Fields that are always meaningful
 

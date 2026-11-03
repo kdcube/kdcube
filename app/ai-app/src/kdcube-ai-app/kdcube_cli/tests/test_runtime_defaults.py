@@ -23,11 +23,14 @@ from kdcube_ai_app.infra.secrets.runtime_contract import POLICY_SCHEMA, RuntimeS
 READ, WRITE, INGRESS = "synthetic-proc-reader-" + "r" * 20, "synthetic-writer-" + "w" * 20, "synthetic-ingress-" + "i" * 20
 
 
-def _overlay(tmp_path, values, tokens):
+def _overlay(tmp_path, values, tokens, assembly=None):
     base = tmp_path / ".env"
     base.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+    (tmp_path / "assembly.yaml").write_text(json.dumps(assembly or {"secrets": {"provider": "secrets-service"}}))
+    original = base.read_text()
     out = installer.write_env_overlay(base, tokens)
     try:
+        assert base.read_text() == original
         return dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
     finally:
         out.unlink()
@@ -46,40 +49,41 @@ def test_the_cli_defaults_equal_the_sdk_contract():
 
 
 @pytest.mark.parametrize("provider", ["secrets-file", "secrets-service"])
-def test_absent_runtime_projects_the_default_namespaces_and_marks_them_defaulted(provider):
-    values = compose_environment(config_from_assembly({"secrets": {"provider": provider}}))
-    assert json.loads(values["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == list(DEFAULT_RUNTIME_NAMESPACES)
-    assert values["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == "1"
-    # The static projection carries no grant: the policy needs this run's credentials (the overlay).
-    assert values["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"] == ""
+def test_absent_runtime_enrolls_defaults_without_persisting_a_projection(provider):
+    config = config_from_assembly({"secrets": {"provider": provider}})
+    assert config.runtime_namespaces == DEFAULT_RUNTIME_NAMESPACES
+    assert config.runtime_defaulted
+    assert not any("RUNTIME" in key for key in compose_environment(config))
 
 
-def test_declared_namespaces_and_policies_win(tmp_path):
-    declared = {"secrets": {"provider": "secrets-service", "runtime": {
-        "root": str(tmp_path / "custody"), "namespaces": ["custody"],
-        "scope_policy": {"schema": POLICY_SCHEMA, "read": {"a" * 64: ["custody"]}, "write": {"b" * 64: ["custody"]}}}}}
-    values = compose_environment(config_from_assembly(declared))
-    assert json.loads(values["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == ["custody"]
-    assert values["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ""
-    # Declared namespaces without a policy stay closed: no default grant.
-    no_policy = compose_environment(config_from_assembly({"secrets": {"runtime": {"namespaces": ["custody"]}}}))
-    assert no_policy["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ""
-    # Defaulted namespaces with a declared policy: the declared policy is projected, no default grant.
-    with_policy = compose_environment(config_from_assembly({"secrets": {"runtime": {"scope_policy": {
-        "schema": POLICY_SCHEMA, "read": {"c" * 64: ["login-attempts"]}, "write": {}}}}}))
-    assert json.loads(with_policy["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == list(DEFAULT_RUNTIME_NAMESPACES)
-    assert with_policy["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ""
-    assert json.loads(with_policy["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"])["read"] == {"c" * 64: ["login-attempts"]}
-    # Root-only: the defaults and the per-run grant, like an absent section.
-    root_only = compose_environment(config_from_assembly({"secrets": {"runtime": {"root": "/config/secrets"}}}))
-    assert json.loads(root_only["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == list(DEFAULT_RUNTIME_NAMESPACES)
-    assert root_only["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == "1"
-    explicit_empty = compose_environment(config_from_assembly({"secrets": {"runtime": {"namespaces": []}}}))
-    assert explicit_empty["KDCUBE_SECRETS_RUNTIME_NAMESPACES"] == "[]"
-    assert explicit_empty["KDCUBE_SECRETS_RUNTIME_DEFAULTED"] == ""
-    # The overlay never replaces a declared policy.
-    merged = _overlay(tmp_path, values, _tokens())
-    assert merged["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"] == values["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"]
+@pytest.mark.parametrize("namespaces", [[], ["custody"]])
+def test_explicit_namespaces_without_policy_stay_closed_despite_stale_env(tmp_path, namespaces):
+    assembly = {"secrets": {"provider": "secrets-service", "runtime": {"namespaces": namespaces}}}
+    stale = {"KDCUBE_SECRETS_RUNTIME_DEFAULTED": "1",
+             "KDCUBE_SECRETS_RUNTIME_NAMESPACES": '["foreign"]',
+             "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": "stale-policy"}
+    merged = _overlay(tmp_path, stale, _tokens(), assembly)
+    assert merged["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"] == ""
+    assert "KDCUBE_SECRETS_RUNTIME_NAMESPACES" not in merged
+    assert "KDCUBE_SECRETS_RUNTIME_DEFAULTED" not in merged
+
+
+@pytest.mark.parametrize("provider", ["secrets-service", "service", "sidecar", "local"])
+def test_local_service_refuses_fixed_digest_policy(tmp_path, provider):
+    from kdcube_cli.host_vault import HostVaultConfigurationError
+    assembly = {"secrets": {"provider": provider, "runtime": {"scope_policy": {
+        "schema": POLICY_SCHEMA, "read": {"a" * 64: ["login-attempts"]}, "write": {}}}}}
+    with pytest.raises(HostVaultConfigurationError, match=r"secrets.runtime.scope_policy.*fixed credential digests"):
+        _overlay(tmp_path, {}, _tokens(), assembly)
+
+
+def test_root_only_uses_default_namespaces_and_custom_mounts(tmp_path):
+    assembly = {"secrets": {"provider": "secrets-service", "runtime": {"root": "/config/custody"}}}
+    merged = _overlay(tmp_path, {}, _tokens(), assembly)
+    assert merged["KDCUBE_SECRETS_RUNTIME_ROOT"] == "/config/custody"
+    assert merged["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"] == str(tmp_path / "custody")
+    assert RuntimeScopePolicy(merged["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"]).authorized(
+        namespace="card-credentials", token=READ, kind="read")
 
 
 def test_the_fresh_token_overlay_grants_only_this_runs_proc_credentials(tmp_path):
@@ -131,3 +135,22 @@ def test_an_overlay_without_fresh_proc_tokens_grants_nothing(tmp_path):
     values = compose_environment(config_from_assembly({"secrets": {}}))
     merged = _overlay(tmp_path, values, {"SOMETHING_ELSE": "x"})
     assert merged["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"] == ""
+
+
+def test_compose_uses_launch_policy_and_descriptor_mounts_over_ambient_values(tmp_path, monkeypatch):
+    for key in (*installer.RUNTIME_PROJECTION_KEYS, "KDCUBE_SECRETS_RUNTIME_ROOT", "HOST_KDCUBE_RUNTIME_SECRETS_ROOT"):
+        monkeypatch.setenv(key, "ambient-rival")
+    (tmp_path / "assembly.yaml").write_text('{"secrets":{"provider":"secrets-service"}}')
+    base = tmp_path / ".env"
+    base.write_text("")
+    overlay = installer.write_env_overlay(base, _tokens())
+    try:
+        env = installer.compose_env(overlay)
+        assert "KDCUBE_SECRETS_RUNTIME_ROOT" not in env
+        assert "HOST_KDCUBE_RUNTIME_SECRETS_ROOT" not in env
+        assert "KDCUBE_SECRETS_RUNTIME_NAMESPACES" not in env
+        assert "ambient-rival" not in env["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"]
+        assert RuntimeScopePolicy(env["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"]).authorized(
+            namespace="card-credentials", token=READ, kind="read")
+    finally:
+        overlay.unlink()

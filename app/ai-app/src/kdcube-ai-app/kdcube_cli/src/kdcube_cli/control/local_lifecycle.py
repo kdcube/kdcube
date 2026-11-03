@@ -74,9 +74,12 @@ class LocalLifecycleController:
             )
         self.ensure_docker_responsive()
         self._check_before_start()
-        assembly = installer_mod.load_release_descriptor_soft(
-            self._context.config_dir / "assembly.yaml"
-        )
+        try:
+            assembly = installer_mod.prepare_runtime_secrets(self._context.config_dir)
+        except HostVaultConfigurationError as exc:
+            raise OperationFailedError(
+                "start", self._reference.target_id, f"Secrets startup preflight failed: {exc}",
+            ) from exc
         try:
             profile_args = compose_profile_args(assembly)
             use_proxy_login = proxy_login_enabled(assembly)

@@ -95,6 +95,7 @@ def test_invalid_platform_backend_refuses_configuration(monkeypatch, tmp_path, b
 def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     for key in (
         "SECRETS_PROVIDER",
+        "SECRETS_URL",
         "SECRETS_SERVICE_BACKEND",
         "KDCUBE_STORAGE_PATH",
         "CB_BUNDLE_STORAGE_URL",
@@ -125,6 +126,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
             {
                 "secrets": {
                     "provider": "secrets-service",
+                    "url": "http://kdcube-secrets:7777",
                     "service": {"backend": "host-vault"},
                 },
                 "storage": {
@@ -179,6 +181,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert sdk_config.read_plain("a:frontend.routes_prefix") == "/platform"
     assert sdk_config.get_plain("secrets.provider") == "secrets-service"
     assert settings.SECRETS_PROVIDER == "secrets-service"
+    assert settings.SECRETS_URL == "http://kdcube-secrets:7777"
     assert settings.SECRETS_SERVICE_BACKEND == "host-vault"
     assert build_secrets_manager_config(settings).provider == "secrets-service"
     assert settings.STORAGE_PATH == "s3://example/kdcube"

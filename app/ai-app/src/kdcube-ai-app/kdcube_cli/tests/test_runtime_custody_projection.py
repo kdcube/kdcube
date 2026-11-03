@@ -19,19 +19,26 @@ def _assembly(tmp_path):
     }}}
 
 
-def test_descriptor_projects_static_scope_and_root_not_ambient_authority(tmp_path, monkeypatch):
+def test_sidecar_reads_static_scope_and_root_from_descriptor_not_ambient_authority(tmp_path, monkeypatch):
+    from kdcube_ai_app.infra.secrets.runtime_bootstrap import runtime_configuration
     assembly = _assembly(tmp_path)
     monkeypatch.setenv("KDCUBE_SECRETS_RUNTIME_ROOT", "/ambient-rival")
     monkeypatch.setenv("KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY", "ambient-rival")
-    values = compose_environment(config_from_assembly(assembly))
-    assert values["KDCUBE_SECRETS_RUNTIME_ROOT"] == str(tmp_path / "private-custody")
-    assert values["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"] == values["KDCUBE_SECRETS_RUNTIME_ROOT"]
-    assert json.loads(values["KDCUBE_SECRETS_RUNTIME_NAMESPACES"]) == ["custody"]
-    policy = RuntimeScopePolicy(values["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"])
+    descriptor = tmp_path / "assembly.yaml"
+    descriptor.write_text(json.dumps(assembly))
+    namespaces, root, raw_policy = runtime_configuration({
+        "ASSEMBLY_YAML_DESCRIPTOR_PATH": str(descriptor),
+        "KDCUBE_SECRETS_RUNTIME_ROOT": "/ambient-rival",
+        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": '["foreign"]',
+        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": "ambient-rival",
+    })
+    assert root == str(tmp_path / "private-custody")
+    assert namespaces == ("custody",)
+    policy = RuntimeScopePolicy(raw_policy)
     assert policy.authorized(namespace="custody", token="synthetic-reader", kind="read")
     assert not policy.authorized(namespace="custody", token="synthetic-reader", kind="write")
-    assert "synthetic-reader" not in str(values) and "synthetic-writer" not in str(values)
-    assert "ambient-rival" not in str(values)
+    assert "synthetic-reader" not in raw_policy and "synthetic-writer" not in raw_policy
+    assert "ambient-rival" not in raw_policy
     assert not (tmp_path / "private-custody").exists()
 
 
@@ -64,9 +71,13 @@ def test_absent_scope_does_not_infer_grants_from_legacy_credentials(tmp_path):
     assembly["secrets"]["runtime"].pop("scope_policy")
     assembly["secrets"]["token"] = "synthetic-reader"
     assembly["secrets"]["admin_token"] = "synthetic-writer"
-    values = compose_environment(config_from_assembly(assembly))
-    assert values["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"] == ""
-    assert not RuntimeScopePolicy(values["KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"]).authorized(
+    from kdcube_ai_app.infra.secrets.runtime_bootstrap import runtime_configuration
+    descriptor = tmp_path / "assembly.yaml"
+    descriptor.write_text(json.dumps(assembly))
+    _, _, policy = runtime_configuration({"ASSEMBLY_YAML_DESCRIPTOR_PATH": str(descriptor),
+        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": json.dumps(_assembly(tmp_path)["secrets"]["runtime"]["scope_policy"])})
+    assert policy == ""
+    assert not RuntimeScopePolicy(policy).authorized(
         namespace="custody", token="synthetic-reader", kind="read")
 
 
@@ -79,9 +90,10 @@ def test_projected_descriptor_drives_real_common_http_storage(tmp_path, monkeypa
 
     monkeypatch.setattr(runtime_contract, "persistent_filesystem", lambda root: True)
     assembly = _assembly(tmp_path)
-    values = compose_environment(config_from_assembly(assembly))
+    descriptor = tmp_path / "assembly.yaml"
+    descriptor.write_text(json.dumps(assembly))
     app = FastAPI()
-    install_configured_runtime_routes(app, environ=values)
+    install_configured_runtime_routes(app, environ={"ASSEMBLY_YAML_DESCRIPTOR_PATH": str(descriptor)})
     client = TestClient(app)
     read = {"X-KDCUBE-SECRET-TOKEN": "synthetic-reader"}
     write = {"X-KDCUBE-ADMIN-TOKEN": "synthetic-writer"}

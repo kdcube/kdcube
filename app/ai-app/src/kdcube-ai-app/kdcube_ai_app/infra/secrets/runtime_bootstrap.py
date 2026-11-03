@@ -2,7 +2,8 @@
 # Copyright (c) 2026 Elena Viter
 """Trusted deployment composition for the common scoped runtime-secret API.
 
-Only generated service inputs select custody roots and namespace grants.
+The mounted assembly descriptor selects custody roots and namespaces. Only
+the default policy is supplied by the temporary, per-launch service overlay.
 Ordinary door credentials, request data and health responses grant nothing.
 No store is opened during import or before HTTP scope authorization.
 """
@@ -13,25 +14,48 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from fastapi import FastAPI
+import yaml
 
-from kdcube_ai_app.infra.secrets.runtime_contract import RuntimeScopePolicy, valid_namespace
+from kdcube_ai_app.infra.secrets.runtime_contract import (
+    RuntimeScopePolicy, runtime_section_namespaces, valid_namespace,
+)
 from kdcube_ai_app.infra.secrets.runtime_file import RuntimeFileStore
 from kdcube_ai_app.infra.secrets.runtime_http import install_runtime_routes
 from kdcube_ai_app.infra.secrets.runtime_vault import RuntimeVaultStore
 
 
-def _namespaces(raw: str | None) -> tuple[str, ...]:
+def runtime_configuration(environ: Mapping[str, str]) -> tuple[tuple[str, ...], str, str]:
+    """Read trusted composition; missing or malformed descriptors grant nothing.
+
+    Old namespace/defaulted env projections are deliberately ignored. A declared
+    policy wins over env; explicit namespaces without a policy stay closed.
+    """
     try:
-        if type(raw) is not str or len(raw.encode("utf-8")) > 8192:
-            return ()
-        payload = json.loads(raw)
-        if (type(payload) is not list or len(payload) > 64
-                or any(not valid_namespace(value) for value in payload)
-                or len(set(payload)) != len(payload)):
-            return ()
-        return tuple(payload)
-    except (ValueError, TypeError, UnicodeError, RecursionError):
-        return ()
+        path = Path(environ.get("ASSEMBLY_YAML_DESCRIPTOR_PATH") or "/config/assembly.yaml")
+        assembly = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(assembly, dict):
+            return (), "", ""
+        secrets = assembly.get("secrets", {})
+        if not isinstance(secrets, dict):
+            return (), "", ""
+        section = secrets.get("runtime")
+        namespaces = runtime_section_namespaces(section)
+        if (len(namespaces) > 64 or any(not valid_namespace(value) for value in namespaces)
+                or len(set(namespaces)) != len(namespaces)):
+            return (), "", ""
+        runtime = section if isinstance(section, dict) else {}
+        root = runtime.get("root") or "/config/secrets"
+        if type(root) is not str or not Path(root).is_absolute():
+            return (), "", ""
+        if "scope_policy" in runtime:
+            policy = json.dumps(runtime["scope_policy"], allow_nan=False)
+        elif section is None or (isinstance(section, dict) and section.get("namespaces") is None):
+            policy = environ.get("KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY", "")
+        else:
+            policy = ""
+        return namespaces, root, policy
+    except (OSError, yaml.YAMLError, ValueError, TypeError, UnicodeError, RecursionError):
+        return (), "", ""
 
 
 def install_configured_runtime_routes(
@@ -45,10 +69,9 @@ def install_configured_runtime_routes(
     requires fresh storage qualification, not just the qualification endpoint.
     This is source wiring, not proof of installed volumes or IAM boundaries.
     """
-    namespaces = _namespaces(environ.get("KDCUBE_SECRETS_RUNTIME_NAMESPACES"))
-    root = environ.get("KDCUBE_SECRETS_RUNTIME_ROOT")
+    namespaces, root, raw_policy = runtime_configuration(environ)
     ordinary_path = environ.get("SECRETS_STORE_PATH", "/run/kdcube-secrets/store.json")
-    policy = RuntimeScopePolicy(environ.get("KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY"))
+    policy = RuntimeScopePolicy(raw_policy)
 
     def factory(namespace: str):
         if namespace not in namespaces:
