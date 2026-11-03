@@ -907,7 +907,11 @@ on one bundle entry.
 For a local path bundle, keep only:
 
 - `id`
-- `name` if needed
+- `name` if needed: the display label. A missing, null, empty or whitespace-only
+  name uses the complete bundle `id`, including its version suffix. An explicit
+  nonblank name takes precedence. Runtime registry metadata, app listings,
+  status/management views and the CLI inventory use this same fallback, so
+  moving a built-in example to an explicit Git source keeps a visible label.
 - `path`
 - `module`
 - `config`

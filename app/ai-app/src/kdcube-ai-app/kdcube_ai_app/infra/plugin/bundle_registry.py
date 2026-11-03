@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.infra.plugin.bundle_metadata import bundle_display_name
 
 _REG_LOCK = threading.RLock()
 _REGISTRY: Dict[str, Dict[str, Any]] = {}
@@ -60,6 +61,7 @@ class BundleSpec:
     def __post_init__(self) -> None:
         if not str(self.id or "").strip():
             raise ValueError("BundleSpec requires a non-empty id")
+        object.__setattr__(self, "name", bundle_display_name(self.id, self.name))
 
 ADMIN_BUNDLE_ID = "kdcube.admin"
 
@@ -124,6 +126,7 @@ def _normalize(d: Dict[str, Any]) -> Dict[str, Any]:
     if not d.get("git_commit"):
         d["git_commit"] = d.get("bundle_commit")
     d["singleton"] = bool(d.get("singleton", False))
+    d["name"] = bundle_display_name(d["id"], d.get("name"))
     return d
 
 

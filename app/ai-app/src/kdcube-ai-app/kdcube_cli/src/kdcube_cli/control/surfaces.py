@@ -186,7 +186,7 @@ def application_from_bundle_entry(
     source_ref = str(entry.get("ref") or "").strip() or None
     return ApplicationStatus(
         reference=reference,
-        name=str(entry.get("name") or "").strip() or None,
+        name=str(entry.get("name") or "").strip() or bundle_id,
         installed=True,
         enabled=entry.get("enabled") is not False,
         surfaces=tuple(surfaces),

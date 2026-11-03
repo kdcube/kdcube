@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple, Any, Set, Literal
 from pathlib import Path
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator
 import kdcube_ai_app.infra.namespaces as namespaces
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.runtime.external.service_discovery import _is_running_in_docker
@@ -31,6 +31,7 @@ from kdcube_ai_app.infra.secrets.manager import (
 )
 from kdcube_ai_app.storage.observed_file_locks import observed_file_lock
 from kdcube_ai_app.infra.plugin.example_bundle_discovery import declared_example_bundle_id
+from kdcube_ai_app.infra.plugin.bundle_metadata import bundle_display_name
 
 REDIS_KEY_FMT = namespaces.CONFIG.BUNDLES.BUNDLE_MAPPING_KEY_FMT
 REDIS_CHANNEL_FMT = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL
@@ -1066,7 +1067,7 @@ class BundleActivationConfig(BaseModel):
 
 class BundleEntry(BaseModel):
     id: str
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, validate_default=True)
     path: str                     # container-visible absolute path, e.g. /bundles/...
     module: Optional[str] = None
     singleton: Optional[bool] = False
@@ -1081,6 +1082,11 @@ class BundleEntry(BaseModel):
     # (bundle_snapshot). Set by the runtime on a resolved entry, never by the
     # descriptor, so the declared location stays readable after activation.
     mounted_path: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _display_name(cls, value: Optional[str], info: ValidationInfo) -> str:
+        return bundle_display_name(info.data.get("id", ""), value)
 
 class BundlesRegistry(BaseModel):
     default_bundle_id: Optional[str] = None
