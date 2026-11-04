@@ -23,9 +23,18 @@ shape/text anchors are JSON strings. Table targets carry a table element and
 quoted text, without a cell coordinate; reads retain that loss of precision.
 An arbitrary stored anchor is not evidence of visual association in Slides.
 
+`native-comments.json` carries selected native probe response shapes with
+neutral IDs/content/timestamps/revisions and coherent text offsets. Insert
+responses nest the full thread under `insertComment.commentThread`. Native
+cell reads use `tableCellAnchors.cellRanges` and omit zero cell indices.
+The table-range request reads back as text in one cell. The page/text/cell/range
+paths were checked visually during the direct provider probe; the element-only
+fixture extends the documented page-or-element union and remains a contract
+case rather than a captured element-only probe.
+
 The focused adapter tests exercise all five anchor forms, file comments,
 read-back mapping, author checks, failure states and bounded cursor traversal.
 Pure compiler tests cover Docs-style row/column selectors, merged slots,
 Unicode ranges, computed table/video placement and previews. These are source
-contract checks. Native Slides comment request/response compatibility and the
-visual association of API-created anchors still require a live comparison.
+contract checks. Full Card-to-service live acceptance, video/selector table
+checks and the scope floor on non-app-created decks remain separate.

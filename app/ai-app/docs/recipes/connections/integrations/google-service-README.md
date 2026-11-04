@@ -1207,6 +1207,14 @@ matches. For a larger presentation, page the list and pass its exact ref.
 | Table cell | `slide`, `table`, `row`, `column`, optional `header` and `quoted_text` |
 | Table range | `slide`, `table`, `table_range: {from: {row, column}, to: {row, column}}` |
 
+A range is a requested target rather than a durable Google anchor kind. In
+the provider probe Google normalized the range to text in its first cell.
+After native writes the adapter reads the saved thread and native anchor
+back, returning `comment_ref`, the requested target and the actual saved
+targets with a range-normalization warning. Native `tableCellAnchors` supply
+cell coordinates: omitted zero indices, including `cellLocation: {}`, become
+1-based row 1 / column 1. This richer read preserves precision absent in Drive.
+
 Partial or conflicting targets return `slides_comment_target_required` rather
 than falling back to a file comment. A cell must contain text; a range must
 contain text in at least one cell. Empty targets return
@@ -1215,14 +1223,18 @@ computed as UTF-16 units; agents supply quoted text and selectors.
 
 Anchored creation, reply, edit and deletion use Slides comment requests;
 file comments use Drive. Only the head post's author can edit or delete a
-thread; others receive `slides_comment_not_author` and can reply. Resolution
-uses a Drive reply with `action: resolve` for either kind. A slide-ref call
+thread; others receive `slides_comment_not_author` and can reply. Anchored
+resolution uses `addCommentReply` with `post.commentAction: RESOLVE` and a
+resolution reply (optional `content`, default `Resolved.`). File-thread
+resolution uses a Drive reply with `action: resolve`. A slide-ref call
 cannot mutate a file comment or a thread mapped to another slide.
 
 Every comment mutation supports preview. Anchored writes carry the current
 Slides revision and require `commentUpdateState: ALL_SAVED`; an unconfirmed
 save returns `slides_comment_not_saved`, the partial-result/outcome evidence,
-and instructions to read back before retrying. Drive writes check a supplied
+and instructions to read back before retrying. A confirmed save without an
+observed thread returns `slides_comment_readback_unavailable` with the saved
+identity when available. Drive writes check a supplied
 Slides revision first, but that check is not an atomic Drive revision guard.
 Comments do not change slide geometry, so their fit summary uses the read deck.
 

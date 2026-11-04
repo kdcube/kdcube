@@ -1,0 +1,235 @@
+{
+  "insert_responses": {
+    "page": {
+      "presentationId": "deck_fixture",
+      "replies": [
+        {
+          "insertComment": {
+            "commentThread": {
+              "commentId": "doco.native_page",
+              "anchorId": "{\"uid\":100,\"type\":\"page\",\"pages\":[\"page_fixture\"]}",
+              "headPost": {
+                "postId": "doco.native_page",
+                "content": "Review this",
+                "contentHtml": "Review this",
+                "author": {
+                  "displayName": "Editor",
+                  "me": true
+                },
+                "createTime": "2026-01-01T00:00:00Z",
+                "updateTime": "2026-01-01T00:00:00Z",
+                "commentAction": "NO_COMMENT_ACTION_CHANGE"
+              },
+              "status": "OPEN",
+              "plainTextQuote": ""
+            }
+          }
+        }
+      ],
+      "writeControl": {
+        "requiredRevisionId": "r2"
+      },
+      "commentUpdateState": "ALL_SAVED"
+    },
+    "element": {
+      "presentationId": "deck_fixture",
+      "replies": [
+        {
+          "insertComment": {
+            "commentThread": {
+              "commentId": "doco.native_element",
+              "anchorId": "{\"uid\":101,\"type\":\"shape\",\"page\":\"page_fixture\",\"targets\":[\"shape_fixture\"]}",
+              "headPost": {
+                "postId": "doco.native_element",
+                "content": "Review this",
+                "contentHtml": "Review this",
+                "author": {
+                  "displayName": "Editor",
+                  "me": true
+                },
+                "createTime": "2026-01-01T00:00:00Z",
+                "updateTime": "2026-01-01T00:00:00Z",
+                "commentAction": "NO_COMMENT_ACTION_CHANGE"
+              },
+              "status": "OPEN",
+              "plainTextQuote": ""
+            }
+          }
+        }
+      ],
+      "writeControl": {
+        "requiredRevisionId": "r2"
+      },
+      "commentUpdateState": "ALL_SAVED"
+    },
+    "shape_text": {
+      "presentationId": "deck_fixture",
+      "replies": [
+        {
+          "insertComment": {
+            "commentThread": {
+              "commentId": "doco.native_shape_text",
+              "anchorId": "{\"uid\":102,\"type\":\"shape\",\"page\":\"page_fixture\",\"targets\":[\"shape_fixture\"],\"subtype\":\"text\"}",
+              "headPost": {
+                "postId": "doco.native_shape_text",
+                "content": "Review this",
+                "contentHtml": "Review this",
+                "author": {
+                  "displayName": "Editor",
+                  "me": true
+                },
+                "createTime": "2026-01-01T00:00:00Z",
+                "updateTime": "2026-01-01T00:00:00Z",
+                "commentAction": "NO_COMMENT_ACTION_CHANGE"
+              },
+              "status": "OPEN",
+              "plainTextQuote": "Roadmap"
+            }
+          }
+        }
+      ],
+      "writeControl": {
+        "requiredRevisionId": "r2"
+      },
+      "commentUpdateState": "ALL_SAVED"
+    },
+    "table_cell": {
+      "presentationId": "deck_fixture",
+      "replies": [
+        {
+          "insertComment": {
+            "commentThread": {
+              "commentId": "doco.native_table_cell",
+              "anchorId": "{\"uid\":103,\"type\":\"shape\",\"page\":\"page_fixture\",\"targets\":[\"table_fixture\"],\"subtype\":\"text\"}",
+              "headPost": {
+                "postId": "doco.native_table_cell",
+                "content": "Review this",
+                "contentHtml": "Review this",
+                "author": {
+                  "displayName": "Editor",
+                  "me": true
+                },
+                "createTime": "2026-01-01T00:00:00Z",
+                "updateTime": "2026-01-01T00:00:00Z",
+                "commentAction": "NO_COMMENT_ACTION_CHANGE"
+              },
+              "status": "OPEN",
+              "plainTextQuote": "Stage"
+            }
+          }
+        }
+      ],
+      "writeControl": {
+        "requiredRevisionId": "r2"
+      },
+      "commentUpdateState": "ALL_SAVED"
+    },
+    "table_range": {
+      "presentationId": "deck_fixture",
+      "replies": [
+        {
+          "insertComment": {
+            "commentThread": {
+              "commentId": "doco.native_table_range",
+              "anchorId": "{\"uid\":104,\"type\":\"shape\",\"page\":\"page_fixture\",\"targets\":[\"table_fixture\"],\"subtype\":\"text\"}",
+              "headPost": {
+                "postId": "doco.native_table_range",
+                "content": "Review this",
+                "contentHtml": "Review this",
+                "author": {
+                  "displayName": "Editor",
+                  "me": true
+                },
+                "createTime": "2026-01-01T00:00:00Z",
+                "updateTime": "2026-01-01T00:00:00Z",
+                "commentAction": "NO_COMMENT_ACTION_CHANGE"
+              },
+              "status": "OPEN",
+              "plainTextQuote": "Stage"
+            }
+          }
+        }
+      ],
+      "writeControl": {
+        "requiredRevisionId": "r2"
+      },
+      "commentUpdateState": "ALL_SAVED"
+    }
+  },
+  "anchors": {
+    "page": {
+      "anchorId": "{\"uid\":100,\"type\":\"page\",\"pages\":[\"page_fixture\"]}",
+      "objectAnchors": [
+        {
+          "objectId": "page_fixture"
+        }
+      ]
+    },
+    "element": {
+      "anchorId": "{\"uid\":101,\"type\":\"shape\",\"page\":\"page_fixture\",\"targets\":[\"shape_fixture\"]}",
+      "objectAnchors": [
+        {
+          "objectId": "shape_fixture"
+        }
+      ]
+    },
+    "shape_text": {
+      "anchorId": "{\"uid\":102,\"type\":\"shape\",\"page\":\"page_fixture\",\"targets\":[\"shape_fixture\"],\"subtype\":\"text\"}",
+      "objectAnchors": [
+        {
+          "objectId": "shape_fixture",
+          "shapeTextAnchors": {
+            "ranges": [
+              {
+                "startIndex": 3,
+                "endIndex": 10
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "table_cell": {
+      "anchorId": "{\"uid\":103,\"type\":\"shape\",\"page\":\"page_fixture\",\"targets\":[\"table_fixture\"],\"subtype\":\"text\"}",
+      "objectAnchors": [
+        {
+          "objectId": "table_fixture",
+          "tableCellAnchors": {
+            "cellRanges": [
+              {
+                "cellLocation": {},
+                "ranges": [
+                  {
+                    "startIndex": 0,
+                    "endIndex": 5
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "table_range": {
+      "anchorId": "{\"uid\":104,\"type\":\"shape\",\"page\":\"page_fixture\",\"targets\":[\"table_fixture\"],\"subtype\":\"text\"}",
+      "objectAnchors": [
+        {
+          "objectId": "table_fixture",
+          "tableCellAnchors": {
+            "cellRanges": [
+              {
+                "cellLocation": {},
+                "ranges": [
+                  {
+                    "startIndex": 0,
+                    "endIndex": 5
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

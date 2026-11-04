@@ -12,6 +12,7 @@
     "https://developers.google.com/workspace/slides/api/reference/rest/v1/presentations.pages/tables"
   ],
   "fixture_policy": "Small neutral identifiers and content. No account, credential, private document identity or probe payload is retained.",
-  "live_comparison": "Drive comment field/anchor shapes compared with the sanitized live probe. Native Slides comment request and comments-included read compatibility, plus visual association of API-created anchors, remain pending.",
-  "drive-ui-anchors.json": "Field shapes from a live Drive v3 comment probe on 2026-11-04; all IDs, timestamp values and content replaced with neutral fixtures. Page and shape/text anchors preserve the observed JSON-string structure. Table anchors contain no row or column."
+  "live_comparison": "Native request/response shapes and page/text/cell/range visual behavior compared with the direct native probe. Full Card-to-service acceptance and non-app-created-deck scope floor remain open.",
+  "drive-ui-anchors.json": "Field shapes from a live Drive v3 comment probe on 2026-11-04; all IDs, timestamp values and content replaced with neutral fixtures. Page and shape/text anchors preserve the observed JSON-string structure. Table anchors contain no row or column.",
+  "native-comments.json": "Based on the 2026-11-04 native Slides probe selected response shapes: full insertComment.commentThread, native tableCellAnchors.cellRanges, omitted zero cell indices and table-range collapse. All IDs/content/times/revisions replaced; text offsets made coherent with neutral text. The element-only case extends the observed page union to the documented element form."
 }

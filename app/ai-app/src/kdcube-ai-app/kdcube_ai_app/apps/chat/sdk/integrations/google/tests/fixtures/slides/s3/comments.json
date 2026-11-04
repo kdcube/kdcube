@@ -1,26 +1,281 @@
 {
   "presentation": {
-    "presentationId": "deck_fixture", "title": "Planning", "revisionId": "r1",
-    "pageSize": {"width": {"magnitude": 720, "unit": "PT"}, "height": {"magnitude": 405, "unit": "PT"}},
-    "slides": [{
-      "objectId": "page_fixture",
-      "pageElements": [
-        {"objectId": "shape_fixture", "size": {"width": {"magnitude": 300, "unit": "PT"}, "height": {"magnitude": 50, "unit": "PT"}}, "transform": {"scaleX": 1, "scaleY": 1, "translateX": 30, "translateY": 20, "unit": "PT"}, "shape": {"placeholder": {"type": "TITLE"}, "text": {"textElements": [{"textRun": {"content": "😀 Roadmap phrase\n"}}]}}},
-        {"objectId": "table_fixture", "size": {"width": {"magnitude": 600, "unit": "PT"}, "height": {"magnitude": 180, "unit": "PT"}}, "transform": {"scaleX": 1, "scaleY": 1, "translateX": 30, "translateY": 100, "unit": "PT"}, "table": {"rows": 3, "columns": 2, "tableRows": [
-          {"tableCells": [{"location": {}, "rowSpan": 1, "columnSpan": 1, "text": {"textElements": [{"textRun": {"content": "Stage\n"}}]}}, {"location": {"columnIndex": 1}, "rowSpan": 1, "columnSpan": 1, "text": {"textElements": [{"textRun": {"content": "Owner\n"}}]}}]},
-          {"tableCells": [{"location": {"rowIndex": 1}, "rowSpan": 1, "columnSpan": 1, "text": {"textElements": [{"textRun": {"content": "Ready\n"}}]}}, {"location": {"rowIndex": 1, "columnIndex": 1}, "rowSpan": 1, "columnSpan": 1, "text": {"textElements": [{"textRun": {"content": "Editor\n"}}]}}]},
-          {"tableCells": [{"location": {"rowIndex": 2}, "rowSpan": 1, "columnSpan": 1, "text": {"textElements": [{"textRun": {"content": "\n"}}]}}, {"location": {"rowIndex": 2, "columnIndex": 1}, "rowSpan": 1, "columnSpan": 1, "text": {"textElements": [{"textRun": {"content": "\n"}}]}}]}
-        ]}}
-      ],
-      "commentAnchors": [{"anchorId": "anchor_fixture", "objectAnchors": [{"objectId": "shape_fixture", "shapeTextAnchors": {"ranges": [{"startIndex": 3, "endIndex": 10}]}}]}]
-    }],
-    "comments": [{"commentId": "anchored_fixture", "anchorId": "anchor_fixture", "headPost": {"postId": "post_fixture", "content": "Clarify this", "author": {"displayName": "Editor", "me": true}}, "status": "OPEN", "plainTextQuote": "Roadmap"}]
+    "presentationId": "deck_fixture",
+    "title": "Planning",
+    "revisionId": "r1",
+    "pageSize": {
+      "width": {
+        "magnitude": 720,
+        "unit": "PT"
+      },
+      "height": {
+        "magnitude": 405,
+        "unit": "PT"
+      }
+    },
+    "slides": [
+      {
+        "objectId": "page_fixture",
+        "pageElements": [
+          {
+            "objectId": "shape_fixture",
+            "size": {
+              "width": {
+                "magnitude": 300,
+                "unit": "PT"
+              },
+              "height": {
+                "magnitude": 50,
+                "unit": "PT"
+              }
+            },
+            "transform": {
+              "scaleX": 1,
+              "scaleY": 1,
+              "translateX": 30,
+              "translateY": 20,
+              "unit": "PT"
+            },
+            "shape": {
+              "placeholder": {
+                "type": "TITLE"
+              },
+              "text": {
+                "textElements": [
+                  {
+                    "textRun": {
+                      "content": "😀 Roadmap phrase\n"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "objectId": "table_fixture",
+            "size": {
+              "width": {
+                "magnitude": 600,
+                "unit": "PT"
+              },
+              "height": {
+                "magnitude": 180,
+                "unit": "PT"
+              }
+            },
+            "transform": {
+              "scaleX": 1,
+              "scaleY": 1,
+              "translateX": 30,
+              "translateY": 100,
+              "unit": "PT"
+            },
+            "table": {
+              "rows": 3,
+              "columns": 2,
+              "tableRows": [
+                {
+                  "tableCells": [
+                    {
+                      "location": {},
+                      "rowSpan": 1,
+                      "columnSpan": 1,
+                      "text": {
+                        "textElements": [
+                          {
+                            "textRun": {
+                              "content": "Stage\n"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "location": {
+                        "columnIndex": 1
+                      },
+                      "rowSpan": 1,
+                      "columnSpan": 1,
+                      "text": {
+                        "textElements": [
+                          {
+                            "textRun": {
+                              "content": "Owner\n"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "tableCells": [
+                    {
+                      "location": {
+                        "rowIndex": 1
+                      },
+                      "rowSpan": 1,
+                      "columnSpan": 1,
+                      "text": {
+                        "textElements": [
+                          {
+                            "textRun": {
+                              "content": "Ready\n"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "location": {
+                        "rowIndex": 1,
+                        "columnIndex": 1
+                      },
+                      "rowSpan": 1,
+                      "columnSpan": 1,
+                      "text": {
+                        "textElements": [
+                          {
+                            "textRun": {
+                              "content": "Editor\n"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "tableCells": [
+                    {
+                      "location": {
+                        "rowIndex": 2
+                      },
+                      "rowSpan": 1,
+                      "columnSpan": 1,
+                      "text": {
+                        "textElements": [
+                          {
+                            "textRun": {
+                              "content": "\n"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "location": {
+                        "rowIndex": 2,
+                        "columnIndex": 1
+                      },
+                      "rowSpan": 1,
+                      "columnSpan": 1,
+                      "text": {
+                        "textElements": [
+                          {
+                            "textRun": {
+                              "content": "\n"
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "commentAnchors": [
+          {
+            "anchorId": "anchor_fixture",
+            "objectAnchors": [
+              {
+                "objectId": "shape_fixture",
+                "shapeTextAnchors": {
+                  "ranges": [
+                    {
+                      "startIndex": 3,
+                      "endIndex": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "comments": [
+      {
+        "commentId": "anchored_fixture",
+        "anchorId": "anchor_fixture",
+        "headPost": {
+          "postId": "post_fixture",
+          "content": "Clarify this",
+          "author": {
+            "displayName": "Editor",
+            "me": true
+          }
+        },
+        "status": "OPEN",
+        "plainTextQuote": "Roadmap"
+      }
+    ]
   },
-  "drive_comments": {"comments": [
-    {"id": "anchored_fixture", "content": "Clarify this", "author": {"displayName": "Editor", "me": true}, "resolved": false, "quotedFileContent": {"value": "Roadmap"}, "replies": []},
-    {"id": "file_fixture", "content": "File review", "author": {"displayName": "Editor", "me": true}, "resolved": false, "replies": []},
-    {"id": "foreign_fixture", "content": "Other review", "author": {"displayName": "Reviewer", "me": false}, "resolved": false, "replies": []}
-  ]},
-  "saved": {"writeControl": {"requiredRevisionId": "r2"}, "commentUpdateState": "ALL_SAVED", "replies": [{"insertComment": {"commentId": "created_fixture"}}]},
-  "not_saved": {"writeControl": {"requiredRevisionId": "r2"}, "commentUpdateState": "ALL_FAILED_UNKNOWN_REASON", "replies": [{}]}
+  "drive_comments": {
+    "comments": [
+      {
+        "id": "anchored_fixture",
+        "content": "Clarify this",
+        "author": {
+          "displayName": "Editor",
+          "me": true
+        },
+        "resolved": false,
+        "quotedFileContent": {
+          "value": "Roadmap"
+        },
+        "replies": []
+      },
+      {
+        "id": "file_fixture",
+        "content": "File review",
+        "author": {
+          "displayName": "Editor",
+          "me": true
+        },
+        "resolved": false,
+        "replies": []
+      },
+      {
+        "id": "foreign_fixture",
+        "content": "Other review",
+        "author": {
+          "displayName": "Reviewer",
+          "me": false
+        },
+        "resolved": false,
+        "replies": []
+      }
+    ]
+  },
+  "saved": {
+    "writeControl": {
+      "requiredRevisionId": "r2"
+    },
+    "commentUpdateState": "ALL_SAVED",
+    "replies": [
+      {}
+    ]
+  },
+  "not_saved": {
+    "writeControl": {
+      "requiredRevisionId": "r2"
+    },
+    "commentUpdateState": "ALL_FAILED_UNKNOWN_REASON",
+    "replies": [
+      {}
+    ]
+  }
 }

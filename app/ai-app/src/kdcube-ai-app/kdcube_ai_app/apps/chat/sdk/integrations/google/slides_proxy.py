@@ -58,6 +58,7 @@ class SlidesClient:
         self.client, self.headers = client, {"Authorization": f"Bearer {token}"}
         self.created_id = ""
         self.created_slide_id = ""
+        self.created_comment_id = ""
         self.writes_applied = False
 
     async def request(self, method, url, *, operation, mutating=False, **kwargs):
@@ -274,7 +275,7 @@ async def _run(api, operation, payload):
         result = await run_comments(api, operation, payload, deck_id, presentation)
         if operation in WRITE_COMMENTS:
             result.update(await _fit_flags(api, presentation, predicted=bool(payload.get("preview")), summary_only=True))
-            if result.get("changes", {}).get("scope") == "file" or operation == "resolve_comment":
+            if result.pop("_drive_write", False):
                 result["revision_guard"] = "The Slides revision was checked before the Drive write; Drive comments have no atomic Slides revision guard."
         return result
     if operation == "thumbnail":
@@ -392,4 +393,6 @@ async def execute_google_slides_operation(*, operation, access_token, payload=No
             result["ret"]["created_presentation_id"] = api.created_id
         if api.created_slide_id:
             result["ret"]["created_slide_id"] = api.created_slide_id
+        if api.created_comment_id:
+            result["ret"]["created_comment_ref"] = api.created_comment_id
     return result

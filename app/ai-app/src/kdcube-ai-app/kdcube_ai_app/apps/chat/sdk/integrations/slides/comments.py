@@ -103,22 +103,34 @@ def anchor_views(presentation):
     result = {}
     for position, slide in enumerate(presentation.get("slides", []), 1):
         identities = {e["objectId"] for e in walk(slide.get("pageElements", []))}
-        for anchor in slide.get("commentAnchors", []):
+        for anchor in slide.get("commentAnchors") or []:
             objects = []
+            unavailable = False
             for item in anchor.get("objectAnchors", []):
                 identity = item.get("objectId")
                 if identity != slide["objectId"] and identity not in identities:
+                    unavailable = True
                     continue
                 target = {"slide": {"ref": slide["objectId"], "position": position}}
                 if identity != slide["objectId"]:
                     target["element"] = {"ref": identity}
-                # Read ranges are informational; callers select text/cells.
-                for key in ("shapeTextAnchors", "tableCellTextAnchors", "tableAnchors"):
-                    if key in item:
-                        target[key] = item[key]
-                objects.append(target)
-            result[anchor.get("anchorId")] = {"scope": "anchored", "anchor_state": "attached" if objects else "unavailable", "targets": objects}
-    for thread in presentation.get("comments", []):
+                cells = item.get("tableCellAnchors", {}).get("cellRanges")
+                if cells:
+                    for cell in cells:
+                        # Protobuf JSON omits zero values. {} is cell (0,0),
+                        # not a missing location or an unresolved anchor.
+                        location = cell.get("cellLocation", {})
+                        r, c = location.get("rowIndex", 0), location.get("columnIndex", 0)
+                        if type(r) is not int or type(c) is not int or min(r, c) < 0:
+                            unavailable = True
+                            continue
+                        objects.append({**target, "table": {"ref": identity}, "row": r+1, "column": c+1, "location_precision": "cell", "text_ranges": cell.get("ranges", [])})
+                else:
+                    if "shapeTextAnchors" in item:
+                        target["text_ranges"] = item["shapeTextAnchors"].get("ranges", [])
+                    objects.append(target)
+            result[anchor.get("anchorId")] = {"scope": "anchored", "anchor_state": "attached" if objects and not unavailable else "unavailable", "anchor_format": "native-slides", "targets": objects}
+    for thread in presentation.get("comments") or []:
         identity = thread.get("anchorId")
         if identity in result:
             continue

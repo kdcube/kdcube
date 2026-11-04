@@ -47,6 +47,12 @@ def _row(raw, thread, anchors, presentation=None):
     return row
 
 
+def _native_row(thread, presentation):
+    head = thread.get("headPost", {})
+    raw = {"id": thread["commentId"], "content": head.get("content", ""), "author": head.get("author", {}), "createdTime": head.get("createTime"), "modifiedTime": head.get("updateTime"), "resolved": thread.get("status") == "RESOLVED", "quotedFileContent": {"value": thread.get("plainTextQuote", "")}, "replies": [{"id": p.get("postId"), "content": p.get("content", ""), "author": p.get("author", {}), "createdTime": p.get("createTime"), "action": p.get("commentAction")} for p in thread.get("replies", [])]}
+    return _row(raw, thread, anchor_views(presentation), presentation)
+
+
 async def _page(api, deck_id, cursor, limit):
     return await api.request("GET", f"{DRIVE_API}/files/{deck_id}/comments", operation="list_comments", params={"pageSize": limit, "pageToken": cursor, "includeDeleted": "false", "fields": f"nextPageToken,comments({COMMENT_FIELDS})"})
 
@@ -87,7 +93,7 @@ async def _select(api, deck_id, payload, presentation):
         seen.add(cursor)
     if cursor:
         raise SlidesValidationError("slides_comment_selection_incomplete", "This presentation has more than 1000 comments. Page through list_comments and choose comment_ref; a partial scan cannot select a unique comment.")
-    threads = {t["commentId"]: t for t in presentation.get("comments", [])}
+    threads = {t["commentId"]: t for t in presentation.get("comments") or []}
     anchors = anchor_views(presentation)
     rows = [_row(raw, threads.get(raw["id"]), anchors, presentation) for raw in raws]
     matches = shared_selector(matching_comments, rows, selector)
@@ -97,7 +103,7 @@ async def _select(api, deck_id, payload, presentation):
 
 
 async def run_comments(api, operation, payload, deck_id, presentation):
-    threads = {t["commentId"]: t for t in presentation.get("comments", [])}
+    threads = {t["commentId"]: t for t in presentation.get("comments") or []}
     anchors = anchor_views(presentation)
     base = {"presentation_id": deck_id, "title": presentation.get("title", ""), "revision_id": presentation.get("revisionId")}
     if operation == "list_comments":
@@ -118,15 +124,27 @@ async def run_comments(api, operation, payload, deck_id, presentation):
         text = comment_content(payload.get("content"))
         anchor, target = compile_anchor(presentation, await api.all_snapshot(presentation), payload)
         if payload.get("preview"):
-            return {**base, "preview": True, "changes": {**target, "content": text}}
+            return {**base, "preview": True, "changes": {**target, "content": text}, **({"anchor_warning": "Google may normalize a table range to one cell text anchor. The saved target is read back after writing."} if target["scope"] == "table_range" else {})}
         if anchor is None:
             result = await api.request("POST", f"{DRIVE_API}/files/{deck_id}/comments", operation=operation, mutating=True, params={"fields": COMMENT_FIELDS}, json={"content": text})
             if not result.get("id"):
                 raise SlidesValidationError("slides_comment_not_saved", "Google returned no new comment identity. Read the comments before retrying.", details={"outcome_unknown": True})
-            return {**base, "comment": _row(result, None, {}), "changes": target}
+            return {**base, "comment_ref": result["id"], "comment": _row(result, None, {}), "changes": target, "_drive_write": True}
         written = await api.write_batches(deck_id, [{"insertComment": {"content": text, **anchor}}], presentation.get("revisionId"), operation=operation)
-        identity = next((r.get("insertComment", {}).get("commentId") for r in written["replies"] if r.get("insertComment", {}).get("commentId")), None)
-        return {**base, **written, "comment_ref": identity, "changes": target, "next_action": "Read list_comments or get_comment to verify the saved anchor."}
+        inserted = next((r.get("insertComment", {}).get("commentThread") for r in written["replies"] if r.get("insertComment", {}).get("commentThread")), {})
+        identity = inserted.get("commentId")
+        if not identity:
+            raise SlidesValidationError("slides_comment_readback_unavailable", "Google confirmed the save but returned no new thread identity. List comments before retrying.", details={"save_confirmed": True, "outcome_unknown": True})
+        api.created_comment_id = identity
+        observed = await api.get(deck_id, include_comments=True)
+        saved = next((t for t in observed.get("comments") or [] if t.get("commentId") == identity), None)
+        if saved is None:
+            raise SlidesValidationError("slides_comment_readback_unavailable", "Google confirmed the save but the new thread is absent from the read-back. Read it again before retrying.", details={"comment_ref": identity, "save_confirmed": True, "outcome_unknown": False})
+        comment = _native_row(saved, observed)
+        result = {**base, **written, "observed_revision_id": observed.get("revisionId"), "comment_ref": identity, "comment": comment, "changes": {"requested_target": target, "saved_targets": comment.get("targets", [])}}
+        if target["scope"] == "table_range":
+            result["anchor_warning"] = "The requested table range is provider-normalized; the read-back targets describe the saved anchor and do not promise a durable range."
+        return result
     raw = await _select(api, deck_id, payload, presentation)
     identity = raw["id"]
     thread = threads.get(identity)
@@ -141,16 +159,16 @@ async def run_comments(api, operation, payload, deck_id, presentation):
         author = (thread.get("headPost") or {}).get("author", {}) if thread else raw.get("author", {})
         if author.get("me") is not True:
             raise SlidesValidationError("slides_comment_not_author", "Only the head post's author may edit or delete this comment. Reply instead.")
-    text = comment_content(payload.get("content")) if operation in ("update_comment", "reply_comment") else None
-    if row["scope"] == "anchored" and not thread and operation != "resolve_comment":
+    text = comment_content(payload.get("content")) if operation in ("update_comment", "reply_comment") else comment_content(payload.get("content", "Resolved.")) if operation == "resolve_comment" and thread else None
+    if row["scope"] == "anchored" and not thread:
         raise SlidesValidationError("slides_comment_anchors_unavailable", "The anchored comment is absent from the Slides read. Read it again before editing.")
     if payload.get("preview"):
         return {**base, "preview": True, "comment_ref": identity, "changes": {"action": operation, **({"content": text} if text is not None else {})}}
     url = f"{DRIVE_API}/files/{deck_id}/comments/{_identity(identity)}"
-    if operation == "resolve_comment":
-        await api.request("POST", f"{url}/replies", operation=operation, mutating=True, params={"fields": "id,action"}, json={"action": "resolve"})
-    elif thread:
-        if operation == "reply_comment":
+    if thread:
+        if operation == "resolve_comment":
+            request = {"addCommentReply": {"commentId": identity, "post": {"content": text, "commentAction": "RESOLVE"}}}
+        elif operation == "reply_comment":
             request = {"addCommentReply": {"commentId": identity, "post": {"content": text}}}
         elif operation == "update_comment":
             post = thread.get("headPost", {}).get("postId")
@@ -161,10 +179,23 @@ async def run_comments(api, operation, payload, deck_id, presentation):
             request = {"deleteComment": {"commentId": identity}}
         written = await api.write_batches(deck_id, [request], presentation.get("revisionId"), operation=operation)
         base.update(revision_id=written["revision_id"])
+        observed = await api.get(deck_id, include_comments=True)
+        saved = next((t for t in observed.get("comments") or [] if t.get("commentId") == identity), None)
+        base["observed_revision_id"] = observed.get("revisionId")
+        if operation == "delete_comment":
+            if saved is not None:
+                raise SlidesValidationError("slides_comment_readback_unavailable", "Google confirmed deletion but the thread remains in the read-back. Read again before retrying.", details={"comment_ref": identity, "save_confirmed": True})
+            base["deleted"] = True
+        elif saved is None:
+            raise SlidesValidationError("slides_comment_readback_unavailable", "The saved thread is absent from the read-back. Read comments before retrying.", details={"comment_ref": identity, "save_confirmed": True})
+        else:
+            base["comment"] = _native_row(saved, observed)
+    elif operation == "resolve_comment":
+        await api.request("POST", f"{url}/replies", operation=operation, mutating=True, params={"fields": "id,action"}, json={"action": "resolve"})
     elif operation == "reply_comment":
         await api.request("POST", f"{url}/replies", operation=operation, mutating=True, params={"fields": "id,content"}, json={"content": text})
     elif operation == "update_comment":
         await api.request("PATCH", url, operation=operation, mutating=True, params={"fields": "id,content"}, json={"content": text})
     else:
         await api.request("DELETE", url, operation=operation, mutating=True)
-    return {**base, "comment_ref": identity, "changes": {"action": operation, "scope": row["scope"]}}
+    return {**base, "comment_ref": identity, "changes": {"action": operation, "scope": row["scope"]}, "_drive_write": not bool(thread)}
