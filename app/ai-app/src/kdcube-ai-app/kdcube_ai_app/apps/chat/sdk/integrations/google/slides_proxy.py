@@ -45,7 +45,15 @@ MUTATING_OPERATIONS = frozenset({"create", "rename", "copy", "fill_template", "r
 # URLs from image/chart objects are deliberately excluded. Group children
 # remain internal and are projected by slides_structure, never returned raw.
 _ELEMENT = "objectId,title,description,size,transform,shape,table,elementGroup(children),image(imageProperties(cropProperties)),sheetsChart(spreadsheetId,chartId),video(id,source)"
-PRESENTATION_FIELDS = f"presentationId,title,revisionId,pageSize,slides(objectId,slideProperties(isSkipped,layoutObjectId,masterObjectId,notesPage(notesProperties,pageElements({_ELEMENT}))),pageElements({_ELEMENT})),layouts(objectId,layoutProperties,pageElements({_ELEMENT})),masters(objectId,pageElements({_ELEMENT}))"
+
+
+def _presentation_fields(*, include_comments=False):
+    slide = f"objectId,slideProperties(isSkipped,layoutObjectId,masterObjectId,notesPage(notesProperties,pageElements({_ELEMENT}))),pageElements({_ELEMENT})"
+    return f"presentationId,title,revisionId,pageSize,{('comments,' if include_comments else '')}slides({('commentAnchors,' if include_comments else '')}{slide}),layouts(objectId,layoutProperties,pageElements({_ELEMENT})),masters(objectId,pageElements({_ELEMENT}))"
+
+
+PRESENTATION_FIELDS = _presentation_fields()
+PRESENTATION_COMMENT_FIELDS = _presentation_fields(include_comments=True)
 
 
 class _ProviderError(Exception):
@@ -90,7 +98,7 @@ class SlidesClient:
         return dict(body)
 
     async def get(self, deck_id, *, include_comments=False):
-        fields = PRESENTATION_FIELDS.replace("slides(objectId,", "comments,slides(commentAnchors,objectId,") if include_comments else PRESENTATION_FIELDS
+        fields = PRESENTATION_COMMENT_FIELDS if include_comments else PRESENTATION_FIELDS
         params = {"fields": fields}
         if include_comments:
             params["commentsViewMode"] = "COMMENTS_VIEW_MODE_INCLUDED"
@@ -381,6 +389,8 @@ async def execute_google_slides_operation(*, operation, access_token, payload=No
         result = {"ok": False, "error": {"code": exc.code, "message": str(exc), "details": exc.details, "managed": True, "where": where}, "ret": {"outcome_unknown": False, **exc.details}}
     except _ProviderError as exc:
         result = exc.failure.error_result(where=where)
+        if operation in WRITE_COMMENTS and exc.failure.provider_status == 400:
+            result["ret"]["next_step"] = "Read the comments again and use the returned comment_ref before retrying. File comments use Drive; native comment mutations require a Slides anchor. Do not repeat the refused write unchanged."
         if operation == "fill_template" and not (api and api.created_id) and exc.failure.category in ("access_denied", "not_found"):
             result["error"].update(code="slides_template_unreadable", message="The connected account cannot read or copy this template. Share it with that account and retry.")
     except httpx.HTTPError as exc:

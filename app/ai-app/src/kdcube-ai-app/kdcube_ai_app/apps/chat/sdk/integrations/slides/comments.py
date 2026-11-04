@@ -132,6 +132,8 @@ def anchor_views(presentation):
             result[anchor.get("anchorId")] = {"scope": "anchored", "anchor_state": "attached" if objects and not unavailable else "unavailable", "anchor_format": "native-slides", "targets": objects}
     for thread in presentation.get("comments") or []:
         identity = thread.get("anchorId")
+        if not identity:
+            continue  # Drive file threads have no native anchor.
         if identity in result:
             continue
         # The design's probe observed JSON anchor IDs too. Retain their safe

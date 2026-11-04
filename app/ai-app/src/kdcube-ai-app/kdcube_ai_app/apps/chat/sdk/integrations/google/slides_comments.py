@@ -35,14 +35,15 @@ def _row(raw, thread, anchors, presentation=None):
         "replies": [{"reply_ref": r.get("id"), "content": str(r.get("content", ""))[:12000], "action": r.get("action"), "author": (r.get("author") or {}).get("displayName", ""), "author_is_me": (r.get("author") or {}).get("me") is True} for r in raw.get("replies", [])[:100]],
         "replies_truncated": len(raw.get("replies", [])) > 100,
     }
-    if thread:
+    if thread and thread.get("anchorId"):
         view = anchors.get(thread.get("anchorId"), {"scope": "anchored", "anchor_state": "unavailable"})
         if view.get("anchor_state") != "attached" and raw.get("anchor"):
             view = drive_anchor_view(presentation or {}, raw)
         row.update(view)
         row["post_ref"] = head.get("postId")
     else:
-        # An unknown anchored thread must never silently become a file comment.
+        # Native reads also include Drive file threads without an anchorId.
+        # Their presence is not evidence of an anchor or a native write route.
         row.update(drive_anchor_view(presentation or {}, raw))
     return row
 
@@ -147,8 +148,10 @@ async def run_comments(api, operation, payload, deck_id, presentation):
         return result
     raw = await _select(api, deck_id, payload, presentation)
     identity = raw["id"]
-    thread = threads.get(identity)
-    row = _row(raw, thread, anchors, presentation)
+    row = _row(raw, threads.get(identity), anchors, presentation)
+    thread = threads.get(identity) if row["scope"] == "anchored" else None
+    if thread and not thread.get("anchorId"):
+        thread = None
     if "slide" in payload:
         slide = resolve_slide((await api.all_snapshot(presentation))["slides"], payload["slide"])
         if not any(t["slide"]["ref"] == slide["ref"] for t in row.get("targets", [])):
@@ -160,8 +163,8 @@ async def run_comments(api, operation, payload, deck_id, presentation):
         if author.get("me") is not True:
             raise SlidesValidationError("slides_comment_not_author", "Only the head post's author may edit or delete this comment. Reply instead.")
     text = comment_content(payload.get("content")) if operation in ("update_comment", "reply_comment") else comment_content(payload.get("content", "Resolved.")) if operation == "resolve_comment" and thread else None
-    if row["scope"] == "anchored" and not thread:
-        raise SlidesValidationError("slides_comment_anchors_unavailable", "The anchored comment is absent from the Slides read. Read it again before editing.")
+    if row["scope"] == "anchored" and (not thread or row.get("anchor_state") != "attached"):
+        raise SlidesValidationError("slides_comment_anchors_unavailable", "The comment has an anchor but its Slides target is unavailable. Read it again before editing; an unmapped anchor cannot be treated as a file comment.")
     if payload.get("preview"):
         return {**base, "preview": True, "comment_ref": identity, "changes": {"action": operation, **({"content": text} if text is not None else {})}}
     url = f"{DRIVE_API}/files/{deck_id}/comments/{_identity(identity)}"

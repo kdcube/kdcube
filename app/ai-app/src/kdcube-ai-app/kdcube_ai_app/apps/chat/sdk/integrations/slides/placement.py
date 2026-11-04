@@ -5,12 +5,29 @@ import math
 
 from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_fit import FIT_CYRILLIC_WIDTH, FIT_LATIN_WIDTH, FIT_LINE_PITCH
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.editing import content
-from kdcube_ai_app.apps.chat.sdk.integrations.slides.geometry import EMU_PER_PT, TEXT_INSET_PT
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.geometry import EMU_PER_PT, TEXT_INSET_PT, emu
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.grid import gap_size, invalid
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.regions import resolve_region
-from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import resolve_element
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, resolve_element
 
 ANCHORS = ("below", "above", "left_of", "right_of", "over")
+
+
+def require_on_slide(presentation, box):
+    """Refuse an impossible placement before any provider mutation is sent."""
+    size = presentation.get("pageSize", {})
+    width, height = emu(size.get("width")), emu(size.get("height"))
+    values = [width, height, *(box[key] for key in ("x", "y", "width", "height"))]
+    if (not all(math.isfinite(value) for value in values)
+            or min(width, height, box["width"], box["height"]) <= 0
+            or box["x"] < -1 or box["y"] < -1
+            or box["x"] + box["width"] > width + 1
+            or box["y"] + box["height"] > height + 1):
+        raise SlidesValidationError(
+            "slides_placement_out_of_bounds",
+            "This placement extends outside the slide. Use an available body region or grid cell, reduce the relative width, or resize the anchor before placing beside it.",
+            details={"placement": box, "page_size": {"width": width, "height": height}},
+        )
 
 
 def font_size(spec):

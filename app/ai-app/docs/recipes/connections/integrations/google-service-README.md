@@ -1139,6 +1139,15 @@ elements use `{"table": {"values": [["Stage", "Owner"], ["Ready", "Editor"]]}}`;
 video elements use `{"video": {"source": "youtube", "id": "AbCdEf012_-"}}`.
 New chart creation remains outside this service.
 
+Computed placement boxes are checked against the slide before any write,
+including preview and grid placement. A box outside the page returns
+`slides_placement_out_of_bounds`: choose an available region or grid cell,
+reduce the relative width, or resize the anchor. Without a body placeholder,
+the synthetic body uses free space below all existing content, including
+subtitles. An exhausted or unknown region returns `slides_region_missing`
+with the available region names. Region-based additions report the region
+they used; explicit overlays retain their overlap diagnostics.
+
 ### Tables and videos through selectors
 
 `add_table` fills a rectangular plain-text matrix; omitted values create empty
@@ -1184,6 +1193,10 @@ unless `include_resolved: true`; an empty filtered page still carries its next
 cursor. A fresh Slides read includes comments and `commentAnchors`, joining
 returned threads to slide and element refs. Unknown anchors remain visibly
 unavailable; a slide filter refuses when it cannot map an anchored thread.
+Native reads also include unanchored Drive file threads. Anchor evidence,
+rather than thread presence, determines scope and the mutation route. A file
+thread remains file-scoped and is excluded from a slide-filtered list without
+making that list fail. An explicit but unmapped anchor is refused for mutation.
 The Drive view can also carry a JSON-string page or shape/text anchor. The
 adapter maps its page and element identities against the current deck. A
 table-cell comment in that view names the table and quoted text, without row
@@ -1237,6 +1250,9 @@ observed thread returns `slides_comment_readback_unavailable` with the saved
 identity when available. Drive writes check a supplied
 Slides revision first, but that check is not an atomic Drive revision guard.
 Comments do not change slide geometry, so their fit summary uses the read deck.
+Provider refusals retain Google's sanitized message, status and code. Comment
+400s also include `next_step` guidance to reread thread refs and anchor routing;
+a reason absent from Google's response remains absent.
 
 ### Composition placement and images
 

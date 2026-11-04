@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.elements import compile_new_element, image_source
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.geometry import compose, matrix
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.grid import grid_cells, invalid
-from kdcube_ai_app.apps.chat.sdk.integrations.slides.placement import contained, placement
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.placement import ANCHORS, contained, placement, require_on_slide
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.regions import resolve_region
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, resolve_element, resolve_slide
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.frames import frame_content, resize_content
@@ -77,6 +77,7 @@ def compile_composition(presentation, view, action, payload, *, image_sizes=None
         cells = [(spec, box)]
     requests, changes, used = [], [], set()
     for spec, box in cells:
+        require_on_slide(presentation, box)
         edits, change, _ = compile_element(raw, slide, spec, box, image_sizes=image_sizes)
         if change["ref"] in used:
             invalid("Place each existing element only once in a composition.")
@@ -87,4 +88,5 @@ def compile_composition(presentation, view, action, payload, *, image_sizes=None
         changes.append(change)
     if replaced:
         requests.append({"deleteObject": {"objectId": replaced["ref"]}})
-    return requests, {"slide": slide["ref"], "region": payload.get("region", "body") if action == "compose" else None, "elements": changes, "replaced_element": replaced["ref"] if replaced else None}
+    region = payload.get("region", "body") if not replaced and not any(key in payload for key in ANCHORS) else None
+    return requests, {"slide": slide["ref"], "region": region, "elements": changes, "replaced_element": replaced["ref"] if replaced else None}

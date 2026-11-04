@@ -38,3 +38,8 @@ Pure compiler tests cover Docs-style row/column selectors, merged slots,
 Unicode ranges, computed table/video placement and previews. These are source
 contract checks. Full Card-to-service live acceptance, video/selector table
 checks and the scope floor on non-app-created decks remain separate.
+
+`test_slides_review_return.py` reconstructs the later live observation that a
+Drive file comment also appears in the native thread collection without an
+anchor ID. Its neutral thread and placement examples are structural regression
+cases derived from the observed failure, not captured private deck responses.
