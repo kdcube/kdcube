@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from urllib.parse import quote
 
 from kdcube_ai_app.apps.chat.sdk.integrations.docs.selectors import matching_comments
-from kdcube_ai_app.apps.chat.sdk.integrations.slides.comments import anchor_views, comment_content, compile_anchor
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.comments import anchor_views, comment_content, compile_anchor, drive_anchor_view
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, resolve_slide
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.tables import shared_selector
 
@@ -21,7 +21,7 @@ def _identity(value):
     return quote(value, safe="")
 
 
-def _row(raw, thread, anchors):
+def _row(raw, thread, anchors, presentation=None):
     author = raw.get("author") or {}
     head = (thread or {}).get("headPost") or {}
     row = {
@@ -36,11 +36,14 @@ def _row(raw, thread, anchors):
         "replies_truncated": len(raw.get("replies", [])) > 100,
     }
     if thread:
-        row.update(anchors.get(thread.get("anchorId"), {"scope": "anchored", "anchor_state": "unavailable"}))
+        view = anchors.get(thread.get("anchorId"), {"scope": "anchored", "anchor_state": "unavailable"})
+        if view.get("anchor_state") != "attached" and raw.get("anchor"):
+            view = drive_anchor_view(presentation or {}, raw)
+        row.update(view)
         row["post_ref"] = head.get("postId")
     else:
         # An unknown anchored thread must never silently become a file comment.
-        row.update({"scope": "anchored", "anchor_state": "unavailable"} if raw.get("anchor") else {"scope": "file"})
+        row.update(drive_anchor_view(presentation or {}, raw))
     return row
 
 
@@ -86,7 +89,7 @@ async def _select(api, deck_id, payload, presentation):
         raise SlidesValidationError("slides_comment_selection_incomplete", "This presentation has more than 1000 comments. Page through list_comments and choose comment_ref; a partial scan cannot select a unique comment.")
     threads = {t["commentId"]: t for t in presentation.get("comments", [])}
     anchors = anchor_views(presentation)
-    rows = [_row(raw, threads.get(raw["id"]), anchors) for raw in raws]
+    rows = [_row(raw, threads.get(raw["id"]), anchors, presentation) for raw in raws]
     matches = shared_selector(matching_comments, rows, selector)
     if len(matches) != 1:
         raise SlidesValidationError("slides_comment_ambiguous" if matches else "slides_comment_not_found", "Choose one returned comment_ref or narrow the comment selector.", details={"candidates": matches[:5], "candidates_truncated": len(matches) > 5})
@@ -102,7 +105,7 @@ async def run_comments(api, operation, payload, deck_id, presentation):
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
             raise SlidesValidationError("slides_invalid_limit", "Use a comment limit from 1 to 100.")
         page = await _page(api, deck_id, str(payload.get("cursor") or ""), limit)
-        rows = [_row(raw, threads.get(raw["id"]), anchors) for raw in page.get("comments", [])]
+        rows = [_row(raw, threads.get(raw["id"]), anchors, presentation) for raw in page.get("comments", [])]
         if not payload.get("include_resolved"):
             rows = [r for r in rows if not r["resolved"]]
         if "slide" in payload:
@@ -127,7 +130,7 @@ async def run_comments(api, operation, payload, deck_id, presentation):
     raw = await _select(api, deck_id, payload, presentation)
     identity = raw["id"]
     thread = threads.get(identity)
-    row = _row(raw, thread, anchors)
+    row = _row(raw, thread, anchors, presentation)
     if "slide" in payload:
         slide = resolve_slide((await api.all_snapshot(presentation))["slides"], payload["slide"])
         if not any(t["slide"]["ref"] == slide["ref"] for t in row.get("targets", [])):

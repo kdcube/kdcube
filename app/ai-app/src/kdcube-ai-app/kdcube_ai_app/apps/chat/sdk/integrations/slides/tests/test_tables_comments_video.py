@@ -172,6 +172,12 @@ def test_comment_limit_counts_utf8_bytes_and_preserves_content():
         comment_content("😀"*513)
 
 
+@pytest.mark.parametrize("value", [None, {}, {"text": "Review"}, 123, "", "   "])
+def test_invalid_comment_content_is_a_validation_refusal(value):
+    with pytest.raises(SlidesValidationError):
+        comment_content(value)
+
+
 def test_table_cells_keep_sparse_locations_after_a_merge():
     raw = deck()["slides"][0]["pageElements"][1]
     raw["table"]["columns"] = 3

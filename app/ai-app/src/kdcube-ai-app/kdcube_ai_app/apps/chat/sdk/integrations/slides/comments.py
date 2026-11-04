@@ -18,6 +18,8 @@ TARGET_KEYS = frozenset({"slide", "element", "quoted_text", "table", "row", "col
 
 
 def comment_content(value):
+    if not isinstance(value, str):
+        raise SlidesValidationError("slides_invalid_comment", "Pass comment content as plain text.")
     content(value)
     if not value.strip() or len(value.encode("utf-8")) > 2048:
         raise SlidesValidationError("slides_invalid_comment", "Pass nonempty comment content of at most 2048 UTF-8 bytes.")
@@ -130,3 +132,41 @@ def anchor_views(presentation):
         if isinstance(legacy, Mapping):
             result[identity]["anchor_kind"] = str(legacy.get("type", "unknown"))[:80]
     return result
+
+
+def drive_anchor_view(presentation, raw):
+    """Map observed Drive JSON anchors; a table target does not identify a cell."""
+    encoded = raw.get("anchor")
+    if not encoded:
+        return {"scope": "file"}
+    unknown = {"scope": "anchored", "anchor_state": "unavailable", "anchor_format": "drive-json"}
+    try:
+        anchor = json.loads(encoded) if isinstance(encoded, str) else None
+    except ValueError:
+        return unknown
+    if not isinstance(anchor, Mapping):
+        return unknown
+    pages = {s["objectId"]: (position, s) for position, s in enumerate(presentation.get("slides", []), 1)}
+    targets = []
+    if anchor.get("type") == "page":
+        named = anchor.get("pages")
+        if not isinstance(named, list) or not named or len(named) > 100 or any(not isinstance(p, str) or p not in pages for p in named):
+            return unknown
+        targets = [{"slide": {"ref": identity, "position": pages[identity][0]}} for identity in named]
+    elif anchor.get("type") == "shape":
+        page = anchor.get("page")
+        identities = anchor.get("targets")
+        if not isinstance(page, str) or page not in pages or not isinstance(identities, list) or not identities or len(identities) > 100:
+            return unknown
+        position, slide = pages[page]
+        elements = {e["objectId"]: e for e in walk(slide.get("pageElements", []))}
+        if any(not isinstance(identity, str) or identity not in elements for identity in identities):
+            return unknown
+        for identity in identities:
+            target = {"slide": {"ref": page, "position": position}, "element": {"ref": identity}, "location_precision": "element"}
+            if "table" in elements[identity] and anchor.get("subtype") == "text":
+                target["cell_location"] = "unavailable_in_provider_anchor"
+            targets.append(target)
+    else:
+        return unknown
+    return {"scope": "anchored", "anchor_state": "attached", "anchor_format": "drive-json", "anchor_kind": anchor["type"], "targets": targets, "anchor_evidence": "Stored anchor mapped to current objects; API-created visual association requires a live UI check."}

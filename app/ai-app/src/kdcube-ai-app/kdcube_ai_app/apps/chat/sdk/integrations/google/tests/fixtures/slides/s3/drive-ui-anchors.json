@@ -1,0 +1,58 @@
+{
+  "comments": [
+    {
+      "id": "doco.page_fixture",
+      "kind": "drive#comment",
+      "content": "Review this",
+      "author": {
+        "displayName": "Editor",
+        "me": true
+      },
+      "deleted": false,
+      "anchor": "{\"type\":\"page\",\"uid\":0,\"pages\":[\"page_fixture\"]}",
+      "replies": []
+    },
+    {
+      "id": "doco.shape_fixture",
+      "kind": "drive#comment",
+      "content": "Review this",
+      "author": {
+        "displayName": "Editor",
+        "me": true
+      },
+      "deleted": false,
+      "anchor": "{\"type\":\"shape\",\"subtype\":\"text\",\"uid\":1,\"page\":\"page_fixture\",\"targets\":[\"shape_fixture\"]}",
+      "replies": [],
+      "quotedFileContent": {
+        "mimeType": "text/html",
+        "value": "Roadmap"
+      }
+    },
+    {
+      "id": "doco.table_fixture",
+      "kind": "drive#comment",
+      "content": "Review this",
+      "author": {
+        "displayName": "Editor",
+        "me": true
+      },
+      "deleted": false,
+      "anchor": "{\"type\":\"shape\",\"subtype\":\"text\",\"uid\":2,\"page\":\"page_fixture\",\"targets\":[\"table_fixture\"]}",
+      "replies": [
+        {
+          "id": "doco.reply_fixture",
+          "kind": "drive#reply",
+          "content": "Reply",
+          "author": {
+            "me": true
+          },
+          "deleted": false
+        }
+      ],
+      "quotedFileContent": {
+        "mimeType": "text/html",
+        "value": "Ready"
+      }
+    }
+  ]
+}

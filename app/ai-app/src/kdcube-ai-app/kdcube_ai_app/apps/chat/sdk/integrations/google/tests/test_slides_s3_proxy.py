@@ -220,3 +220,33 @@ def test_slide_scope_cannot_mutate_a_file_comment(monkeypatch):
     result, provider = call(monkeypatch, "delete_comment", {"slide": {"position": 1}, "comment_ref": "file_fixture"})
     assert result["error"]["code"] == "slides_comment_target_required"
     assert not provider.writes
+
+
+def test_observed_drive_json_anchors_map_pages_and_elements_without_inventing_cells(monkeypatch):
+    provider = Provider()
+    provider.rows = json.loads((FIXTURES/"drive-ui-anchors.json").read_text())["comments"]
+    provider.state["comments"] = []
+    provider.state["slides"][0]["commentAnchors"] = []
+    result, _ = call(monkeypatch, "list_comments", {"slide": {"position": 1}}, provider)
+    assert result["ok"], result
+    rows = result["ret"]["items"]
+    assert len(rows) == 3
+    assert rows[0]["targets"][0]["slide"]["ref"] == "page_fixture"
+    assert rows[1]["targets"][0]["element"] == {"ref": "shape_fixture"}
+    target = rows[2]["targets"][0]
+    assert target["element"] == {"ref": "table_fixture"}
+    assert target["cell_location"] == "unavailable_in_provider_anchor"
+    assert "row" not in target and "column" not in target
+    assert rows[2]["quoted_text"] == "Ready"
+    assert rows[2]["replies"][0]["reply_ref"].startswith("doco.")
+    assert not any(row["resolved"] for row in rows)  # Missing resolved is open.
+
+
+def test_guessed_or_detached_drive_anchor_does_not_count_as_mapped(monkeypatch):
+    provider = Provider()
+    provider.state["comments"] = []
+    provider.rows = [{"id": "doco.unknown", "anchor": json.dumps({"r": "head", "a": [{"page": {"p": "page_fixture"}}]})}]
+    result, _ = call(monkeypatch, "list_comments", {}, provider)
+    assert result["ok"]
+    assert result["ret"]["items"][0]["anchor_state"] == "unavailable"
+    assert "targets" not in result["ret"]["items"][0]

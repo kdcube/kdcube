@@ -1184,6 +1184,12 @@ unless `include_resolved: true`; an empty filtered page still carries its next
 cursor. A fresh Slides read includes comments and `commentAnchors`, joining
 returned threads to slide and element refs. Unknown anchors remain visibly
 unavailable; a slide filter refuses when it cannot map an anchored thread.
+The Drive view can also carry a JSON-string page or shape/text anchor. The
+adapter maps its page and element identities against the current deck. A
+table-cell comment in that view names the table and quoted text, without row
+or column; reads report the unavailable cell location rather than guessing
+from repeated text. Mapping a stored anchor does not establish that an
+API-created comment is visually attached in the Slides editor.
 
 Use `comment_ref` from a read, or `comment_selector` with `text_contains`,
 `quoted_text`, `author: "me"`, or `unresolved: true`. Lexical selection scans at
