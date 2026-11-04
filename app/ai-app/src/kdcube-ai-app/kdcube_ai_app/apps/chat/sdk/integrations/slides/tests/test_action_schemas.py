@@ -25,7 +25,7 @@ def test_action_discovery_exposes_structured_payload_without_provider_access(act
     if action == "compose":
         assert payload["required"] == ["cells"]
         element = payload["properties"]["cells"]["items"]["properties"]["element"]
-        assert {choice["$ref"] for choice in element["oneOf"]} == {"#/$defs/element_selector", "#/$defs/shape", "#/$defs/image"}
+        assert {choice["$ref"] for choice in element["oneOf"]} == {"#/$defs/element_selector", "#/$defs/shape", "#/$defs/image", "#/$defs/table", "#/$defs/video"}
         assert {"text", "items", "shape", "fill", "outline", "color"} <= set(payload["$defs"]["shape"]["properties"])
         assert {"image_uri", "file_ref", "image"} <= set(payload["$defs"]["image"]["properties"])
         assert payload["$defs"]["grid"]["properties"]["cells"]["maxItems"] == 100
@@ -61,3 +61,28 @@ def test_discovered_payload_schemas_reject_ambiguous_or_invalid_content(action, 
     from jsonschema import Draft202012Validator
     from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema import SLIDES_SCHEMA
     assert list(Draft202012Validator(SLIDES_SCHEMA["actions"][action]["payload_schema"]).iter_errors(payload))
+
+
+@pytest.mark.parametrize("action,payload", [
+    ("add_table", {"values": [["Stage", "Owner"], ["Ready", "Editor"]]}),
+    ("add_video", {"video": "https://youtu.be/AbCdEf012_-", "region": "body"}),
+    ("set_cells", {"table": {"kind": "table", "index": 1}, "header": 1, "cells": [{"row": {"where": {"column": "Stage", "equals": "Ready"}}, "column": "Owner", "text": "New editor"}]}),
+    ("add_row", {"table": {"ref": "table_fixture"}, "after": 2, "values": ["Next", "Editor"]}),
+    ("list_comments", {"limit": 10, "cursor": "next_page", "include_resolved": True}),
+    ("get_comment", {"comment_selector": {"quoted_text": "Roadmap", "author": "me", "unresolved": True}}),
+    ("create_comment", {"content": "Review", "slide": {"position": 1}, "table": {"ref": "table_fixture"}, "row": 2, "column": "Owner", "header": 1}),
+    ("reply_comment", {"comment_ref": "thread_fixture", "content": "Reply"}),
+    ("update_comment", {"comment_ref": "thread_fixture", "content": "Changed"}),
+    ("resolve_comment", {"comment_ref": "thread_fixture"}),
+    ("delete_comment", {"comment_ref": "thread_fixture", "preview": True}),
+    ("compose", {"cells": [{"at": [0, 0], "element": {"table": {"values": [["One"]]}}}]}),
+    ("compose", {"cells": [{"at": [0, 0], "element": {"video": {"source": "drive", "id": "video_fixture"}}}]}),
+])
+def test_s3_discovery_accepts_the_selector_vocabulary(action, payload):
+    from jsonschema import Draft202012Validator
+    from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema import SLIDES_SCHEMA
+    contract = SLIDES_SCHEMA["actions"][action]
+    assert contract["label"] and contract["description"]
+    schema = contract["payload_schema"]
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(payload)

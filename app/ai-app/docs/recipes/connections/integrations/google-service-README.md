@@ -1036,13 +1036,14 @@ disposable data:
 The `slides` namespace lets an agent find a presentation, inspect its theme
 and slides, copy a template and replace text or tagged image placeholders.
 Enable the Slides API in the Google Cloud project used by connector app
-`gmail`. The descriptor declares two claims in both deployment sources:
+`gmail`. The descriptor declares four claims in both deployment sources:
 
 | Claim | Google scopes (besides `openid`, `email`, `profile`) |
 | --- | --- |
 | `slides:read` | `presentations.readonly`, `drive.readonly` |
 | `slides:write` | `presentations`, `drive.file` |
 | `slides:delete` | `drive.file` |
+| `slides:comment` | `drive` |
 
 Reads and exports use `slides:read`. Copy, template filling and edits require
 both read and write approval; placing a copy in `parent_id` additionally
@@ -1051,6 +1052,10 @@ ref. Cards select the `slides` namespace and exact operations through the
 generic `named_services` MCP door. Provider credentials remain server-side.
 Trash and restore use `slides:delete` and accept only decks carrying the
 service's private creation marker.
+Comment reads use `slides:read`; comment writes require read plus
+`slides:comment`. Existing connected accounts need Google consent for the
+new claim before comment writes can run. The descriptor catalogs declare the
+claim, connector allowed claim, capability and every exact named-service action.
 
 Start with `object.search` and the title, or `object.list` for recent decks.
 `object.get` returns `kdcube.slides.snapshot.v1`: presentation title/revision,
@@ -1108,6 +1113,14 @@ adapter; agents use returned refs, roles and relations.
 | `duplicate_slide_like` | `like` selector, role `replacements`, optional image replacements, notes and `before`/`after` |
 | `import` | one Drive `source_file` or deployment `file_ref`, optional title/folder; creates a new native deck |
 | `trash`, `restore` | marked service-created presentation; requires `slides:delete` |
+| `add_table` | `slide`, rectangular `values` or `rows`/`columns`, and a region or single relative anchor |
+| `set_cells` | `slide`, `table` element selector, `cells` with row/column/text; optional `header` |
+| `add_row` | `slide`, `table`, optional `before`/`after` row selector, and list or column-name-map `values` |
+| `add_video` | `slide`, `video` YouTube/Drive URL or source/ID map, and a region or relative anchor |
+| `list_comments`, `get_comment` | page by cursor, or choose `comment_ref`/a unique lexical `comment_selector` |
+| `create_comment` | `content` and optional slide/element/text/cell/range target; no target creates a file comment |
+| `reply_comment`, `update_comment` | selected thread and `content`; edits require the head post's author |
+| `resolve_comment`, `delete_comment` | selected thread; delete requires the head post's author |
 
 Replacing empty notes or an empty text placeholder inserts directly. Clearing an already empty element is a no-op; the implicit terminal newline is preserved.
 
@@ -1119,11 +1132,95 @@ discover `{{tags}}` before copying; an unknown tag returns
 guidance to use the import operation.
 
 `compose` computes weighted cell boxes in the selected region. Each cell
-contains an existing element selector, a new text/shape/image map, or a nested
+contains an existing element selector, a new text/shape/image/table/video map, or a nested
 grid. `row_span` and `col_span` combine cells; overlapping cell assignments
-are refused. Existing tables, videos and charts can move into cells. Creating
-new tables or videos follows in S3 and currently returns
-`slides_element_kind_not_yet_supported`.
+are refused. Existing tables, videos and charts can move into cells. New table
+elements use `{"table": {"values": [["Stage", "Owner"], ["Ready", "Editor"]]}}`;
+video elements use `{"video": {"source": "youtube", "id": "AbCdEf012_-"}}`.
+New chart creation remains outside this service.
+
+### Tables and videos through selectors
+
+`add_table` fills a rectangular plain-text matrix; omitted values create empty
+cells from explicit dimensions. One new table has at most 500 cells, with
+each dimension from 1 to 50. Each table write carries at most 100,000 characters.
+Google may enlarge a table to its minimum row/cell size, so inspect the actual
+read-back geometry rather than treating the preview as a rendered result.
+
+`object.get` returns `elements[].table` with physical rows, columns, cell text,
+merge flags and a reusable `selector`. Page its rows with
+`filters.table_start_row` (1-based) and `filters.table_row_limit` (1–50), following
+`next_row`. Text budgets and truncation flags apply to cell text too. Tables
+above 2,000 physical cells retain dimensions but explicitly mark cell details
+unavailable; selector edits and cell comment anchors refuse those large tables.
+
+Cell and row numbers count physical rows/columns from 1. A Slides table has no
+implicit header marker: pass `header: 1` to use the first row's column names.
+The same Docs selector rules resolve row predicates and ambiguous names:
+
+```json
+{"action":"set_cells","payload":{"slide":{"position":1},
+ "table":{"kind":"table","index":1},"header":1,
+ "cells":[{"row":{"where":{"column":"Stage","equals":"Ready"}},
+ "column":"Owner","text":"New editor"}]}}
+```
+
+`add_row` accepts a `before` or `after` row selector and `values` as a list or,
+with a header, a column-name map. Without either relation it appends. Empty
+cells preserve their implicit terminal newline. Merged origins and covered
+slots both refuse with `slides_table_cell_merged`; insertion requires an
+unmerged reference row. Ambiguous row predicates return bounded candidates
+before any write. Revisions and previews use the existing presentation rules.
+
+`add_video` accepts a YouTube or Drive HTTPS URL, or `video: {source: youtube|drive,
+id: ...}`. The adapter computes region, relative or grid placement. Drive access
+comes from the connected account; the URL is not downloaded by the deployment.
+
+### Presentation comments
+
+`list_comments` pages Drive's comments, including Slides-anchored threads,
+using `limit` (1–100) and `cursor`/`next_cursor`. Resolved threads are hidden
+unless `include_resolved: true`; an empty filtered page still carries its next
+cursor. A fresh Slides read includes comments and `commentAnchors`, joining
+returned threads to slide and element refs. Unknown anchors remain visibly
+unavailable; a slide filter refuses when it cannot map an anchored thread.
+
+Use `comment_ref` from a read, or `comment_selector` with `text_contains`,
+`quoted_text`, `author: "me"`, or `unresolved: true`. Lexical selection scans at
+most 1,000 comments and refuses an incomplete scan, repeated cursor or multiple
+matches. For a larger presentation, page the list and pass its exact ref.
+
+`create_comment` takes nonempty `content`, limited to 2,048 UTF-8 bytes:
+
+| Target | Payload |
+| --- | --- |
+| Presentation file | no target fields |
+| Slide | `slide` selector |
+| Element | `slide` and `element` selectors |
+| Shape text | unique `quoted_text`, optionally narrowed by slide and element |
+| Table cell | `slide`, `table`, `row`, `column`, optional `header` and `quoted_text` |
+| Table range | `slide`, `table`, `table_range: {from: {row, column}, to: {row, column}}` |
+
+Partial or conflicting targets return `slides_comment_target_required` rather
+than falling back to a file comment. A cell must contain text; a range must
+contain text in at least one cell. Empty targets return
+`slides_comment_target_empty` before a provider mutation. Text offsets are
+computed as UTF-16 units; agents supply quoted text and selectors.
+
+Anchored creation, reply, edit and deletion use Slides comment requests;
+file comments use Drive. Only the head post's author can edit or delete a
+thread; others receive `slides_comment_not_author` and can reply. Resolution
+uses a Drive reply with `action: resolve` for either kind. A slide-ref call
+cannot mutate a file comment or a thread mapped to another slide.
+
+Every comment mutation supports preview. Anchored writes carry the current
+Slides revision and require `commentUpdateState: ALL_SAVED`; an unconfirmed
+save returns `slides_comment_not_saved`, the partial-result/outcome evidence,
+and instructions to read back before retrying. Drive writes check a supplied
+Slides revision first, but that check is not an atomic Drive revision guard.
+Comments do not change slide geometry, so their fit summary uses the read deck.
+
+### Composition placement and images
 
 Regions use the slide's own placeholders and composed group transforms.
 `body` unions its BODY boxes; with two BODY placeholders, `left_half` and

@@ -30,6 +30,29 @@ def test_every_operation_and_action_has_human_and_agent_descriptions():
     for row in SLIDES_SCHEMA["actions"].values():assert row["label"] and row["description"]
 
 
+@pytest.mark.parametrize("action", ["list_comments", "get_comment", "create_comment", "reply_comment", "update_comment", "resolve_comment", "delete_comment", "add_table", "set_cells", "add_row", "add_video"])
+def test_s3_actions_carry_the_bound_account_and_exact_claims(action):
+    calls = []
+    async def execute(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "ret": {"account_id": "account", "presentation_id": "deck"}}
+    response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action=action, object_ref="slides:google:account:presentation:deck", payload={"preview": True})))
+    assert response.ok
+    expected = ["slides:read"] if action in ("list_comments", "get_comment") else ["slides:read", "slides:comment"] if action.endswith("_comment") else ["slides:read", "slides:write"]
+    assert calls[0]["claim"] == expected
+    assert calls[0]["account_id"] == "account"
+    assert calls[0]["payload"]["presentation_ref"] == "deck"
+
+
+def test_comment_action_on_slide_ref_carries_its_slide_scope():
+    calls = []
+    async def execute(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "ret": {"presentation_id": "deck"}}
+    response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.action", action="create_comment", object_ref="slides:google:account:slide:slide_a:deck", payload={"content": "Review"})))
+    assert response.ok and calls[0]["payload"]["slide"] == {"ref": "slide_a"}
+
+
 @pytest.mark.parametrize("action", ["trash", "restore"])
 def test_lifecycle_uses_delete_claim_and_presentation_scope(action):
     calls = []

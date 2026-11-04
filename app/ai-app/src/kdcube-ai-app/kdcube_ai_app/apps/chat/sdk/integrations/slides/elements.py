@@ -10,6 +10,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.layouts import new_id
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.placement import contained, font_size
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.frames import IMAGE_GROUP, CALLOUT_GROUP, title_request
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.tables import new_table
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.video import new_video
 
 SHAPES = {"text_box": "TEXT_BOX", "rectangle": "RECTANGLE", "round_rectangle": "ROUND_RECTANGLE", "ellipse": "ELLIPSE"}
 THEME_COLORS = {"dark1", "light1", "dark2", "light2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hyperlink", "followed_hyperlink"}
@@ -61,8 +63,17 @@ def compile_new_element(raw_slide, spec, box, *, image_sizes=None):
         if spec.get("border"):
             requests.append({"updateImageProperties": {"objectId": object_id, "imageProperties": {"outline": outline}, "fields": "outline"}})
         return requests, {"ref": object_id, "kind": "image"}, cell
-    if any(key in spec for key in ("table", "video", "chart")):
-        raise SlidesValidationError("slides_element_kind_not_yet_supported", "Position an existing table, video or chart by selector. New table and video creation follows in S3.")
+    if any(key in spec for key in ("table", "video")):
+        kinds = [key for key in ("table", "video", "chart", "shape", "text", "items") if key in spec]
+        if len(kinds) != 1:
+            invalid("Use one new element kind per map.")
+        if "video" in spec:
+            return new_video(raw_slide, spec["video"], box)
+        if not isinstance(spec["table"], Mapping):
+            invalid("Pass table as a rows/columns/values map.")
+        return new_table(raw_slide, spec["table"], box)
+    if "chart" in spec:
+        raise SlidesValidationError("slides_element_kind_not_yet_supported", "Position an existing chart by selector; new chart creation is outside this service.")
     kind = spec.get("shape", "text_box")
     if not isinstance(kind, str) or kind not in SHAPES:
         invalid("Choose text_box, rectangle, round_rectangle or ellipse.")

@@ -131,12 +131,12 @@ def test_overlay_reports_overlap_and_small_text_warning():
     assert "updatePageElementsZOrder" in requests[-1]
 
 
-def test_new_colors_are_theme_colors_and_s3_creation_is_explicit():
+def test_new_colors_are_theme_colors_and_tables_need_complete_dimensions():
     with pytest.raises(SlidesValidationError):
         compile("add_shape", {"shape": "rectangle", "fill": "#ff0000"})
     with pytest.raises(SlidesValidationError) as exc:
         compile("compose", {"cells": [{"at": [0, 0], "element": {"table": {"rows": 2}}}]})
-    assert exc.value.code == "slides_element_kind_not_yet_supported"
+    assert exc.value.code == "slides_table_selector_invalid"
 
 
 def test_alt_text_is_content_without_service_metadata():

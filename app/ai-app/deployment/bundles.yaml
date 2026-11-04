@@ -366,6 +366,16 @@ bundles:
               - kdcube:role:super-admin
               delegable_permissions:
               - slides:delete
+            - grant: slides:comment
+              label: Comment on Google Slides
+              description: Read, add, answer and resolve presentation comments.
+              delegable_roles:
+              - kdcube:role:registered
+              - kdcube:role:paid
+              - kdcube:role:privileged
+              - kdcube:role:super-admin
+              delegable_permissions:
+              - slides:comment
             - grant: docs:read
               label: Read Google Docs
               description: Find documents and read or export their content through a connected Google account.
@@ -2295,7 +2305,7 @@ bundles:
                             - slides:write
                           object.action.compose:
                             label: Compose a slide
-                            description: Arrange text, shapes, images and existing elements in a weighted grid.
+                            description: Arrange text, shapes, images, tables and videos in a weighted grid.
                             grants:
                             - named_services:use
                             - slides:read
@@ -2347,6 +2357,81 @@ bundles:
                             grants:
                             - named_services:use
                             - slides:delete
+                          object.action.add_table:
+                            label: Add a slide table
+                            description: Create and fill a table in a region, grid cell or beside an element.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.set_cells:
+                            label: Write table cells
+                            description: Replace cell text selected by row and column names or numbers.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.add_row:
+                            label: Add a table row
+                            description: Insert and fill a row before or after a selected table row.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.add_video:
+                            label: Add a slide video
+                            description: Place a YouTube or Drive video on a slide.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:write
+                          object.action.list_comments:
+                            label: List presentation comments
+                            description: Read comments with their current slide and element anchors.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                          object.action.get_comment:
+                            label: Read a presentation comment
+                            description: Read one selected comment and its replies.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                          object.action.create_comment:
+                            label: Add a presentation comment
+                            description: Comment on a slide, element, text, table cells or the presentation file.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:comment
+                          object.action.reply_comment:
+                            label: Reply to a presentation comment
+                            description: Add a reply to a selected comment thread.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:comment
+                          object.action.update_comment:
+                            label: Edit a presentation comment
+                            description: Replace the text of a comment you authored.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:comment
+                          object.action.resolve_comment:
+                            label: Resolve a presentation comment
+                            description: Mark a comment thread as resolved.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:comment
+                          object.action.delete_comment:
+                            label: Delete a presentation comment
+                            description: Remove a comment thread you authored.
+                            grants:
+                            - named_services:use
+                            - slides:read
+                            - slides:comment
             - resource: '*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/productivity*'
               label: KDCube productivity MCP
               tools:
@@ -2636,6 +2721,7 @@ bundles:
                   - slides:read
                   - slides:write
                   - slides:delete
+                  - slides:comment
               claims:
                 gmail:read:
                   label: Read Gmail
@@ -2762,6 +2848,14 @@ bundles:
                   - email
                   - profile
                   - https://www.googleapis.com/auth/drive.file
+                slides:comment:
+                  label: Comment on Google Slides
+                  description: Read, add, answer and resolve presentation comments.
+                  provider_scopes:
+                  - openid
+                  - email
+                  - profile
+                  - https://www.googleapis.com/auth/drive
             slack:
               label: Slack
               adapter: slack.oauth_user_token

@@ -11,7 +11,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.regions import resolve_regi
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, resolve_element, resolve_slide
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.frames import frame_content, resize_content
 
-COMPOSITION_ACTIONS = frozenset({"compose", "add_shape", "add_image", "set_alt_text"})
+COMPOSITION_ACTIONS = frozenset({"compose", "add_shape", "add_image", "add_table", "add_video", "set_alt_text"})
 
 
 def compile_element(raw_slide, slide, spec, box, *, image_sizes=None):
@@ -19,7 +19,7 @@ def compile_element(raw_slide, slide, spec, box, *, image_sizes=None):
         invalid("Pass an element map.")
     selector = {key: spec[key] for key in ("ref", "role", "text_contains", "alt_text", "kind", "index") if key in spec}
     if selector:
-        if any(key in spec for key in ("shape", "image", "text", "items")):
+        if any(key in spec for key in ("shape", "image", "text", "items", "table", "video", "chart")):
             invalid("Use an existing-element selector or new content, with one form per element.")
         element = resolve_element(slide, selector)
         if element.get("group_ref"):
@@ -59,6 +59,10 @@ def compile_composition(presentation, view, action, payload, *, image_sizes=None
         spec = dict(payload)
         if action == "add_image":
             spec["image"] = image_source(payload)
+        elif action == "add_table":
+            spec["table"] = {key: payload[key] for key in ("rows", "columns", "values") if key in payload}
+        elif action == "add_video" and "video" not in spec:
+            invalid("Pass video as a YouTube/Drive source map or HTTPS URL.")
         source = spec.get("image")
         dimensions = (image_sizes or {}).get(source.get("image_uri")) if isinstance(source, Mapping) else None
         if action == "add_image" and payload.get("element") is not None:

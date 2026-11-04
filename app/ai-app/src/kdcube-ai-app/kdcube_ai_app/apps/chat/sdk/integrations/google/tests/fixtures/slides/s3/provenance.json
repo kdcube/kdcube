@@ -1,0 +1,7 @@
+{
+  "provenance": "reconstructed from design section 15.1 field shapes, not raw responses",
+  "recorded_observations": ["page, element, shape text, table cell and table range comments saved with ALL_SAVED", "empty table targets refused", "Drive list includes Slides anchored threads", "resolve through Drive reply action resolve"],
+  "public_contracts": ["https://developers.google.com/workspace/slides/api/guides/comments", "https://developers.google.com/workspace/slides/api/reference/rest/v1/presentations/request", "https://developers.google.com/workspace/slides/api/reference/rest/v1/presentations.pages/tables"],
+  "fixture_policy": "Small neutral identifiers and content. No account, credential, private document identity or probe payload is retained.",
+  "live_comparison": "Pending sanitized live comment/anchor/write samples; adjust reconstructed fixtures if provider responses differ."
+}

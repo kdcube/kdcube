@@ -1,0 +1,167 @@
+"""Drive comment paging joined to Slides anchors; guarded comment mutations."""
+from __future__ import annotations
+
+from collections.abc import Mapping
+from urllib.parse import quote
+
+from kdcube_ai_app.apps.chat.sdk.integrations.docs.selectors import matching_comments
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.comments import anchor_views, comment_content, compile_anchor
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, resolve_slide
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.tables import shared_selector
+
+DRIVE_API = "https://www.googleapis.com/drive/v3"
+COMMENT_FIELDS = "id,content,anchor,resolved,createdTime,modifiedTime,author(displayName,me),quotedFileContent(value),replies(id,content,action,createdTime,author(displayName,me))"
+MAX_PAGES = 10
+MAX_PAGE = 100
+
+
+def _identity(value):
+    if not isinstance(value, str) or not value or len(value) > 256 or any(ord(c) < 32 for c in value):
+        raise SlidesValidationError("slides_comment_target_required", "Choose comment_ref from list_comments or use a comment_selector.")
+    return quote(value, safe="")
+
+
+def _row(raw, thread, anchors):
+    author = raw.get("author") or {}
+    head = (thread or {}).get("headPost") or {}
+    row = {
+        "comment_ref": raw["id"], "comment_id": raw["id"],
+        "content": str(raw.get("content", ""))[:12000],
+        "content_truncated": len(str(raw.get("content", ""))) > 12000,
+        "resolved": bool(raw.get("resolved")), "author": author.get("displayName", ""),
+        "author_is_me": author.get("me") is True,
+        "created_time": raw.get("createdTime"), "modified_time": raw.get("modifiedTime"),
+        "quoted_text": str((raw.get("quotedFileContent") or {}).get("value", (thread or {}).get("plainTextQuote", "")))[:12000],
+        "replies": [{"reply_ref": r.get("id"), "content": str(r.get("content", ""))[:12000], "action": r.get("action"), "author": (r.get("author") or {}).get("displayName", ""), "author_is_me": (r.get("author") or {}).get("me") is True} for r in raw.get("replies", [])[:100]],
+        "replies_truncated": len(raw.get("replies", [])) > 100,
+    }
+    if thread:
+        row.update(anchors.get(thread.get("anchorId"), {"scope": "anchored", "anchor_state": "unavailable"}))
+        row["post_ref"] = head.get("postId")
+    else:
+        # An unknown anchored thread must never silently become a file comment.
+        row.update({"scope": "anchored", "anchor_state": "unavailable"} if raw.get("anchor") else {"scope": "file"})
+    return row
+
+
+async def _page(api, deck_id, cursor, limit):
+    return await api.request("GET", f"{DRIVE_API}/files/{deck_id}/comments", operation="list_comments", params={"pageSize": limit, "pageToken": cursor, "includeDeleted": "false", "fields": f"nextPageToken,comments({COMMENT_FIELDS})"})
+
+
+async def _select(api, deck_id, payload, presentation):
+    identity = payload.get("comment_ref")
+    selector = payload.get("comment_selector")
+    if identity and selector is not None:
+        raise SlidesValidationError("slides_comment_selector_invalid", "Choose comment_ref or comment_selector, with one selection form.")
+    if identity:
+        raw = await api.request("GET", f"{DRIVE_API}/files/{deck_id}/comments/{_identity(identity)}", operation="get_comment", params={"fields": COMMENT_FIELDS, "includeDeleted": "false"})
+        if raw.get("id") != identity:
+            raise SlidesValidationError("slides_comment_not_found", "Google returned no matching comment. List the comments again.")
+        return raw
+    if not isinstance(selector, (str, Mapping)) or not selector:
+        raise SlidesValidationError("slides_comment_target_required", "Pass comment_ref or a lexical comment_selector from list_comments.")
+    if isinstance(selector, Mapping):
+        selector = dict(selector)
+        if "quoted_text" in selector:
+            selector["quoted_text_contains"] = selector.pop("quoted_text")
+        if "unresolved" in selector:
+            if type(selector["unresolved"]) is not bool:
+                raise SlidesValidationError("slides_comment_selector_invalid", "Pass unresolved as true or false.")
+            selector["resolved"] = not selector.pop("unresolved")
+        allowed = {"text_contains", "quoted_text_contains", "author", "author_contains", "position", "resolved"}
+        if set(selector)-allowed:
+            raise SlidesValidationError("slides_comment_selector_invalid", "Use text_contains, quoted_text, author, unresolved or a returned comment_ref.")
+    cursor, raws = "", []
+    seen = set()
+    for _ in range(MAX_PAGES):
+        page = await _page(api, deck_id, cursor, MAX_PAGE)
+        raws.extend(page.get("comments", []))
+        cursor = page.get("nextPageToken")
+        if not cursor:
+            break
+        if cursor in seen:
+            raise SlidesValidationError("slides_comment_selection_incomplete", "Google repeated a comment cursor. Use a returned comment_ref after listing the relevant page.")
+        seen.add(cursor)
+    if cursor:
+        raise SlidesValidationError("slides_comment_selection_incomplete", "This presentation has more than 1000 comments. Page through list_comments and choose comment_ref; a partial scan cannot select a unique comment.")
+    threads = {t["commentId"]: t for t in presentation.get("comments", [])}
+    anchors = anchor_views(presentation)
+    rows = [_row(raw, threads.get(raw["id"]), anchors) for raw in raws]
+    matches = shared_selector(matching_comments, rows, selector)
+    if len(matches) != 1:
+        raise SlidesValidationError("slides_comment_ambiguous" if matches else "slides_comment_not_found", "Choose one returned comment_ref or narrow the comment selector.", details={"candidates": matches[:5], "candidates_truncated": len(matches) > 5})
+    return next(raw for raw in raws if raw["id"] == matches[0]["comment_id"])
+
+
+async def run_comments(api, operation, payload, deck_id, presentation):
+    threads = {t["commentId"]: t for t in presentation.get("comments", [])}
+    anchors = anchor_views(presentation)
+    base = {"presentation_id": deck_id, "title": presentation.get("title", ""), "revision_id": presentation.get("revisionId")}
+    if operation == "list_comments":
+        limit = payload.get("limit", 50)
+        if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
+            raise SlidesValidationError("slides_invalid_limit", "Use a comment limit from 1 to 100.")
+        page = await _page(api, deck_id, str(payload.get("cursor") or ""), limit)
+        rows = [_row(raw, threads.get(raw["id"]), anchors) for raw in page.get("comments", [])]
+        if not payload.get("include_resolved"):
+            rows = [r for r in rows if not r["resolved"]]
+        if "slide" in payload:
+            slide = resolve_slide((await api.all_snapshot(presentation))["slides"], payload["slide"])
+            if any(r["scope"] == "anchored" and r["anchor_state"] != "attached" for r in rows):
+                raise SlidesValidationError("slides_comment_anchors_unavailable", "Some comment anchors could not be mapped. List without a slide filter to retain those comments.")
+            rows = [r for r in rows if any(t["slide"]["ref"] == slide["ref"] for t in r.get("targets", []))]
+        return {**base, "items": rows, "next_cursor": page.get("nextPageToken")}
+    if operation == "create_comment":
+        text = comment_content(payload.get("content"))
+        anchor, target = compile_anchor(presentation, await api.all_snapshot(presentation), payload)
+        if payload.get("preview"):
+            return {**base, "preview": True, "changes": {**target, "content": text}}
+        if anchor is None:
+            result = await api.request("POST", f"{DRIVE_API}/files/{deck_id}/comments", operation=operation, mutating=True, params={"fields": COMMENT_FIELDS}, json={"content": text})
+            if not result.get("id"):
+                raise SlidesValidationError("slides_comment_not_saved", "Google returned no new comment identity. Read the comments before retrying.", details={"outcome_unknown": True})
+            return {**base, "comment": _row(result, None, {}), "changes": target}
+        written = await api.write_batches(deck_id, [{"insertComment": {"content": text, **anchor}}], presentation.get("revisionId"), operation=operation)
+        identity = next((r.get("insertComment", {}).get("commentId") for r in written["replies"] if r.get("insertComment", {}).get("commentId")), None)
+        return {**base, **written, "comment_ref": identity, "changes": target, "next_action": "Read list_comments or get_comment to verify the saved anchor."}
+    raw = await _select(api, deck_id, payload, presentation)
+    identity = raw["id"]
+    thread = threads.get(identity)
+    row = _row(raw, thread, anchors)
+    if "slide" in payload:
+        slide = resolve_slide((await api.all_snapshot(presentation))["slides"], payload["slide"])
+        if not any(t["slide"]["ref"] == slide["ref"] for t in row.get("targets", [])):
+            raise SlidesValidationError("slides_comment_target_required", "This comment is not mapped to the selected slide. Address the presentation to act on a file comment or an unavailable anchor.")
+    if operation == "get_comment":
+        return {**base, "comment": row}
+    if operation in ("update_comment", "delete_comment"):
+        author = (thread.get("headPost") or {}).get("author", {}) if thread else raw.get("author", {})
+        if author.get("me") is not True:
+            raise SlidesValidationError("slides_comment_not_author", "Only the head post's author may edit or delete this comment. Reply instead.")
+    text = comment_content(payload.get("content")) if operation in ("update_comment", "reply_comment") else None
+    if row["scope"] == "anchored" and not thread and operation != "resolve_comment":
+        raise SlidesValidationError("slides_comment_anchors_unavailable", "The anchored comment is absent from the Slides read. Read it again before editing.")
+    if payload.get("preview"):
+        return {**base, "preview": True, "comment_ref": identity, "changes": {"action": operation, **({"content": text} if text is not None else {})}}
+    url = f"{DRIVE_API}/files/{deck_id}/comments/{_identity(identity)}"
+    if operation == "resolve_comment":
+        await api.request("POST", f"{url}/replies", operation=operation, mutating=True, params={"fields": "id,action"}, json={"action": "resolve"})
+    elif thread:
+        if operation == "reply_comment":
+            request = {"addCommentReply": {"commentId": identity, "post": {"content": text}}}
+        elif operation == "update_comment":
+            post = thread.get("headPost", {}).get("postId")
+            if not post:
+                raise SlidesValidationError("slides_comment_target_required", "Google returned no head post ref. Read the comment again.")
+            request = {"updateCommentPost": {"commentId": identity, "postId": post, "content": text}}
+        else:
+            request = {"deleteComment": {"commentId": identity}}
+        written = await api.write_batches(deck_id, [request], presentation.get("revisionId"), operation=operation)
+        base.update(revision_id=written["revision_id"])
+    elif operation == "reply_comment":
+        await api.request("POST", f"{url}/replies", operation=operation, mutating=True, params={"fields": "id,content"}, json={"content": text})
+    elif operation == "update_comment":
+        await api.request("PATCH", url, operation=operation, mutating=True, params={"fields": "id,content"}, json={"content": text})
+    else:
+        await api.request("DELETE", url, operation=operation, mutating=True)
+    return {**base, "comment_ref": identity, "changes": {"action": operation, "scope": row["scope"]}}

@@ -36,7 +36,7 @@ def _fit_box(element, parent):
     }
 
 
-def snapshot(presentation, *, start=1, limit=20):
+def snapshot(presentation, *, start=1, limit=20, table_start=1, table_limit=20):
     if type(start) is not int or start < 1 or type(limit) is not int or not 1 <= limit <= MAX_SLIDES:
         raise SlidesValidationError("slides_invalid_range", f"Use a 1-based start_slide and a slide_limit from 1 to {MAX_SLIDES}.")
     page = presentation.get("pageSize", {})
@@ -76,6 +76,14 @@ def snapshot(presentation, *, start=1, limit=20):
             text = raw_text[:min(MAX_ELEMENT_TEXT, max(0,budget))]
             budget -= len(text)
             row = {"ref": element.get("objectId", ""), "kind": kind, "text": text, "text_truncated": len(text) < len(raw_text), "alt_text": content.get("description") or content.get("title", ""), "rotation_deg": box.pop("rotation_deg"), "geometry": box}
+            if kind == "table":
+                from kdcube_ai_app.apps.chat.sdk.integrations.slides.tables import table_snapshot
+                row["table"], used = table_snapshot(element, start=table_start, limit=table_limit, budget=max(0, budget))
+                row["table"]["selector"] = {"slide": {"ref": slide["objectId"]}, "table": {"ref": element["objectId"]}}
+                budget -= used
+                row["text_truncated"] |= row["table"]["text_truncated"]
+            if kind == "video":
+                row["video"] = {k: element["video"].get(k) for k in ("id", "source")}
             if frame:
                 row["_content_ref"] = content["objectId"]
                 row["role"] = kind

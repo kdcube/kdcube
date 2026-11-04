@@ -6,6 +6,7 @@ import re
 
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.layouts import walk
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.layout_prediction import apply_layout_request
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.table_prediction import apply_table_request
 
 
 def _style_text(shape, start, end, patch):
@@ -94,7 +95,7 @@ def predict(presentation, requests):
             if "shape" in e:yield e
             yield from shapes(e.get("elementGroup", {}).get("children", []))
     for request in requests:
-        if apply_layout_request(result, request):
+        if apply_layout_request(result, request) or apply_table_request(result, request):
             continue
         if "createSlide" in request:
             _create_slide(result, request["createSlide"])

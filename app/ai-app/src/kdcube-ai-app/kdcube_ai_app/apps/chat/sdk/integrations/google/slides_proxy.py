@@ -26,6 +26,9 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.reference import duplicate_
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.media import image_sources
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.mutation_diagnostics import mutation_diagnostics, touched_slide_ids
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.templates import replace_text_requests, image_requests, template_requests
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.tables import TABLE_ACTIONS, compile_table
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.comments import COMMENT_ACTIONS, WRITE_COMMENTS
+from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_comments import run_comments
 
 SLIDES_API = "https://slides.googleapis.com/v1"
 DRIVE_API = "https://www.googleapis.com/drive/v3"
@@ -38,7 +41,7 @@ MAX_BATCH_REQUESTS = 100
 # Drive may finish a small copy after the ordinary 30-second read deadline.
 # Keep slow file operations bounded, without retrying a creation on timeout.
 SLOW_DRIVE_TIMEOUT = httpx.Timeout(120, connect=10)
-MUTATING_OPERATIONS = frozenset({"create", "rename", "copy", "fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS, *COMPOSITION_ACTIONS, "duplicate_slide_like", "import", "trash", "restore"})
+MUTATING_OPERATIONS = frozenset({"create", "rename", "copy", "fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS, *COMPOSITION_ACTIONS, *TABLE_ACTIONS, *WRITE_COMMENTS, "duplicate_slide_like", "import", "trash", "restore"})
 # URLs from image/chart objects are deliberately excluded. Group children
 # remain internal and are projected by slides_structure, never returned raw.
 _ELEMENT = "objectId,title,description,size,transform,shape,table,elementGroup(children),image(imageProperties(cropProperties)),sheetsChart(spreadsheetId,chartId),video(id,source)"
@@ -85,8 +88,12 @@ class SlidesClient:
             raise SlidesValidationError("google_slides_invalid_response", "Google returned an invalid response object. Read the presentation before retrying a write.", details={"outcome_unknown":mutating})
         return dict(body)
 
-    async def get(self, deck_id):
-        result=await self.request("GET", f"{SLIDES_API}/presentations/{deck_id}", operation="get", params={"fields": PRESENTATION_FIELDS})
+    async def get(self, deck_id, *, include_comments=False):
+        fields = PRESENTATION_FIELDS.replace("slides(objectId,", "comments,slides(commentAnchors,objectId,") if include_comments else PRESENTATION_FIELDS
+        params = {"fields": fields}
+        if include_comments:
+            params["commentsViewMode"] = "COMMENTS_VIEW_MODE_INCLUDED"
+        result=await self.request("GET", f"{SLIDES_API}/presentations/{deck_id}", operation="get", params=params)
         if not result.get("presentationId"):
             raise SlidesValidationError("google_slides_invalid_response", "Google returned no presentation identity. Read the presentation again.")
         return result
@@ -120,6 +127,8 @@ class SlidesClient:
         replies = []
         for start in range(0, len(requests), MAX_BATCH_REQUESTS):
             result = await self.request("POST", f"{SLIDES_API}/presentations/{deck_id}:batchUpdate", operation=operation, mutating=True, json={"requests": requests[start:start+MAX_BATCH_REQUESTS], "writeControl": {"requiredRevisionId": revision}})
+            if operation in WRITE_COMMENTS and result.get("commentUpdateState") != "ALL_SAVED":
+                raise SlidesValidationError("slides_comment_not_saved", "Google did not confirm that every comment change was saved. Read the comments before retrying.", details={"comment_update_state": result.get("commentUpdateState", "missing"), "outcome_unknown": True})
             for request in requests[start:start+MAX_BATCH_REQUESTS]:
                 if "createSlide" in request:
                     self.created_slide_id = request["createSlide"]["objectId"]
@@ -201,7 +210,7 @@ async def _fit_flags(api, presentation, *, touched=(), predicted=False, summary_
 
 
 async def _run(api, operation, payload):
-    if operation not in {"get", "search", "export", "thumbnail", *MUTATING_OPERATIONS}:
+    if operation not in {"get", "search", "export", "thumbnail", *COMMENT_ACTIONS, *MUTATING_OPERATIONS}:
         raise SlidesValidationError("slides_unsupported_operation", "Choose an operation declared by the Slides schema.")
     if operation == "search":
         query = str(payload.get("query") or "")
@@ -248,19 +257,26 @@ async def _run(api, operation, payload):
         if len(response.content) > MAX_EXPORT_BYTES:
             raise SlidesValidationError("slides_export_too_large", "The export exceeds Drive's 10 MB export ceiling.")
         return {"presentation_id": deck_id, "format": fmt, "mime_type": EXPORT_FORMATS[fmt], "byte_size": len(response.content), "content_base64": base64.b64encode(response.content).decode("ascii")}
-    presentation = await api.get(deck_id)
+    presentation = await api.get(deck_id, include_comments=True) if operation in COMMENT_ACTIONS else await api.get(deck_id)
     if operation == "get":
         if payload.get("slide_selector") is not None:
             selected=resolve_slide((await api.all_snapshot(presentation))["slides"],payload["slide_selector"])
-            result=snapshot(presentation,start=selected["position"],limit=1)
+            result=snapshot(presentation,start=selected["position"],limit=1,table_start=payload.get("table_start_row", 1),table_limit=payload.get("table_row_limit", 20))
             result["range"]["next_slide"]=None
             result["range"]["selection"]="one_slide"
         else:
-            result = snapshot(presentation, start=payload.get("start_slide", 1), limit=payload.get("slide_limit", 20))
+            result = snapshot(presentation, start=payload.get("start_slide", 1), limit=payload.get("slide_limit", 20), table_start=payload.get("table_start_row", 1), table_limit=payload.get("table_row_limit", 20))
         return {"presentation_id": deck_id, "title": presentation.get("title", ""), "snapshot": result, "revision_id": presentation.get("revisionId")}
     expected = payload.get("revision_id")
     if expected and expected != presentation.get("revisionId"):
         raise SlidesValidationError("slides_revision_changed", "The presentation changed after the supplied revision_id. Read it again before editing.")
+    if operation in COMMENT_ACTIONS:
+        result = await run_comments(api, operation, payload, deck_id, presentation)
+        if operation in WRITE_COMMENTS:
+            result.update(await _fit_flags(api, presentation, predicted=bool(payload.get("preview")), summary_only=True))
+            if result.get("changes", {}).get("scope") == "file" or operation == "resolve_comment":
+                result["revision_guard"] = "The Slides revision was checked before the Drive write; Drive comments have no atomic Slides revision guard."
+        return result
     if operation == "thumbnail":
         view = await api.all_snapshot(presentation)
         slide = resolve_slide(view["slides"], payload.get("slide"))
@@ -287,7 +303,7 @@ async def _run(api, operation, payload):
         copied=await api.copy(deck_id,payload)
         copied_presentation=await api.get(copied["presentation_id"])
         return {**copied,"revision_id":copied_presentation.get("revisionId"), **await _fit_flags(api,copied_presentation,summary_only=True)}
-    if operation not in ("fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS, *COMPOSITION_ACTIONS, "duplicate_slide_like"):
+    if operation not in ("fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS, *COMPOSITION_ACTIONS, *TABLE_ACTIONS, "duplicate_slide_like"):
         raise SlidesValidationError("slides_unsupported_operation", "Choose an operation declared by the Slides schema.")
     image_sizes = {}
     for source_image in image_sources(operation, payload):
@@ -304,6 +320,8 @@ async def _run(api, operation, payload):
         view = await api.all_snapshot(presentation)
         if operation in COMPOSITION_ACTIONS:
             requests, plan = compile_composition(presentation, view, operation, payload, image_sizes=image_sizes)
+        elif operation in TABLE_ACTIONS:
+            requests, plan = compile_table(presentation, view, operation, payload)
         elif operation == "duplicate_slide_like":
             requests, plan = duplicate_slide_requests(presentation, view, payload)
         elif operation in EDIT_ACTIONS:
