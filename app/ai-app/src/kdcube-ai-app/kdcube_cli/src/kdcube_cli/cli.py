@@ -77,7 +77,9 @@ from kdcube_cli.runtime_secrets_export import (
 )
 from kdcube_cli.host_vault import (
     HostVaultConfigurationError,
+    materialize_service_url,
     runtime_compose_environment as host_runtime_compose_environment,
+    runtime_secrets_paths,
 )
 from kdcube_cli.host_vault import (
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
@@ -2654,12 +2656,12 @@ def _runtime_secrets_host_root(config_dir: Path) -> Path:
     else ``<config folder>/secrets`` (W670 K2), resolved exactly as the installer mounts it."""
     assembly = installer_mod.load_release_descriptor_soft(config_dir / "assembly.yaml")
     try:
-        runtime_env = host_runtime_compose_environment(
+        _, host_root = runtime_secrets_paths(
             assembly, host_config_dir=Path(config_dir).expanduser().resolve()
         )
     except HostVaultConfigurationError as exc:
         raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
-    return Path(runtime_env["HOST_KDCUBE_RUNTIME_SECRETS_ROOT"])
+    return host_root
 
 
 _USER_PROPS_EXPORT_SCRIPT = """
@@ -2921,6 +2923,16 @@ def _apply_platform_config_descriptors(
     if not source_dir.exists() or not source_dir.is_dir():
         raise SystemExit(f"Descriptor directory not found: {source_dir}")
 
+    incoming = installer_mod.load_release_descriptor(source_dir / "assembly.yaml")
+    if preserve_secret_backend:
+        current = installer_mod.load_release_descriptor(config_dir / "assembly.yaml")
+        if isinstance(current.get("secrets"), dict):
+            incoming["secrets"] = current["secrets"]
+    try:
+        host_runtime_compose_environment(incoming, host_config_dir=config_dir.resolve())
+    except HostVaultConfigurationError as exc:
+        raise SystemExit(f"Invalid secrets.runtime configuration: {exc}") from exc
+
     files: list[dict[str, object]] = []
     for name in PLATFORM_DESCRIPTOR_FILENAMES:
         if name == "secrets.yaml" and not stage_secret_descriptor:
@@ -3072,6 +3084,9 @@ def apply_config_descriptors(
                 "[dim]Runtime env/config files regenerated. Restart the stack for service-level "
                 f"descriptor changes to take effect: kdcube refresh --workdir {workdir}[/dim]"
             )
+
+    if not dry_run:
+        installer_mod.prepare_runtime_secrets(config_dir)
 
     return {
         "status": "dry-run" if dry_run else "ok",
@@ -7467,6 +7482,11 @@ def main() -> None:
                     )
                 _assembly_path = _config_dir / "assembly.yaml"
                 _assembly = installer_mod.load_release_descriptor_soft(_assembly_path)
+                try:
+                    host_runtime_compose_environment(_assembly, host_config_dir=_config_dir.resolve())
+                except HostVaultConfigurationError as exc:
+                    raise SystemExit(f"Config apply secrets preflight failed: {exc}") from exc
+                materialize_service_url(_assembly)
                 _apply_auth_flags(_op_console, _assembly, args)
                 _effective_type = str(_get_nested(_assembly, "auth", "type") or "").strip().lower()
                 _supported_types = {"bundle", "cognito", "simple", "delegated"}
@@ -7711,6 +7731,10 @@ def main() -> None:
                 )
             except ComposeSourceError as exc:
                 raise SystemExit(str(exc)) from exc
+            try:
+                installer_mod.prepare_runtime_secrets(_refresh_reuse_config)
+            except HostVaultConfigurationError as exc:
+                raise SystemExit(f"Refresh secrets preflight failed: {exc}") from exc
             _refresh_runtime_proxy_config(console, repo_root=_repo, workdir=_resolved)
             _generated_refresh_secrets = installer_mod.ensure_generated_runtime_secrets(
                 _refresh_reuse_config

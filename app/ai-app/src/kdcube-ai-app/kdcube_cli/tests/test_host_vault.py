@@ -65,12 +65,6 @@ def test_default_backend_keeps_host_vault_disabled():
         "HOST_KDCUBE_HOST_VAULT_CLIENT_CERT_PATH": "",
         "HOST_KDCUBE_HOST_VAULT_CLIENT_KEY_PATH": "",
         "HOST_KDCUBE_HOST_VAULT_CA_PATH": "",
-        "KDCUBE_SECRETS_RUNTIME_ROOT": "",
-        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": "",
-        # W673: no secrets.runtime enrolls the platform's own purposes; the grant comes per run.
-        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": '["login-attempts","card-credentials","oauth-refresh-tokens"]',
-        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": "",
-        "KDCUBE_SECRETS_RUNTIME_DEFAULTED": "1",
     }
 
 
@@ -92,12 +86,6 @@ def test_host_vault_descriptor_maps_only_non_secret_compose_inputs(tmp_path):
             identity_dir / "host-vault-client.key"
         ),
         "HOST_KDCUBE_HOST_VAULT_CA_PATH": str(identity_dir / "host-vault-ca.crt"),
-        "KDCUBE_SECRETS_RUNTIME_ROOT": "",
-        "HOST_KDCUBE_RUNTIME_SECRETS_ROOT": "",
-        # W673: no secrets.runtime enrolls the platform's own purposes; the grant comes per run.
-        "KDCUBE_SECRETS_RUNTIME_NAMESPACES": '["login-attempts","card-credentials","oauth-refresh-tokens"]',
-        "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY": "",
-        "KDCUBE_SECRETS_RUNTIME_DEFAULTED": "1",
     }
 
 

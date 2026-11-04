@@ -239,6 +239,15 @@ class _FakeAwsSession:
         return _FakeAwsClientContext(self._client)
 
 
+def test_service_manager_refuses_missing_url_at_startup(monkeypatch):
+    monkeypatch.delenv("SECRETS_URL", raising=False)
+    monkeypatch.setenv("SECRETS_PROVIDER", "secrets-service")
+    with pytest.raises(SecretsManagerError, match=r"secrets.url is required"):
+        build_secrets_manager_config()
+    with pytest.raises(SecretsManagerError, match=r"secrets.url is required"):
+        SecretsServiceSecretsManager(SecretsManagerConfig(provider="secrets-service", component="proc"))
+
+
 def test_build_secrets_manager_config_uses_env_and_ignores_gateway_json(monkeypatch):
     monkeypatch.setenv("GATEWAY_CONFIG_JSON", '{"secrets":{"provider":"in-memory"}}')
     monkeypatch.setenv("GATEWAY_COMPONENT", "proc")

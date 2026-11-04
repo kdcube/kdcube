@@ -2600,7 +2600,8 @@ bundles:
     assert _load_bundle_ids_from_descriptor(path) == {"demo.bundle@1.0.0"}
 
 
-def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize("secrets_provider", ["secrets-file", "secrets-service"])
+def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_path: Path, secrets_provider):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     for name in (
@@ -2611,7 +2612,10 @@ def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_p
         ".env.postgres.setup",
         ".env.proxylogin",
     ):
-        (config_dir / name).write_text("")
+        (config_dir / name).write_text(
+            "KDCUBE_SECRETS_RUNTIME_NAMESPACES=[]\nKDCUBE_SECRETS_RUNTIME_DEFAULTED=1\n"
+            "KDCUBE_SECRETS_RUNTIME_SCOPE_POLICY=stale\nSECRETS_URL=http://stale\n"
+            "SECRETS_PROVIDER=stale\n")
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
@@ -2683,7 +2687,7 @@ def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_p
         release_descriptor={
             "context": {"tenant": "demo-tenant", "project": "demo-project"},
             "platform": {"ref": "2026.4.11.012"},
-            "secrets": {"provider": "secrets-file"},
+            "secrets": {"provider": secrets_provider},
             "paths": {"host_bundles_path": str(tmp_path / "bundles")},
             "auth": {"type": "simple"},
             "proxy": {"ssl": False},
@@ -2700,6 +2704,13 @@ def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_p
     )
 
     env_main = (config_dir / ".env").read_text()
+    for name in (".env", ".env.ingress", ".env.proc", ".env.metrics"):
+        text = (config_dir / name).read_text()
+        assert "KDCUBE_SECRETS_RUNTIME_" not in text
+        assert "SECRETS_URL=" not in text
+        assert "SECRETS_PROVIDER=" not in text
+    if secrets_provider == "secrets-service":
+        assert yaml.safe_load(assembly_path.read_text())["secrets"]["url"] == "http://kdcube-secrets:7777"
     assert "HOST_SECRETS_YAML_DESCRIPTOR_PATH=" not in env_main
     assert "HOST_BUNDLES_SECRETS_YAML_DESCRIPTOR_PATH=" not in env_main
     assert (tmp_path / "kdcube-storage").is_dir()
@@ -4929,7 +4940,7 @@ def test_provider_backed_config_import_applies_all_scopes_without_staging_secret
         (target_config / "assembly.yaml").read_text(encoding="utf-8")
     )
     assert applied_assembly["platform"]["ref"] == "incoming"
-    assert applied_assembly["secrets"] == target_assembly["secrets"]
+    assert applied_assembly["secrets"] == {**target_assembly["secrets"], "url": "http://kdcube-secrets:7777"}
     output_text = capsys.readouterr().out
     assert "user-import-canary" not in output_text
 

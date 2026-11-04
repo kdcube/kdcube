@@ -266,9 +266,7 @@ def local_paths(
 
 
 def compose_environment(env_file: Path) -> Dict[str, str]:
-    values = dict(os.environ)
-    values["COMPOSE_ENV_FILES"] = str(env_file)
-    return values
+    return installer_mod.compose_env(env_file)
 
 
 def same_path(left: object, right: object) -> bool:

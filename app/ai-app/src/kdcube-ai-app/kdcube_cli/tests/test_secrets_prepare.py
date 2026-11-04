@@ -178,6 +178,7 @@ def test_compose_prepare_recreates_only_broker_with_transient_token_overlay(
 ):
     env_file = tmp_path / ".env"
     env_file.write_text("BASE=1\n", encoding="utf-8")
+    (tmp_path / "assembly.yaml").write_text("secrets: {provider: secrets-file}\n")
     docker_dir = tmp_path / "docker"
     docker_dir.mkdir()
     calls: list[list[str]] = []

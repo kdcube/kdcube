@@ -290,6 +290,9 @@ def _set_assembly_provider(config_dir: Path, provider: str) -> None:
             code="invalid_runtime_configuration",
         )
     secrets["provider"] = provider
+    from kdcube_cli.host_vault import materialize_service_url
+
+    materialize_service_url(value)
     payload = yaml.safe_dump(value, sort_keys=False, allow_unicode=True).encode("utf-8")
     _atomic_write(path, payload)
 
@@ -315,7 +318,7 @@ def _set_host_vault_backend(config_dir: Path, backend: str) -> None:
     _atomic_write(path, payload)
 
 
-def _update_env(path: Path, updates: Mapping[str, str]) -> None:
+def _update_env(path: Path, updates: Mapping[str, str], *, remove_keys: tuple[str, ...] = ()) -> None:
     try:
         env = installer_mod.load_env_file(path)
     except OSError as exc:
@@ -325,6 +328,8 @@ def _update_env(path: Path, updates: Mapping[str, str]) -> None:
         ) from exc
     for key, value in updates.items():
         installer_mod.update_env_value(env, key, value)
+    for key in remove_keys:
+        installer_mod.remove_env_key(env, key)
     payload = ("\n".join(env.lines).rstrip() + "\n").encode("utf-8")
     _atomic_write(path, payload)
 
@@ -334,10 +339,8 @@ def _apply_active_configuration(config_dir: Path) -> None:
     for name in (".env.ingress", ".env.proc"):
         _update_env(
             config_dir / name,
-            {
-                "SECRETS_PROVIDER": _ACTIVE_PROVIDER,
-                "SECRETS_URL": _BROKER_URL,
-            },
+            {},
+            remove_keys=("SECRETS_PROVIDER", "SECRETS_URL"),
         )
 
 
@@ -348,7 +351,7 @@ def _apply_ephemeral_file_recovery(config_dir: Path) -> None:
         {"KDCUBE_SECRETS_SERVICE_BACKEND": "ephemeral"},
     )
     for name in (".env.ingress", ".env.proc"):
-        _update_env(config_dir / name, {"SECRETS_PROVIDER": _FILE_PROVIDER})
+        _update_env(config_dir / name, {}, remove_keys=("SECRETS_PROVIDER", "SECRETS_URL"))
 
 
 def _load_inventory(config_dir: Path) -> FileSecretInventory:
