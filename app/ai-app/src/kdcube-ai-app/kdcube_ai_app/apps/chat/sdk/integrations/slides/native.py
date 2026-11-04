@@ -62,7 +62,7 @@ def validate_batch(payload):
             if depth > 30:
                 raise SlidesValidationError("slides_batch_invalid", "Keep native request JSON within 30 nested levels.")
             if isinstance(value, Mapping):
-                text_count += sum(len(child) for key, child in value.items() if key == "text" and isinstance(child, str))
+                text_count += sum(len(child) for key, child in value.items() if key in ("text", "replaceText") and isinstance(child, str))
                 pending.extend((child, depth + 1) for child in value.values() if isinstance(child, (Mapping, list)))
             elif isinstance(value, list):
                 pending.extend((child, depth + 1) for child in value if isinstance(child, (Mapping, list)))

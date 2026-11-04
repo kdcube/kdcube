@@ -21,12 +21,22 @@ from kdcube_ai_app.apps.chat.sdk.integrations.google.tests.test_slides_s3_proxy 
     ({"requiredRevisionId": "r1", "requests": [{"createTable": {"rows": True, "columns": 2}}]}, "slides_batch_invalid"),
     ({"requiredRevisionId": "r1", "requests": [{"insertTableRows": {"number": 51}}]}, "slides_batch_invalid"),
     ({"requiredRevisionId": "r1", "requests": [{"insertText": {"text": "x" * 100001}}]}, "slides_batch_too_large"),
+    ({"requiredRevisionId": "r1", "requests": [{"replaceAllText": {"replaceText": "x" * 100001}}]}, "slides_batch_too_large"),
     ({"requiredRevisionId": "r1", "requests": [{"updateShapeProperties": {"unexpected": "x" * 1000001}}]}, "slides_batch_too_large"),
 ])
 def test_invalid_raw_batches_are_refused_before_any_google_call(monkeypatch, payload, code):
     result, provider = call(monkeypatch, "batch_update", payload)
     assert result["error"]["code"] == code, result
     assert not provider.calls and not provider.writes
+
+
+def test_overly_nested_raw_json_refuses_before_google(monkeypatch):
+    body = {}
+    for _ in range(32):
+        body = {"nested": body}
+    result, provider = call(monkeypatch, "batch_update", {"requiredRevisionId": "r1", "requests": [{"updateShapeProperties": body}]})
+    assert result["error"]["code"] == "slides_batch_invalid"
+    assert not provider.calls
 
 
 @pytest.mark.parametrize("identity", ["page_fixture", "deck_fixture", "unseen_element"])
