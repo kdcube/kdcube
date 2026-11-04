@@ -57,7 +57,7 @@ const ChatHeader = () => {
                     >
                         {Object.values(data.bundles).map(bundle => {
                             return <option value={bundle.id}
-                                           key={bundle.id}>{bundle.name}{bundle.id === data.defaultBundle ? " (default)" : ""}</option>
+                                           key={bundle.id}>{bundle.name?.trim() ? bundle.name : bundle.id}{bundle.id === data.defaultBundle ? " (default)" : ""}</option>
                         })}
                     </select>
                 </div>
