@@ -2519,6 +2519,158 @@ bundles:
                   label: Format Google Sheet range
                   description: Apply bounded common formatting to a spreadsheet range.
                   grants: [sheets:write]
+                productivity_slides_search:
+                  label: "Find presentations"
+                  description: "Search presentation titles; an empty query lists recent decks."
+                  grants: [slides:read]
+                productivity_slides_get:
+                  label: "Read a presentation"
+                  description: "Read a bounded snapshot and revision before editing."
+                  grants: [slides:read]
+                productivity_slides_create:
+                  label: "Create a presentation"
+                  description: "Create an empty presentation with a title."
+                  grants: [slides:read, slides:write]
+                productivity_slides_rename:
+                  label: "Rename a presentation"
+                  description: "Change a presentation title."
+                  grants: [slides:read, slides:write]
+                productivity_slides_export:
+                  label: "Export a presentation"
+                  description: "Download a presentation as PDF or PowerPoint."
+                  grants: [slides:read]
+                productivity_slides_thumbnail:
+                  label: "Preview a slide"
+                  description: "Render one slide as a PNG image."
+                  grants: [slides:read]
+                productivity_slides_copy:
+                  label: "Copy a presentation"
+                  description: "Create a copy of a presentation with a new title."
+                  grants: [slides:read, slides:write]
+                productivity_slides_fill_template:
+                  label: "Fill a presentation template"
+                  description: "Copy a template and replace its text and image tags."
+                  grants: [slides:read, slides:write]
+                productivity_slides_replace_text:
+                  label: "Replace presentation text"
+                  description: "Replace phrases or tags in a deck or selected slides."
+                  grants: [slides:read, slides:write]
+                productivity_slides_replace_shapes_with_image:
+                  label: "Replace a tagged shape with an image"
+                  description: "Put an image in shapes containing a chosen tag."
+                  grants: [slides:read, slides:write]
+                productivity_slides_add_slide:
+                  label: "Add a slide"
+                  description: "Add a slide using one of the presentation's layouts."
+                  grants: [slides:read, slides:write]
+                productivity_slides_set_text:
+                  label: "Write slide text"
+                  description: "Replace or append text and bullet items in one slide element."
+                  grants: [slides:read, slides:write]
+                productivity_slides_style_text:
+                  label: "Style slide text"
+                  description: "Format a quoted phrase in one slide element."
+                  grants: [slides:read, slides:write]
+                productivity_slides_set_notes:
+                  label: "Write speaker notes"
+                  description: "Replace or append a slide's speaker notes."
+                  grants: [slides:read, slides:write]
+                productivity_slides_move_slide:
+                  label: "Move slides"
+                  description: "Reorder selected slides while preserving their relative order."
+                  grants: [slides:read, slides:write]
+                productivity_slides_delete_slide:
+                  label: "Delete slides"
+                  description: "Remove selected slides while keeping at least one slide."
+                  grants: [slides:read, slides:write]
+                productivity_slides_skip_slide:
+                  label: "Skip or show slides"
+                  description: "Choose whether selected slides appear in the presentation."
+                  grants: [slides:read, slides:write]
+                productivity_slides_compose:
+                  label: "Compose a slide"
+                  description: "Arrange text, shapes, images, tables and videos in a weighted grid."
+                  grants: [slides:read, slides:write]
+                productivity_slides_add_shape:
+                  label: "Add a slide shape"
+                  description: "Place text or a theme-colored shape in a region or beside an element."
+                  grants: [slides:read, slides:write]
+                productivity_slides_add_image:
+                  label: "Add a slide image"
+                  description: "Place a validated image while preserving its aspect ratio."
+                  grants: [slides:read, slides:write]
+                productivity_slides_set_alt_text:
+                  label: "Describe slide content"
+                  description: "Write accessible title and description text for an element."
+                  grants: [slides:read, slides:write]
+                productivity_slides_duplicate_slide_like:
+                  label: "Extend a deck from a reference slide"
+                  description: "Duplicate a selected slide and replace role texts or images."
+                  grants: [slides:read, slides:write]
+                productivity_slides_import:
+                  label: "Import a presentation"
+                  description: "Convert a PPTX or ODP source into a new native presentation."
+                  grants: [slides:read, slides:write]
+                productivity_slides_trash:
+                  label: "Trash a presentation"
+                  description: "Move a service-created presentation into Drive trash."
+                  grants: [slides:delete]
+                productivity_slides_restore:
+                  label: "Restore a presentation"
+                  description: "Restore a service-created presentation from Drive trash."
+                  grants: [slides:delete]
+                productivity_slides_add_table:
+                  label: "Add a slide table"
+                  description: "Create and fill a table in a region, grid cell or beside an element."
+                  grants: [slides:read, slides:write]
+                productivity_slides_set_cells:
+                  label: "Write table cells"
+                  description: "Replace cell text selected by row and column names or numbers."
+                  grants: [slides:read, slides:write]
+                productivity_slides_add_row:
+                  label: "Add a table row"
+                  description: "Insert and fill a row before or after a selected table row."
+                  grants: [slides:read, slides:write]
+                productivity_slides_add_video:
+                  label: "Add a slide video"
+                  description: "Place a YouTube or Drive video on a slide."
+                  grants: [slides:read, slides:write]
+                productivity_slides_list_comments:
+                  label: "List presentation comments"
+                  description: "Read comments with their current slide and element anchors."
+                  grants: [slides:read]
+                productivity_slides_get_comment:
+                  label: "Read a presentation comment"
+                  description: "Read one selected comment and its replies."
+                  grants: [slides:read]
+                productivity_slides_create_comment:
+                  label: "Add a presentation comment"
+                  description: "Comment on a slide, element, text, table cells or the presentation file."
+                  grants: [slides:read, slides:comment]
+                productivity_slides_reply_comment:
+                  label: "Reply to a presentation comment"
+                  description: "Add a reply to a selected comment thread."
+                  grants: [slides:read, slides:comment]
+                productivity_slides_update_comment:
+                  label: "Edit a presentation comment"
+                  description: "Replace the text of a comment you authored."
+                  grants: [slides:read, slides:comment]
+                productivity_slides_resolve_comment:
+                  label: "Resolve a presentation comment"
+                  description: "Mark a comment thread as resolved."
+                  grants: [slides:read, slides:comment]
+                productivity_slides_delete_comment:
+                  label: "Delete a presentation comment"
+                  description: "Remove a comment thread you authored."
+                  grants: [slides:read, slides:comment]
+                productivity_slides_get_structure:
+                  label: "Read native presentation structure"
+                  description: "Read masked native JSON with object IDs, EMU geometry and revision_id for a raw batch."
+                  grants: [slides:read]
+                productivity_slides_batch_update:
+                  label: "Batch-edit a presentation"
+                  description: "Apply 1\u201350 allowlisted native requests with mandatory requiredRevisionId from get_structure. Slide deletion and comments use dedicated tools."
+                  grants: [slides:read, slides:write]
                 productivity_docs_get_structure:
                   label: Read Google Doc structure
                   description: Read the document's structural graph and tabs with element indices.

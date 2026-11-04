@@ -1254,6 +1254,40 @@ Provider refusals retain Google's sanitized message, status and code. Comment
 400s also include `next_step` guidance to reread thread refs and anchor routing;
 a reason absent from Google's response remains absent.
 
+### Advanced typed presentation tools
+
+The managed `productivity` MCP endpoint publishes 38 `productivity_slides_*`
+tools for external clients: search/get/create/rename, the action-table entries
+above, and two native tools. Ordinary action tools take `payload` with their
+published action schema, `presentation_ref` (ID, link or bound ref) and optional
+`account_id`. Use `{}` for actions without payload fields. Search, create and
+import omit `presentation_ref`. The same action pipeline prepares staged media,
+signs artifacts and applies comment author/save/read-back checks. Each tool
+demands its exact account claims; a ref binds the account. A folder `parent_id`
+additionally demands `drive:write`.
+
+`productivity_slides_get_structure(presentation_ref, account_id?)` returns
+`ret.structure`: masked native presentation JSON with object IDs, a
+`revision_id` and physical size/translation geometry in EMU. Group transforms
+retain their hierarchy; text styling keeps its own units. Provider capability
+URLs stay server-side. The raw structure is bounded by the provider-read limit
+of 16 MB; use the ordinary bounded snapshot for routine reads.
+
+`productivity_slides_batch_update` requires `presentation_ref`, `requests` and
+`requiredRevisionId` copied from the fresh structure read. It accepts 1–50
+single-kind allowlisted content requests, at most 1 MB of encoded request JSON,
+100000 inserted/replacement text characters and 30 nested JSON levels. Its tool
+description lists the supported kinds. Table creation retains the 500-cell /
+50-per-dimension limits; a row/column insertion is bounded to 50 per request.
+Kinds outside the allowlist and missing revisions refuse before calling Google.
+After a fresh read, the exact revision and all delete targets are checked
+before one write. `deleteObject` accepts only existing page elements from that
+read. Use `delete_slide` for slides and the dedicated comment tools for comments.
+A revision race or uncertain write is returned without an implicit retry.
+Optional `preview: true` validates the raw batch without writing or promising
+rendered geometry. Normal typed actions retain the action pipeline's result
+envelope; the two native tools return the adapter's `ok/error/ret` envelope.
+
 ### Composition placement and images
 
 Regions use the slide's own placeholders and composed group transforms.

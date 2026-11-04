@@ -29,6 +29,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.templates import replace_te
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.tables import TABLE_ACTIONS, compile_table
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.comments import COMMENT_ACTIONS, WRITE_COMMENTS
 from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_comments import run_comments
+from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_native import run_native
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.native import validate_batch
 
 SLIDES_API = "https://slides.googleapis.com/v1"
 DRIVE_API = "https://www.googleapis.com/drive/v3"
@@ -41,7 +43,7 @@ MAX_BATCH_REQUESTS = 100
 # Drive may finish a small copy after the ordinary 30-second read deadline.
 # Keep slow file operations bounded, without retrying a creation on timeout.
 SLOW_DRIVE_TIMEOUT = httpx.Timeout(120, connect=10)
-MUTATING_OPERATIONS = frozenset({"create", "rename", "copy", "fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS, *COMPOSITION_ACTIONS, *TABLE_ACTIONS, *WRITE_COMMENTS, "duplicate_slide_like", "import", "trash", "restore"})
+MUTATING_OPERATIONS = frozenset({"create", "rename", "copy", "fill_template", "replace_text", "replace_shapes_with_image", *EDIT_ACTIONS, *COMPOSITION_ACTIONS, *TABLE_ACTIONS, *WRITE_COMMENTS, "duplicate_slide_like", "import", "trash", "restore", "batch_update"})
 # URLs from image/chart objects are deliberately excluded. Group children
 # remain internal and are projected by slides_structure, never returned raw.
 _ELEMENT = "objectId,title,description,size,transform,shape,table,elementGroup(children),image(imageProperties(cropProperties)),sheetsChart(spreadsheetId,chartId),video(id,source)"
@@ -219,8 +221,9 @@ async def _fit_flags(api, presentation, *, touched=(), predicted=False, summary_
 
 
 async def _run(api, operation, payload):
-    if operation not in {"get", "search", "export", "thumbnail", *COMMENT_ACTIONS, *MUTATING_OPERATIONS}:
+    if operation not in {"get", "get_structure", "search", "export", "thumbnail", *COMMENT_ACTIONS, *MUTATING_OPERATIONS}:
         raise SlidesValidationError("slides_unsupported_operation", "Choose an operation declared by the Slides schema.")
+    native = validate_batch(payload) if operation == "batch_update" else None
     if operation == "search":
         query = str(payload.get("query") or "")
         if len(query) > 300:
@@ -267,6 +270,8 @@ async def _run(api, operation, payload):
             raise SlidesValidationError("slides_export_too_large", "The export exceeds Drive's 10 MB export ceiling.")
         return {"presentation_id": deck_id, "format": fmt, "mime_type": EXPORT_FORMATS[fmt], "byte_size": len(response.content), "content_base64": base64.b64encode(response.content).decode("ascii")}
     presentation = await api.get(deck_id, include_comments=True) if operation in COMMENT_ACTIONS else await api.get(deck_id)
+    if operation in ("get_structure", "batch_update"):
+        return await run_native(api, operation, deck_id, presentation, requests=native[0] if native else None, revision=native[1] if native else None, preview=bool(payload.get("preview")))
     if operation == "get":
         if payload.get("slide_selector") is not None:
             selected=resolve_slide((await api.all_snapshot(presentation))["slides"],payload["slide_selector"])
