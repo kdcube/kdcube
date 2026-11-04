@@ -71,11 +71,17 @@ For the operational local workflow for reusing a runtime, changing bundle roots,
 |---|---|---|
 | `bundles.default_bundle_id` | `read_plain("b:default_bundle_id")`, runtime routing | default bundle |
 | `bundles.items[].id` | runtime registry | bundle identifier |
+| `bundles.items[].name` | chat app selector | optional display name |
 | `bundles.items[].repo` / `ref` / `subdir` / `module` | proc git resolution | git-backed bundle definition |
 | `bundles.items[].path` / `module` | proc local-path loading | local development bundle definition |
 | `bundles.items[].service.readiness` | proc application lifecycle | aggregate readiness policy: `independent` by default or `required` |
 | `bundles.items[].activation.commit` / `require_commit` | proc bundle activation | local-path entry loads a snapshot of that commit; `require_commit` refuses a reload naming none |
 | `bundles.items[].config` | `self.bundle_prop("...")` | non-secret effective bundle config |
+
+The chat app selector displays a nonblank `name` as supplied, including its
+whitespace. For a missing, null, empty or whitespace-only name, its option label
+uses the complete app ID, including any version suffix. The option value and
+selection continue to use the ID.
 
 ### Application readiness policy
 
@@ -907,11 +913,7 @@ on one bundle entry.
 For a local path bundle, keep only:
 
 - `id`
-- `name` if needed: the display label. A missing, null, empty or whitespace-only
-  name uses the complete bundle `id`, including its version suffix. An explicit
-  nonblank name takes precedence. Runtime registry metadata, app listings,
-  status/management views and the CLI inventory use this same fallback, so
-  moving a built-in example to an explicit Git source keeps a visible label.
+- `name` if needed
 - `path`
 - `module`
 - `config`
