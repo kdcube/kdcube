@@ -304,3 +304,22 @@ def test_the_deny_map_fails_closed_when_the_card_is_unavailable(monkeypatch) -> 
     assert asyncio.run(
         capabilities.resolve_turn_disabled_mcp(entrypoint, _state(), "press")
     ) == {"press": True}
+
+
+def test_workspace_carries_sync_code_reason_and_retryability_to_state_and_log(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import AgentCapabilityControlUnavailable
+
+    entrypoint, _ = _entrypoint(_SELECTION)
+    logs = []
+    entrypoint.logger = SimpleNamespace(log=lambda message, level: logs.append((message, level)))
+
+    async def unavailable(*args, **kwargs):
+        raise AgentCapabilityControlUnavailable("resident_issuance_pending", reason="card_intent_base_moved", retryable=False, status=409)
+
+    monkeypatch.setattr(agent_capability_control, "sync_agent_capability_projection", unavailable)
+    monkeypatch.setattr(agent_capability_control, "deny_all_capabilities", lambda **kwargs: {"mcp": {"press": True}})
+    state = _state()
+    assert asyncio.run(capabilities.resolve_turn_disabled_mcp(entrypoint, state, "press")) == {"press": True}
+    assert state["agent_capability_control_error"] == {"ok": False, "error": "resident_issuance_pending",
+        "reason": "card_intent_base_moved", "retryable": False, "status": 409}
+    assert "code=resident_issuance_pending reason=card_intent_base_moved retryable=false" in logs[0][0]

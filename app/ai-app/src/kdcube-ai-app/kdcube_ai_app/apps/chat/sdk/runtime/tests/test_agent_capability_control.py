@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -38,6 +39,53 @@ from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     NamedServiceResponse,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retryable,status", [(False, 409), (True, 503)])
+async def test_sync_preserves_bounded_refusal_from_provider_to_agent_without_payload_or_urls(retryable, status):
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.provider import ConnectionsProviderBase
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import AgentCapabilityControlUnavailable
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceContext, NamedServiceRequest
+
+    raw = {"ok": False, "error": "resident_issuance_pending", "reason": "card_intent_base_moved",
+        "retryable": retryable, "status": status, "access_token": "synthetic-bearer-never-expose",
+        "message": "https://consent.invalid/private?token=synthetic", "payload": {"private": "value"}}
+    provider = SimpleNamespace(sync_agent_capabilities=AsyncMock(return_value=raw), provider_identity=lambda: {})
+    responses = []
+
+    async def call(request):
+        response = await ConnectionsProviderBase.agent_capability_sync(provider, NamedServiceContext(),
+            NamedServiceRequest.coerce(request.request))
+        responses.append(response)
+        return BundleNamedServiceResult(value=response)
+
+    owner = SimpleNamespace(bundle_props=_props(), _agent_selection_identity=lambda: {
+        "tenant": TENANT, "project": PROJECT, "user_id": "user-a", "bundle_id": APPLICATION})
+    with bind_bundle_named_service_caller(call):
+        with pytest.raises(AgentCapabilityControlUnavailable) as caught:
+            await sync_agent_capability_projection(owner, catalog=_catalog(), agent_id=AGENT)
+    expected = {key: raw[key] for key in ("ok", "error", "reason", "retryable", "status")}
+    assert responses[0].error.details == expected and caught.value.to_dict() == expected
+    assert responses[0].error.message == raw["error"]
+    assert "synthetic" not in repr(responses[0].to_dict()) + str(caught.value)
+    assert "consent.invalid" not in repr(responses[0].to_dict())
+
+
+@pytest.mark.asyncio
+async def test_sync_transport_exception_is_bounded_and_retryable():
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import AgentCapabilityControlUnavailable
+
+    async def call(request):
+        raise RuntimeError("synthetic-bearer https://consent.invalid/private")
+
+    owner = SimpleNamespace(bundle_props=_props(), _agent_selection_identity=lambda: {
+        "tenant": TENANT, "project": PROJECT, "user_id": "user-a", "bundle_id": APPLICATION})
+    with bind_bundle_named_service_caller(call):
+        with pytest.raises(AgentCapabilityControlUnavailable) as caught:
+            await sync_agent_capability_projection(owner, catalog=_catalog(), agent_id=AGENT)
+    assert caught.value.retryable is True and caught.value.code == "agent_capability_transport_unavailable"
+    assert "synthetic" not in repr(caught.value.to_dict())
 
 
 TENANT = "tenant-a"

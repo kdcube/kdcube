@@ -1187,13 +1187,13 @@ class BaseEntrypoint:
                     project=str(identity.get("project") or ""),
                 ),
             )
-            capability_control = {
-                "ok": False,
-                "error": str(exc) or "agent_capability_control_unavailable",
-            }
+            from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import (
+                capability_failure_from_exception, capability_failure_log,
+            )
+
+            capability_control = capability_failure_from_exception(exc)
             self.logger.log(
-                "[agent_capabilities] live Card projection unavailable; "
-                "selectable capabilities are closed",
+                "[agent_capabilities] " + capability_failure_log(capability_control),
                 "WARNING",
             )
         cache_policy: Dict[str, Any] = {}
@@ -1529,11 +1529,21 @@ class BaseEntrypoint:
                 "capability_source": "conversation" if conversation_id else "connection_hub_card",
             }
         except Exception as exc:
-            self.logger.log(f"[agent_selection_update] failed: {traceback.format_exc()}", "ERROR")
+            from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import (
+                capability_failure_from_exception, capability_failure_log,
+            )
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import AgentCapabilityControlUnavailable
+
+            if isinstance(exc, AgentCapabilityControlUnavailable):
+                failure = capability_failure_from_exception(exc)
+                self.logger.log("[agent_selection_update] " + capability_failure_log(failure), "ERROR")
+            else:
+                # Existing selection/preference failures retain their API;
+                # the descriptor sync boundary always raises the typed error.
+                self.logger.log(f"[agent_selection_update] failed: {traceback.format_exc()}", "ERROR")
+                failure = {"ok": False, "error": str(exc) or "agent_selection_update_failed", "status": 500}
             return {
-                "ok": False,
-                "error": str(exc) or "agent_selection_update_failed",
-                "status": 500,
+                **failure,
                 "preference_update_applied": preference_update_applied,
                 "capability_update_applied": capability_update_applied,
                 "selection": selection

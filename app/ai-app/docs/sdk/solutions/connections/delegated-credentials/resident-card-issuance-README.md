@@ -60,3 +60,21 @@ This adapter is one part of the host composition. Request and recovery paths
 must bind the same provider, issuance store and resident handle store. The
 Hub owns creation/rotation planning, Control authorization, group membership,
 catalog reservations, decision recovery and serving fences.
+
+Capability sync failures cross the provider and agent-app boundary as bounded
+`error`, `reason`, `retryable` and `status` fields. The SDK raises
+`AgentCapabilityControlUnavailable` with those fields; its `to_dict()` returns
+the same non-secret result. Provider messages, response payloads, consent URLs
+and exception text are excluded. Foreign-runtime workspaces keep the failure
+in turn state under `agent_capability_control_error` and log its codes and
+retryability while selectable capabilities remain closed. A successful sync
+clears that turn-state failure.
+
+MCP capability metadata also records the delegated resource and whether the
+connection uses standard Card authority. The Hub stores this routing metadata
+on the Control and uses its current catalog and Control ceiling when aligning
+an explicit selection with standard grants. It does not consult the consumer
+descriptor as a second permission boundary during an owner Save. Older stored
+Controls without that mapping may return
+`agent_capability_standard_mapping_refresh_required` until a paired SDK/Hub
+descriptor sync refreshes the stored metadata.

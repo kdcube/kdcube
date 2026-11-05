@@ -45,6 +45,18 @@ SUBAGENTS = "subagents"
 class AgentCapabilityControlUnavailable(RuntimeError):
     """The current descriptor/Card projection could not be obtained."""
 
+    def __init__(self, code: str, *, reason: str = "", retryable: bool = True, status: int = 503) -> None:
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
+
+        self.failure = capability_sync_failure({"error": code, "reason": reason or code,
+                                               "retryable": retryable, "status": status})
+        self.code, self.reason = self.failure["error"], self.failure["reason"]
+        self.retryable, self.status = self.failure["retryable"], self.failure["status"]
+        super().__init__(self.code)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self.failure)
+
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -607,7 +619,8 @@ def _metadata_entries(catalog: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         if not isinstance(raw, Mapping):
             continue
         server_id = _text(raw.get("server_id"))
-        put(MCP_SERVERS, server_id, title=_text(raw.get("name")) or server_id)
+        put(MCP_SERVERS, server_id, title=_text(raw.get("name")) or server_id,
+            resource=_text(raw.get("resource") or raw.get("resource_id")), delegated=bool(raw.get("delegated")))
         for tool in raw.get("tool_entries") or ():
             if isinstance(tool, Mapping):
                 name = _text(tool.get("name"))
@@ -1377,6 +1390,26 @@ async def sync_agent_capability_projection(
     selected_capabilities: Mapping[str, Any] | None = None,
     replace_selection: bool = False,
 ) -> dict[str, Any]:
+    """Carry only a typed, non-secret failure across the agent-app boundary."""
+    try:
+        return await _sync_agent_capability_projection(entrypoint, catalog=catalog, agent_id=agent_id,
+            initial_disabled=initial_disabled, selected_capabilities=selected_capabilities,
+            replace_selection=replace_selection)
+    except AgentCapabilityControlUnavailable:
+        raise
+    except Exception:
+        raise AgentCapabilityControlUnavailable("agent_capability_sync_unavailable") from None
+
+
+async def _sync_agent_capability_projection(
+    entrypoint: Any,
+    *,
+    catalog: Mapping[str, Any],
+    agent_id: str,
+    initial_disabled: Mapping[str, Any] | None = None,
+    selected_capabilities: Mapping[str, Any] | None = None,
+    replace_selection: bool = False,
+) -> dict[str, Any]:
     """Synchronize the descriptor Control and read the effective live projection."""
 
     identity = agent_capability_identity(entrypoint)
@@ -1450,20 +1483,27 @@ async def sync_agent_capability_projection(
         NamedServiceResponse,
     )
 
-    result = await call_bundle_named_service(
-        bundle_id=connection_hub_bundle_id_from_entrypoint(entrypoint),
-        request={
-            "namespace": NAMESPACE,
-            "operation": AGENT_CAPABILITY_SYNC,
-            "payload": payload,
-        },
-        tenant=tenant,
-        project=project,
-    )
-    response = NamedServiceResponse.coerce(result.value)
+    try:
+        result = await call_bundle_named_service(
+            bundle_id=connection_hub_bundle_id_from_entrypoint(entrypoint),
+            request={
+                "namespace": NAMESPACE,
+                "operation": AGENT_CAPABILITY_SYNC,
+                "payload": payload,
+            },
+            tenant=tenant,
+            project=project,
+        )
+        response = NamedServiceResponse.coerce(result.value)
+    except Exception:
+        raise AgentCapabilityControlUnavailable("agent_capability_transport_unavailable") from None
     if not response.ok:
-        code = _text(getattr(response.error, "code", "")) or "agent_capability_sync_failed"
-        raise AgentCapabilityControlUnavailable(code)
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
+
+        failure = capability_sync_failure({**dict(getattr(response.error, "details", {}) or {}),
+            "error": getattr(response.error, "code", "agent_capability_sync_failed"), "status": response.status})
+        raise AgentCapabilityControlUnavailable(failure["error"], reason=failure["reason"],
+                                               retryable=failure["retryable"], status=failure["status"])
     projection = response.object
     if not isinstance(projection.get("projection"), Mapping):
         raise AgentCapabilityControlUnavailable("agent_capability_projection_missing")
