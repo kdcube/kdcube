@@ -45,6 +45,14 @@ def result(plan, prepared, *, state="committed", outcome="applied"):
         per_slot={"access": SlotOutcome(outcome, plan.effect_digests["access"], prepared.receipt.bearer_sha256)})
 
 
+def session_reader(store):
+    async def read(*, tenant, project, session_id):
+        assert (tenant, project) == (store.tenant, store.project)
+        state = await store.get_validation_state(session_id)
+        return state.session if state is not None else None
+    return read
+
+
 @pytest.mark.asyncio
 async def test_prepare_is_inactive_non_secret_and_replay_reads_the_original(store):
     plan = resident_plan(tenant=store.tenant, project=store.project)
@@ -97,7 +105,7 @@ async def test_only_applied_commit_activates_the_same_bearer_and_reconstructs_af
 async def test_rotation_retires_only_the_pinned_old_session_and_replays_after_restart(store):
     old_plan = resident_plan(tenant=store.tenant, project=store.project)
     factory = lambda **kwargs: authority(store)
-    provider = ResidentCredentialProvider(authority_factory=factory)
+    provider = ResidentCredentialProvider(authority_factory=factory, session_state_reader=session_reader(store))
     old_original = await provider.prepare(plan=old_plan)
     old = await provider.activate(plan=old_plan, result=result(old_plan, old_original))
     new_plan = replace(old_plan, transaction_id="3" * 64, decision_request_id="4" * 64,
@@ -105,16 +113,24 @@ async def test_rotation_retires_only_the_pinned_old_session_and_replays_after_re
         base_revision=old_plan.candidate_revision, candidate_revision=old_plan.candidate_revision + 1,
         card_content_hash="7" * 64)
     new_original = await provider.prepare(plan=new_plan)
+    assert (await BundleSessionAuthManager(authority=authority(store)).authenticate(old.access_token)).sub == old_plan.credential_subject
     committed = result(new_plan, new_original)
     new = await provider.activate(plan=new_plan, result=committed)
     assert old.session_id != new.session_id and old.access_token != new.access_token
+    # Returning new handles does not perform Hub custody or retire the old
+    # session. A failed custody install therefore leaves this old session intact.
+    assert (await BundleSessionAuthManager(authority=authority(store)).authenticate(old.access_token)).sub == old_plan.credential_subject
     old_digest = hashlib.sha256(old.access_token.encode()).hexdigest()
+    with pytest.raises(SessionIssuanceRefused, match="resident_rotation_previous_invalid"):
+        await provider.retire_previous(plan=new_plan, result=committed,
+                                        session_id=old.session_id, token_sha256="9" * 64)
+    assert (await BundleSessionAuthManager(authority=authority(store)).authenticate(old.access_token)).sub == old_plan.credential_subject
     await provider.retire_previous(plan=new_plan, result=committed,
                                     session_id=old.session_id, token_sha256=old_digest)
     with pytest.raises(AuthenticationError):
         await BundleSessionAuthManager(authority=authority(store)).authenticate(old.access_token)
     assert (await BundleSessionAuthManager(authority=authority(store)).authenticate(new.access_token)).sub == new_plan.credential_subject
-    await ResidentCredentialProvider(authority_factory=factory).retire_previous(
+    await ResidentCredentialProvider(authority_factory=factory, session_state_reader=session_reader(store)).retire_previous(
         plan=new_plan, result=committed, session_id=old.session_id, token_sha256=old_digest)
     assert await provider.activate(plan=new_plan, result=committed) == new
 
@@ -122,7 +138,8 @@ async def test_rotation_retires_only_the_pinned_old_session_and_replays_after_re
 @pytest.mark.asyncio
 async def test_rotation_cannot_retire_before_applied_commit_or_target_the_new_bearer(store):
     plan = resident_plan(tenant=store.tenant, project=store.project)
-    provider = ResidentCredentialProvider(authority_factory=lambda **kwargs: authority(store))
+    provider = ResidentCredentialProvider(authority_factory=lambda **kwargs: authority(store),
+                                           session_state_reader=session_reader(store))
     original = await provider.prepare(plan=plan)
     with pytest.raises(SessionIssuanceRefused, match="issuance_result_not_applied"):
         await provider.retire_previous(plan=plan, result=result(plan, original, state="pending", outcome="pending"),

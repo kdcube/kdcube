@@ -39,6 +39,10 @@ authority; the host owns the resident lease and recovery deadline policy.
   new original first, then retires the old session and grant while the Card
   remains fenced. Retrying retirement does not invalidate its user or a
   sibling session, and never targets the new bearer's fingerprint.
+  The serving session record must match the pinned old session id, subject
+  and fingerprint before logout. A custom authority factory must supply its
+  corresponding `session_state_reader`; the default reads the deployment's
+  bound session authority store.
 
 The host authenticates the plan and result and fences the exact live Card
 revision before activation. Constructing these typed values from request JSON

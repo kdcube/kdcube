@@ -42,10 +42,13 @@ class ResidentCredentialProvider:
     constructed from caller JSON carries no authorization by itself.
     """
 
-    def __init__(self, *, authority_factory: Any) -> None:
+    def __init__(self, *, authority_factory: Any, session_state_reader: Any = None) -> None:
         if not callable(authority_factory):
             raise SessionIssuanceRefused("issuance_store_unavailable")
+        if session_state_reader is not None and not callable(session_state_reader):
+            raise SessionIssuanceRefused("issuance_store_unavailable")
         self._authority_factory = authority_factory
+        self._session_state_reader = session_state_reader
 
     @staticmethod
     def _context(plan: object) -> PlannedIssuanceContext:
@@ -117,6 +120,8 @@ class ResidentCredentialProvider:
 
         The Hub authenticates the decision, Card fence and pinned old-handle
         effect before calling. The typed result is not authorization by itself.
+        A superseded result permits retirement only when the host has proved
+        the authoritative Card is no longer live.
         Only this one session is logged out; no user or sibling is invalidated.
         """
         context = self._context(plan)
@@ -139,6 +144,22 @@ class ResidentCredentialProvider:
         logout = getattr(authority, "logout", None)
         if not callable(logout):
             raise SessionIssuanceRefused("issuance_store_unavailable")
+        reader = self._session_state_reader
+        if reader is None:
+            from kdcube_ai_app.auth.session_authority_runtime import bundle_session_store_for
+
+            store = bundle_session_store_for(tenant=plan.tenant, project=plan.project)
+            if store is None:
+                raise SessionIssuanceRefused("issuance_store_unavailable")
+            state = await store.get_validation_state(session_id)
+            record = state.session if state is not None else None
+        else:
+            record = await reader(tenant=plan.tenant, project=plan.project, session_id=session_id)
+        if record is None:
+            return  # authoritative serving lookup says the old session is already absent
+        if (not isinstance(record, Mapping) or record.get("session_id") != session_id
+                or record.get("sub") != plan.credential_subject or record.get("token_sha256") != token_sha256):
+            raise SessionIssuanceRefused("resident_rotation_previous_invalid")
         outcome = await logout(session_id=session_id)
         if type(outcome) is not bool:
             raise SessionIssuanceRefused("issuance_store_unavailable")
