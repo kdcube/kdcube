@@ -44,18 +44,18 @@ class CreationTransport:
 GENERATED = [{"createSlide": {}}, {"duplicateObject": {"objectId": "page_fixture"}}]
 
 
-@pytest.mark.parametrize("request", GENERATED)
-def test_google_generated_creation_ids_succeed_through_public_adapter(monkeypatch, request):
+@pytest.mark.parametrize("raw_request", GENERATED)
+def test_google_generated_creation_ids_succeed_through_public_adapter(monkeypatch, raw_request):
     transport = CreationTransport()
-    original = copy.deepcopy(request)
-    result, _ = call(monkeypatch, "batch_update", {"requiredRevisionId": "r1", "requests": [request]}, transport)
+    original = copy.deepcopy(raw_request)
+    result, _ = call(monkeypatch, "batch_update", {"requiredRevisionId": "r1", "requests": [raw_request]}, transport)
     assert result["ok"], result
     assert len(transport.posts) == 1
     assert transport.posts[0]["requests"] == [original]
-    assert result["ret"]["replies"] == [{next(iter(request)): {"objectId": "generated_slide"}}]
+    assert result["ret"]["replies"] == [{next(iter(raw_request)): {"objectId": "generated_slide"}}]
     assert result["ret"]["structure"]["slides"][-1]["objectId"] == "generated_slide"
     assert result["ret"]["observed_revision_id"] == "r2"
-    assert request == original
+    assert raw_request == original
 
 
 @pytest.mark.parametrize("failure", ["malformed_replies", "malformed_revision", "missing_revision", "unexpected_readback", "invalid_readback"])
@@ -71,10 +71,10 @@ def test_any_post_write_failure_is_managed_and_never_retries(monkeypatch, failur
     assert transport.provider.state["slides"][-1]["objectId"] == "client_slide"
 
 
-@pytest.mark.parametrize("request", GENERATED)
-def test_uncertain_readback_retains_the_generated_id_from_the_reply(monkeypatch, request):
+@pytest.mark.parametrize("raw_request", GENERATED)
+def test_uncertain_readback_retains_the_generated_id_from_the_reply(monkeypatch, raw_request):
     transport = CreationTransport("unexpected_readback")
-    result, _ = call(monkeypatch, "batch_update", {"requiredRevisionId": "r1", "requests": [request]}, transport)
+    result, _ = call(monkeypatch, "batch_update", {"requiredRevisionId": "r1", "requests": [raw_request]}, transport)
     assert not result["ok"] and result["error"]["managed"], result
     assert result["ret"]["outcome_unknown"] is True
     assert result["ret"]["created_slide_id"] == "generated_slide"
