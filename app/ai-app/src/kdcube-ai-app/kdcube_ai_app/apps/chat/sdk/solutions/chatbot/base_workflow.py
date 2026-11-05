@@ -3150,7 +3150,8 @@ class BaseWorkflow():
                 )
 
                 self.logger.log(
-                    "[agent_capabilities] " + capability_failure_log(capability_failure_from_exception(exc)),
+                    "[agent_capabilities] live Card or conversation projection unavailable; "
+                    + capability_failure_log(capability_failure_from_exception(exc)),
                     level="WARNING",
                 )
             narrowed_tools = narrow_agent_tool_config(
