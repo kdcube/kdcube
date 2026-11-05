@@ -94,6 +94,47 @@ async def test_only_applied_commit_activates_the_same_bearer_and_reconstructs_af
 
 
 @pytest.mark.asyncio
+async def test_rotation_retires_only_the_pinned_old_session_and_replays_after_restart(store):
+    old_plan = resident_plan(tenant=store.tenant, project=store.project)
+    factory = lambda **kwargs: authority(store)
+    provider = ResidentCredentialProvider(authority_factory=factory)
+    old_original = await provider.prepare(plan=old_plan)
+    old = await provider.activate(plan=old_plan, result=result(old_plan, old_original))
+    new_plan = replace(old_plan, transaction_id="3" * 64, decision_request_id="4" * 64,
+        intent_digest="5" * 64, original_input_digest="6" * 64,
+        base_revision=old_plan.candidate_revision, candidate_revision=old_plan.candidate_revision + 1,
+        card_content_hash="7" * 64)
+    new_original = await provider.prepare(plan=new_plan)
+    committed = result(new_plan, new_original)
+    new = await provider.activate(plan=new_plan, result=committed)
+    assert old.session_id != new.session_id and old.access_token != new.access_token
+    old_digest = hashlib.sha256(old.access_token.encode()).hexdigest()
+    await provider.retire_previous(plan=new_plan, result=committed,
+                                    session_id=old.session_id, token_sha256=old_digest)
+    with pytest.raises(AuthenticationError):
+        await BundleSessionAuthManager(authority=authority(store)).authenticate(old.access_token)
+    assert (await BundleSessionAuthManager(authority=authority(store)).authenticate(new.access_token)).sub == new_plan.credential_subject
+    await ResidentCredentialProvider(authority_factory=factory).retire_previous(
+        plan=new_plan, result=committed, session_id=old.session_id, token_sha256=old_digest)
+    assert await provider.activate(plan=new_plan, result=committed) == new
+
+
+@pytest.mark.asyncio
+async def test_rotation_cannot_retire_before_applied_commit_or_target_the_new_bearer(store):
+    plan = resident_plan(tenant=store.tenant, project=store.project)
+    provider = ResidentCredentialProvider(authority_factory=lambda **kwargs: authority(store))
+    original = await provider.prepare(plan=plan)
+    with pytest.raises(SessionIssuanceRefused, match="issuance_result_not_applied"):
+        await provider.retire_previous(plan=plan, result=result(plan, original, state="pending", outcome="pending"),
+                                       session_id="synthetic-old-session", token_sha256="e" * 64)
+    handles = await provider.activate(plan=plan, result=result(plan, original))
+    with pytest.raises(SessionIssuanceRefused, match="resident_rotation_previous_invalid"):
+        await provider.retire_previous(plan=plan, result=result(plan, original),
+            session_id=handles.session_id, token_sha256=original.receipt.bearer_sha256)
+    assert (await BundleSessionAuthManager(authority=authority(store)).authenticate(handles.access_token)).sub == plan.credential_subject
+
+
+@pytest.mark.asyncio
 async def test_abort_retires_the_inactive_original_without_activation(store):
     plan = resident_plan(tenant=store.tenant, project=store.project)
     provider = ResidentCredentialProvider(authority_factory=lambda **kwargs: authority(store))

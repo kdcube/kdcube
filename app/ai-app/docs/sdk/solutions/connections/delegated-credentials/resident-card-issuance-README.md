@@ -31,7 +31,14 @@ authority; the host owns the resident lease and recovery deadline policy.
   claims. The returned `CardCredentialHandles` contains the same bearer and
   session id for the credential effect to install through resident custody.
 - `retire(plan=..., result=...)` retires an authenticated aborted or
-  superseded original while preserving the terminal decision.
+  superseded inactive original while preserving the terminal decision. It
+  never retires a previously activated session.
+- `retire_previous(plan=..., result=..., session_id=..., token_sha256=...)`
+  logs out only the pinned old activated session of a committed rotation.
+  The Hub verifies its old-handle effect and actual decision, installs the
+  new original first, then retires the old session and grant while the Card
+  remains fenced. Retrying retirement does not invalidate its user or a
+  sibling session, and never targets the new bearer's fingerprint.
 
 The host authenticates the plan and result and fences the exact live Card
 revision before activation. Constructing these typed values from request JSON
