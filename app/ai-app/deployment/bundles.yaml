@@ -2165,21 +2165,18 @@ bundles:
                         description: Learn how to use connected presentations.
                         grants:
                         - named_services:use
-                        - slides:read
                       capabilities:
                         operation: provider.capabilities
                         label: Presentation capabilities
                         description: List supported presentation operations.
                         grants:
                         - named_services:use
-                        - slides:read
                       schema:
                         operation: object.schema
                         label: Presentation schema
                         description: Read presentation refs, selectors and action payloads.
                         grants:
                         - named_services:use
-                        - slides:read
                       search:
                         operation: object.search
                         label: Find presentations
