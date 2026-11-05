@@ -1284,9 +1284,19 @@ After a fresh read, the exact revision and all delete targets are checked
 before one write. `deleteObject` accepts only existing page elements from that
 read. Use `delete_slide` for slides and the dedicated comment tools for comments.
 A revision race or uncertain write is returned without an implicit retry.
+Google may generate IDs for raw `createSlide` and `duplicateObject`; the adapter
+reads those IDs from the corresponding replies. Any failure after an accepted
+write returns a managed refusal with `ret.outcome_unknown: true` and
+`partial_result: true`, retaining a known created ID. Read the presentation
+and inspect the applied changes before retrying.
 Optional `preview: true` validates the raw batch without writing or promising
 rendered geometry. Normal typed actions retain the action pipeline's result
 envelope; the two native tools return the adapter's `ok/error/ret` envelope.
+
+Raw element deletion can detach native comment anchors; those comments then
+read as `anchor_state: unavailable`. Raw media URLs are passed directly to
+Google for fetching. Use the ordinary image/video actions for their URL policy,
+staged-file reachability checks and temporary delivery lifecycle.
 
 ### Composition placement and images
 
@@ -1304,7 +1314,10 @@ and `gap` is small/medium/large (0.3/0.4/0.5 inch). Overlay `at` is center or
 a pair such as top_right or bottom_left. New colors use theme names such as
 `theme.accent1`; created text below 14 pt raises a warning unless marked
 `footer: true`. Page margins are 0.5 inch and filled callout text has a 12 pt
-inset. Preview and writes return fit, overlap and off-slide diagnostics.
+inset. Relative and overlay text sizing also reserves Google's 7.2 pt padding
+inside the text box, in both width and height, using the read-back fit model's
+constants. Estimated height rounds up to a whole point. Preview and writes
+return fit, overlap and off-slide diagnostics.
 
 An aspect-fit image that leaves space in its grid cell is grouped with a
 transparent cell rectangle. A filled callout groups its background with an

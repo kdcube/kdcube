@@ -140,13 +140,19 @@ class SlidesClient:
             result = await self.request("POST", f"{SLIDES_API}/presentations/{deck_id}:batchUpdate", operation=operation, mutating=True, json={"requests": requests[start:start+MAX_BATCH_REQUESTS], "writeControl": {"requiredRevisionId": revision}})
             if operation in WRITE_COMMENTS and result.get("commentUpdateState") != "ALL_SAVED":
                 raise SlidesValidationError("slides_comment_not_saved", "Google did not confirm that every comment change was saved. Read the comments before retrying.", details={"comment_update_state": result.get("commentUpdateState", "missing"), "outcome_unknown": True})
-            for request in requests[start:start+MAX_BATCH_REQUESTS]:
+            batch_replies = result.get("replies", [])
+            for index, request in enumerate(requests[start:start+MAX_BATCH_REQUESTS]):
+                reply = batch_replies[index] if index < len(batch_replies) else {}
                 if "createSlide" in request:
-                    self.created_slide_id = request["createSlide"]["objectId"]
+                    created = reply.get("createSlide", {}).get("objectId") or request["createSlide"].get("objectId")
                 elif "duplicateObject" in request:
                     spec = request["duplicateObject"]
-                    self.created_slide_id = spec["objectIds"][spec["objectId"]]
-            replies.extend(result.get("replies", []))
+                    created = reply.get("duplicateObject", {}).get("objectId") or spec.get("objectIds", {}).get(spec.get("objectId"))
+                else:
+                    continue
+                if created:
+                    self.created_slide_id = created
+            replies.extend(batch_replies)
             next_revision = result.get("writeControl", {}).get("requiredRevisionId")
             if not next_revision:
                 raise SlidesValidationError("slides_revision_unavailable", "The write completed but Google returned no next revision. Read the presentation before continuing.")
@@ -402,8 +408,12 @@ async def execute_google_slides_operation(*, operation, access_token, payload=No
         failure = provider_failure_from_exception(exc, provider="google", service="google_slides", operation=operation, fallback="Google Slides did not return a response. Read the presentation before retrying a write.", mutating=operation in MUTATING_OPERATIONS and not body.get("preview"))
         result = failure.error_result(where=where)
         result["error"]["message"] = "Google Slides did not return a response. Read the presentation before retrying a write."
+    except Exception:
+        if not (api and api.writes_applied):
+            raise
+        result = {"ok": False, "error": {"code": "google_slides_post_write_failed", "message": "Google accepted a write, but its result could not be processed. Read the presentation before retrying.", "managed": True, "where": where}, "ret": {"outcome_unknown": True}}
     if api and api.writes_applied:
-        result["ret"]["partial_result"] = True
+        result["ret"].update(partial_result=True, outcome_unknown=True, next_step="Read the presentation and inspect the applied changes before retrying. Do not repeat the write automatically.")
         if api.created_id:
             result["ret"]["created_presentation_id"] = api.created_id
         if api.created_slide_id:

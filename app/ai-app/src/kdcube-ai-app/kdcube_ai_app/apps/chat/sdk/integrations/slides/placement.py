@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 
-from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_fit import FIT_CYRILLIC_WIDTH, FIT_LATIN_WIDTH, FIT_LINE_PITCH
+from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_fit import FIT_CYRILLIC_WIDTH, FIT_INSET_PT, FIT_LATIN_WIDTH, FIT_LINE_PITCH
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.editing import content
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.geometry import EMU_PER_PT, TEXT_INSET_PT, emu
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.grid import gap_size, invalid
@@ -48,9 +48,12 @@ def estimated_height(spec, width, image_ratio=None):
         return width/image_ratio
     value, _ = content(spec.get("items", spec.get("text", "")))
     font = font_size(spec)
-    usable = max(1, width/EMU_PER_PT-2*TEXT_INSET_PT)
+    # The callout's inner text box still has Google's own text padding.
+    # Reserve the same provider inset that the read-back fit model removes.
+    inset = TEXT_INSET_PT + FIT_INSET_PT
+    usable = max(1, width/EMU_PER_PT-2*inset)
     lines = sum(max(1, math.ceil(sum(FIT_CYRILLIC_WIDTH if "\u0400" <= c <= "\u052f" else FIT_LATIN_WIDTH for c in paragraph)*font/usable)) for paragraph in value.splitlines()) or 1
-    return (lines*font*FIT_LINE_PITCH+2*TEXT_INSET_PT)*EMU_PER_PT
+    return math.ceil(lines*font*FIT_LINE_PITCH+2*inset)*EMU_PER_PT
 
 
 def placement(presentation, raw_slide, slide, spec, *, image_ratio=None):
