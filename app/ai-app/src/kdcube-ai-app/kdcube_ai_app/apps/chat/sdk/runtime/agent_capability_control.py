@@ -45,11 +45,13 @@ SUBAGENTS = "subagents"
 class AgentCapabilityControlUnavailable(RuntimeError):
     """The current descriptor/Card projection could not be obtained."""
 
-    def __init__(self, code: str, *, reason: str = "", retryable: bool = True, status: int = 503) -> None:
+    def __init__(self, code: str, *, reason: str = "", retryable: bool = True, status: int = 503,
+                 control_committed: bool | None = None, card_committed: bool | None = None) -> None:
         from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
 
         self.failure = capability_sync_failure({"error": code, "reason": reason or code,
-                                               "retryable": retryable, "status": status})
+            "retryable": retryable, "status": status, "control_committed": control_committed,
+            "card_committed": card_committed})
         self.code, self.reason = self.failure["error"], self.failure["reason"]
         self.retryable, self.status = self.failure["retryable"], self.failure["status"]
         super().__init__(self.code)
@@ -1503,7 +1505,8 @@ async def _sync_agent_capability_projection(
         failure = capability_sync_failure({**dict(getattr(response.error, "details", {}) or {}),
             "error": getattr(response.error, "code", "agent_capability_sync_failed"), "status": response.status})
         raise AgentCapabilityControlUnavailable(failure["error"], reason=failure["reason"],
-                                               retryable=failure["retryable"], status=failure["status"])
+            retryable=failure["retryable"], status=failure["status"],
+            control_committed=failure.get("control_committed"), card_committed=failure.get("card_committed"))
     projection = response.object
     if not isinstance(projection.get("projection"), Mapping):
         raise AgentCapabilityControlUnavailable("agent_capability_projection_missing")

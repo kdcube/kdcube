@@ -49,7 +49,8 @@ async def test_sync_preserves_bounded_refusal_from_provider_to_agent_without_pay
     from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceContext, NamedServiceRequest
 
     raw = {"ok": False, "error": "resident_issuance_pending", "reason": "card_intent_base_moved",
-        "retryable": retryable, "status": status, "access_token": "synthetic-bearer-never-expose",
+        "retryable": retryable, "status": status, "control_committed": True, "card_committed": False,
+        "access_token": "synthetic-bearer-never-expose",
         "message": "https://consent.invalid/private?token=synthetic", "payload": {"private": "value"}}
     provider = SimpleNamespace(sync_agent_capabilities=AsyncMock(return_value=raw), provider_identity=lambda: {})
     responses = []
@@ -65,11 +66,20 @@ async def test_sync_preserves_bounded_refusal_from_provider_to_agent_without_pay
     with bind_bundle_named_service_caller(call):
         with pytest.raises(AgentCapabilityControlUnavailable) as caught:
             await sync_agent_capability_projection(owner, catalog=_catalog(), agent_id=AGENT)
-    expected = {key: raw[key] for key in ("ok", "error", "reason", "retryable", "status")}
+    expected = {key: raw[key] for key in ("ok", "error", "reason", "retryable", "status", "control_committed", "card_committed")}
     assert responses[0].error.details == expected and caught.value.to_dict() == expected
     assert responses[0].error.message == raw["error"]
     assert "synthetic" not in repr(responses[0].to_dict()) + str(caught.value)
     assert "consent.invalid" not in repr(responses[0].to_dict())
+
+
+def test_error_carrier_defaults_permanent_status_to_nonretryable_and_rejects_nonboolean_committed_flags():
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
+
+    failure = capability_sync_failure({"error": "agent_capability_source_mismatch", "status": 403,
+        "control_committed": "true", "card_committed": 1})
+    assert failure["retryable"] is False
+    assert "control_committed" not in failure and "card_committed" not in failure
 
 
 @pytest.mark.asyncio

@@ -69,6 +69,9 @@ and exception text are excluded. Foreign-runtime workspaces keep the failure
 in turn state under `agent_capability_control_error` and log its codes and
 retryability while selectable capabilities remain closed. A successful sync
 clears that turn-state failure.
+Actual boolean `control_committed` and `card_committed` flags also survive
+the boundary, so an app can distinguish a committed narrowing from pending
+credential issuance without receiving Card payloads.
 
 MCP capability metadata also records the delegated resource and whether the
 connection uses standard Card authority. The Hub stores this routing metadata
