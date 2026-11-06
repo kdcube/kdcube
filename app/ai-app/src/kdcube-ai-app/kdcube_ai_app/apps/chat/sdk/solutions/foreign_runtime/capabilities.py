@@ -329,8 +329,18 @@ async def resolve_turn_selection_disabled(
             agent_id=agent_id,
             initial_disabled=initial_disabled,
         )
+        state.pop("agent_capability_control_error", None)
         return disabled_from_projection(catalog, result["projection"])
-    except Exception:
+    except Exception as exc:
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import (
+            capability_failure_from_exception, capability_failure_log,
+        )
+
+        failure = capability_failure_from_exception(exc)
+        state["agent_capability_control_error"] = failure
+        log = getattr(getattr(entrypoint, "logger", None), "log", None)
+        if callable(log):
+            log("[agent_capabilities] " + capability_failure_log(failure), "WARNING")
         return deny_all_capabilities(
             catalog=catalog,
             tenant=str(identity.get("tenant") or ""),

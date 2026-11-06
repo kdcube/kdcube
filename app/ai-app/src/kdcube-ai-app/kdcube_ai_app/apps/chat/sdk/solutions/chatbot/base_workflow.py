@@ -3137,7 +3137,7 @@ class BaseWorkflow():
                     capability_catalog,
                     effective_projection,
                 )
-            except Exception:
+            except Exception as exc:
                 disabled = deny_all_capabilities(
                     catalog=capability_catalog,
                     tenant=tenant,
@@ -3145,9 +3145,13 @@ class BaseWorkflow():
                     application=bundle_id,
                     agent_id=agent_id,
                 )
+                from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import (
+                    capability_failure_from_exception, capability_failure_log,
+                )
+
                 self.logger.log(
                     "[agent_capabilities] live Card or conversation projection unavailable; "
-                    "selectable capabilities are closed",
+                    + capability_failure_log(capability_failure_from_exception(exc)),
                     level="WARNING",
                 )
             narrowed_tools = narrow_agent_tool_config(

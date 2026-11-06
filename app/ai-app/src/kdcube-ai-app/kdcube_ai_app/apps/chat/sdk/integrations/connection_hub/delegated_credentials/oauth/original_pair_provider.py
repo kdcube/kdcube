@@ -32,6 +32,26 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 )
 
 
+def original_credential_record(*, plan, context, receipt, issued_at, card_kind):
+    """The non-secret original grant record shared by access-only and paired issuance."""
+    authority = {"operations": list(plan.operations),
+                 "resource_grants": {key: list(value) for key, value in plan.resource_grants.items()},
+                 "resource_operations": {key: list(value) for key, value in plan.resource_operations.items()}}
+    attrs = {**authority, "grantor_subject": plan.grantor_subject, "client_id": plan.client_id,
+             "registry_access_id": plan.access_id}
+    credential = CredentialEnvelope(
+        credential_id="cred_" + context.identity, credential_kind=DELEGATED_CLIENT_CREDENTIAL_KIND,
+        issuer_authority_id=plan.credential_issuer, issuer_authenticator_id=DELEGATED_CLIENT_AUTHENTICATOR_ID,
+        subject=plan.credential_subject, tenant=plan.tenant, project=plan.project,
+        audience=DELEGATED_CLIENT_AUDIENCE, session_id=receipt.session_id,
+        attrs=attrs, iat=issued_at, exp=context.expires_at,
+    )
+    return {**authority, "credential": credential.to_dict(), "sub": plan.grantor_subject,
+            "client_id": plan.client_id, "registry_access_id": plan.access_id,
+            "card_kind": card_kind, "resources": sorted(plan.resource_grants),
+            "scopes": sorted({scope for values in plan.resource_grants.values() for scope in values})}
+
+
 class OriginalCredentialPairProvider:
     """Host-only binding; constructor inputs never come from client JSON.
 
@@ -52,22 +72,8 @@ class OriginalCredentialPairProvider:
         self.card_kind = card_kind
 
     def _record(self, *, plan, context, receipt, issued_at):
-        authority = {"operations": list(plan.operations),
-                     "resource_grants": {key: list(value) for key, value in plan.resource_grants.items()},
-                     "resource_operations": {key: list(value) for key, value in plan.resource_operations.items()}}
-        attrs = {**authority, "grantor_subject": plan.grantor_subject, "client_id": plan.client_id,
-                 "registry_access_id": plan.access_id}
-        credential = CredentialEnvelope(
-            credential_id="cred_" + context.identity, credential_kind=DELEGATED_CLIENT_CREDENTIAL_KIND,
-            issuer_authority_id=plan.credential_issuer, issuer_authenticator_id=DELEGATED_CLIENT_AUTHENTICATOR_ID,
-            subject=plan.credential_subject, tenant=plan.tenant, project=plan.project,
-            audience=DELEGATED_CLIENT_AUDIENCE, session_id=receipt.session_id,
-            attrs=attrs, iat=issued_at, exp=context.expires_at,
-        )
-        return {**authority, "credential": credential.to_dict(), "sub": plan.grantor_subject,
-                "client_id": plan.client_id, "registry_access_id": plan.access_id,
-                "card_kind": self.card_kind, "resources": sorted(plan.resource_grants),
-                "scopes": sorted({scope for values in plan.resource_grants.values() for scope in values})}
+        return original_credential_record(plan=plan, context=context, receipt=receipt,
+                                          issued_at=issued_at, card_kind=self.card_kind)
 
     async def _access(self, *, plan, access_expires_at):
         snapshot = await read_prepared_delegated_client_access_token(
