@@ -1880,6 +1880,15 @@ async def test_operation_only_agent_grant_authors_live_lane_event(monkeypatch):
         record_consent_demand,
     )
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials import consent_denial
+
+    async def requirements(**kwargs):
+        assert kwargs["require_registered"] is True
+        return [{"provider_id": "slack", "claims_by_operation": {
+            "object.action.upload_file": ["slack:files:write"],
+        }}]
+
+    monkeypatch.setattr(consent_denial, "_kdcube_requirements_loader", requirements)
 
     store: dict = {}
     _install_async_user_prop_store(monkeypatch, sdk_config, store)
@@ -1902,7 +1911,7 @@ async def test_operation_only_agent_grant_authors_live_lane_event(monkeypatch):
         sources.append(source)
         return source
 
-    authored = await author_consent_granted_events(
+    arguments = dict(
         redis=None,
         user_id="user-1",
         provider_id="kdcube",
@@ -1912,11 +1921,15 @@ async def test_operation_only_agent_grant_authors_live_lane_event(monkeypatch):
         },
         granted_resource=resource,
         connector_app_id=client_id,
-        account_id="agent-1",
         connection_hub_bundle_id="connection-hub@1-0",
         source_factory=factory,
     )
-
+    # The operation alone is not a binding-complete event. The app supplies
+    # the actual resulting Card scope, separately from any provider account id.
+    assert await author_consent_granted_events(**arguments) == 0
+    assert sources == []
+    authored = await author_consent_granted_events(**arguments,
+        granted_account_scope={"slack": {"work": ["slack:files:write"]}})
     assert authored == 1
     event = sources[0].published[0]
     assert event["payload"]["claims"] == []
