@@ -83,6 +83,8 @@ Do not run an out-of-band AWS import or console write concurrently with this
 bootstrap, because those writers do not share the SDK lock. Provider read
 errors and malformed records refuse startup. An all-present provider is a
 no-op even if it has no create-only capability.
+On success, the installer reports each newly created signing key by name,
+then confirms verification in the selected provider.
 
 The AWS lock has the existing 30-second lease. Bootstrap checks ownership at
 atomic release and refuses startup if the lease expired or could not be

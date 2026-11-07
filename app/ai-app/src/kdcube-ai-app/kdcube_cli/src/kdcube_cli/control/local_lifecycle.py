@@ -40,7 +40,12 @@ from kdcube_cli.host_vault import (
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
 )
 from kdcube_cli.host_vault_service import ensure_host_vault_running
-from kdcube_cli.hub_signers import hub_signer_bootstrap_command, prepare_hub_signing_refs, public_bootstrap_failure
+from kdcube_cli.hub_signers import (
+    hub_signer_bootstrap_command,
+    prepare_hub_signing_refs,
+    public_bootstrap_created_lines,
+    public_bootstrap_failure,
+)
 
 
 class LocalLifecycleController:
@@ -160,6 +165,11 @@ class LocalLifecycleController:
                         returncode=bootstrapped.returncode,
                     )
                 if event_sink is not None:
+                    for line in public_bootstrap_created_lines(bootstrapped.stdout):
+                        event_sink(ControlEvent(
+                            kind=ControlEventKind.PROGRESS,
+                            message=line,
+                        ))
                     event_sink(ControlEvent(
                         kind=ControlEventKind.PROGRESS,
                         message="Connection Hub signing secrets verified in the selected provider.",

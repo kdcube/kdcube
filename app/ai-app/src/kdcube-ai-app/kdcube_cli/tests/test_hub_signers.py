@@ -3,7 +3,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from kdcube_cli.hub_signers import HUB_ID, SIGNER_REFS, prepare_hub_signing_refs, public_bootstrap_failure
+from kdcube_cli.hub_signers import (
+    HUB_ID, SIGNER_REFS, prepare_hub_signing_refs,
+    public_bootstrap_created_lines, public_bootstrap_failure,
+)
 
 
 def test_older_descriptor_gets_refs_once_and_keeps_other_config(tmp_path):
@@ -110,3 +113,15 @@ def test_public_failure_reason_filters_raw_provider_output():
     assert public_bootstrap_failure(output) == (
         " Reason: invalid_signing_seed_length. Key: bundles.connection-hub@1-0.secrets.custom.refresh."
     )
+
+
+def test_public_created_lines_accept_custom_names_and_filter_other_output():
+    created = "Created missing signing secret: bundles.connection-hub@1-0.secrets.custom-signer.κλειδί"
+    assert public_bootstrap_created_lines("\n".join([
+        "sensitive-provider-value", created,
+        "Created missing signing secret: bundles.other-app@1-0.secrets.signer",
+        "Created missing signing secret: bundles.connection-hub@1-0.secrets.",
+        "Created missing signing secret: bundles.connection-hub@1-0.secrets..signer",
+        "Created missing signing secret: bundles.connection-hub@1-0.secrets.signer sensitive-provider-value",
+        "Created missing signing secret: bundles.connection-hub@1-0.secrets.signer=private",
+    ])) == (created,)
