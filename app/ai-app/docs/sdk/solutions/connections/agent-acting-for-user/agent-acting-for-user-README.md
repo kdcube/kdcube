@@ -210,6 +210,13 @@ external or headless caller receives it as structured recovery data. Following
 the URL and retrying are explicit caller/user actions; neither happens
 automatically.
 
+Card review applies to hosted agents running on the KDCube harness, including
+their delegated access to KDCube data such as the memory service. That agent
+permission is separate from the user's own memory preferences: the
+`memories_widget_preferences_update` API writes `memory_enabled` and
+`memory_scope` to the user settings store and does not edit the Agent Card.
+Connection Hub continues to own the agent's delegated service permission.
+
 An SDK binding demand carries `account_provider_id`, `account_claim` and an
 optional proposed `account_id` in the served Card-review URL. Its door `claims`
 can be empty. A sole capable account can be proposed for review; multiple
