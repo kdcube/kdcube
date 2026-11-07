@@ -62,10 +62,11 @@ def test_agent_grant_consent_announced_from_self_describing_block(monkeypatch):
     assert artifact == {"structured_content": None}  # preserved
     assert len(announced) == 1 and announced[0].claims == ["slack:read"]
     out = json.loads(content)
-    assert out["consent"]["grant"]["payload"] == {
-        "client_id": client, "resource": resource, "claims": ["slack:read"],
-        "named_service_operations": {"slack": ["object.search"]},
-    }
+    assert out["consent"]["agent_client_id"] == client
+    assert out["consent"]["resource"] == resource
+    assert out["consent"]["claims"] == ["slack:read"]
+    assert out["consent"]["agent_card_consent"] is True
+    assert "grant" not in out["consent"]
     assert out["consent"]["namespace"] == "slack"
     assert out["consent"]["operation"] == "object.search"
 
@@ -102,9 +103,11 @@ def test_agent_grant_consent_announced_from_normalized_mcp_content_envelope(monk
 
     assert len(announced) == 1 and announced[0].claims == ["slack:channels"]
     out = json.loads(result["content"][0]["text"])
-    assert out["consent"]["grant"]["payload"] == {
-        "client_id": client, "resource": resource, "claims": ["slack:channels"],
-    }
+    assert out["consent"]["agent_client_id"] == client
+    assert out["consent"]["resource"] == resource
+    assert out["consent"]["claims"] == ["slack:channels"]
+    assert out["consent"]["agent_card_consent"] is True
+    assert "grant" not in out["consent"]
     assert not any("NOT post-processed" in r.message for r in caplog.records)
 
 

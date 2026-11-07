@@ -104,3 +104,29 @@ test('an agent grant open omits the inner operation when the demand names none',
   assert.equal('namespace' in open.params, false)
   assert.equal('operation' in open.params, false)
 })
+
+test('Agent Card consent preserves the account-only link across the chat scene hop', () => {
+  const open = agentGrantConsentOpen({
+    agentClientId: 'kdcube-agent:app:main', resource: 'urn:named-services',
+    claims: ['slides:read'], namespace: 'stale', operation: 'stale.operation',
+    url: '/widgets/connections_settings?tab=delegated_by_kdcube&pending_agent_grant=1'
+      + '&agent_card_consent=1&agent_client_id=kdcube-agent%3Aapp%3Amain&resource=urn%3Anamed-services'
+      + '&claims=&account_provider_id=google&account_claim=slides%3Aread&account_id=work',
+  })
+  assert.equal(open.params.agent_card_consent, '1')
+  assert.equal(open.params.account_provider_id, 'google')
+  assert.equal(open.params.account_claim, 'slides:read')
+  assert.equal(open.params.account_id, 'work')
+  assert.equal('claims' in open.params, false)
+  assert.equal('namespace' in open.params, false)
+  assert.equal('operation' in open.params, false)
+})
+
+test('an account-only structured request keeps provider claims out of door grants without a URL', () => {
+  const open = agentGrantConsentOpen({agentClientId: 'kdcube-agent:app:main',
+    resource: 'urn:named-services', claims: ['slides:read'],
+    accountProviderId: 'google', accountClaim: 'slides:read', accountId: 'work'})
+  assert.equal(open.params.agent_card_consent, '1')
+  assert.equal(open.params.account_claim, 'slides:read')
+  assert.equal('claims' in open.params, false)
+})

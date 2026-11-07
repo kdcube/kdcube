@@ -867,8 +867,8 @@ class BaseEntrypoint:
         signed-in user under a grant keyed to THIS agent's delegated-client
         identity. READ-ONLY probe of that grant record (no token leaves this
         process): `covered` when the grant exists, otherwise the claims are
-        `unmet` and the row carries the one-click grant action — the same
-        `delegated_agent_grant_create` block the chat consent banner uses.
+        `unmet` and the row opens THIS hosted agent's Card review. The catalog
+        never offers a separate resource-only grant for a hosted agent.
         Fail-open: any miss keeps the catalog untouched."""
         entries = [
             entry for entry in (catalog.get("mcp") or [])
@@ -922,10 +922,7 @@ class BaseEntrypoint:
                         "covered": covered,
                         "resource": resource,
                         "agent_client_id": client_id,
-                        "grant": {
-                            "operation": "delegated_agent_grant_create",
-                            "payload": {"client_id": client_id, "resource": resource, "claims": claims},
-                        },
+                        "agent_card_consent": True,
                     }
 
             await asyncio.wait_for(_decorate(), timeout=self.DELEGATED_MCP_CONSENT_BUDGET_SECONDS)

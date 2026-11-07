@@ -248,9 +248,8 @@ async def _announce_agent_grant_demand(
     KDCube), where the account picker sets the per-account binding. NOT a
     connect-a-provider banner.
 
-    A per-account claim is not a resource grant, so there is no one-click grant
-    here — the banner deep-links to the focused card and the user ticks the
-    permission on the account. Returns the explainable tool result, or None when
+    The banner opens Card consent review. One approval persists the requested
+    account permission with the Card selection. Returns the explainable tool result, or None when
     the agent identity is unknown (caller falls back to the connect payload)."""
     from connection_hub.agent_account_scope import (
         agent_identity,
@@ -271,6 +270,11 @@ async def _announce_agent_grant_demand(
 
     missing = _clean(result.claim) or _clean(claim)
     account_label = _clean(result.account_id)
+    # A sole capable candidate is a proposal for the owner's review, never a
+    # binding. Multiple accounts stay unselected until that owner chooses.
+    candidates = [entry for entry in (result.candidates or ()) if isinstance(entry, Mapping)]
+    if not account_label and len(candidates) == 1:
+        account_label = _clean(candidates[0].get("account_id"))
     hub_url = connection_hub_grant_url(
         tenant=tenant,
         project=project,
@@ -280,9 +284,11 @@ async def _announce_agent_grant_demand(
         hub_bundle_id=connection_hub_bundle_id or DEFAULT_CONNECTION_HUB_BUNDLE_ID,
         account_id=account_label,   # focus the card on the exact account + claim
         account_claim=missing,
+        account_provider_id=_clean(result.provider_id),
+        agent_card_consent=True,
     )
-    # No agent_client_id passed -> mcp_consent_from_denial adds NO one-click grant
-    # (that path is for resource claims). The deep link routes to the focused card.
+    # Keep provider claims out of the door grant. The complete deep link names
+    # the account permission separately for the Card consent review.
     consent = mcp_consent_from_denial(
         {"status": 403, "reason": REASON_AGENT_ACCOUNT_BINDING_REQUIRED},
         resource=resource,
@@ -292,6 +298,9 @@ async def _announce_agent_grant_demand(
     )
     consent.consent["kind"] = CONSENT_KIND_AGENT_GRANT
     consent.consent["agent_client_id"] = client_id
+    consent.consent["agent_card_consent"] = True
+    consent.consent["account_provider_id"] = _clean(result.provider_id)
+    consent.consent["account_claim"] = missing
     # The broker marks every user-fixable resolution retryable (`_user_action`).
     # This block is rebuilt from a synthetic denial, so the flag is restated
     # here; consent_details() reads it, and False would tell a caller that
@@ -304,9 +313,8 @@ async def _announce_agent_grant_demand(
     consent.agent_message = (
         f"This needs your permission to use {missing or 'this account'}"
         + (f" on account {account_label}" if account_label else "")
-        + ". Grant it to THIS agent in Connection Hub -> Delegated by KDCube "
-        "(open the agent's access, tick the permission on that account, Save), "
-        "then ask again. Do not retry until it is granted."
+        + ". Open this agent's Card in Connection Hub, review the requested "
+        "account permission and approve once, then ask again. Do not retry until it is granted."
     )
     # Raise the banner through the SAME bound-tool-communicator path the
     # connect-account banner uses, so it renders in chat (announce_agent_consent's
@@ -336,6 +344,7 @@ async def _announce_agent_grant_demand(
             provider_id="kdcube",
             connector_app_id=client_id,
             claims=[missing] if missing else [],
+            resource=resource,
             tool_name=tool_name,
             identity=get_current_user_identity() or {},
             connection_hub_bundle_id=connection_hub_bundle_id,
