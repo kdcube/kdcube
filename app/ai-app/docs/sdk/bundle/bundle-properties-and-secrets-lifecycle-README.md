@@ -4,7 +4,7 @@ title: "Bundle Properties And Secrets Lifecycle"
 summary: "Concise bundle-author lifecycle for code defaults, descriptor/admin bundle props, effective runtime props, bundle secrets, user-scoped state, and what is merged versus only stored as authority."
 tags: ["sdk", "bundle", "configuration", "props", "secrets", "lifecycle", "descriptor"]
 keywords: ["bundle props lifecycle", "bundle secrets lifecycle", "configuration_defaults", "bundle_props_defaults", "effective bundle props", "bundles.yaml config", "bundles.secrets.yaml", "descriptor authority", "redis bundle props cache", "set_bundle_prop", "set_bundle_secret", "bundle props merge", "bundle props materialization"]
-updated_at: 2026-07-17
+updated_at: 2026-11-07
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
@@ -383,6 +383,17 @@ its `Config` was built with until it is reconstructed. There is no
 props-style refresh/notify cycle for secrets.
 
 ## Write Path
+
+Trusted deployment bootstrap may use
+`ISecretsManager.create_bundle_secret(provider_key, value)` to create a durable
+bundle key only if absent. It returns whether creation won, preserves existing
+values, and has no read-then-overwrite fallback on unsupported providers. The
+local installer uses this before application startup for Connection Hub's
+three deployment signers. See the
+[CLI secret management section](../../../src/kdcube-ai-app/kdcube_cli/README.md#secret-management)
+for selected-provider behavior and deployment limits. This capability is
+separate from runtime-acquired ephemeral custody and is not exposed as a model
+or delegated management bootstrap operation.
 
 Use supported helpers or platform APIs rather than editing runtime files from
 bundle code.

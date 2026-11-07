@@ -93,6 +93,8 @@ bundles:
                 request_permit_ttl_seconds: 600
           oauth:
             enabled: true
+            original_exchange:
+              refresh_signing_secret_ref: oauth_original.refresh_signing_secret
             brand: KDCube
             issuer: ''
             public_clients:
