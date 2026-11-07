@@ -68,7 +68,7 @@ def test_file_root_rotation_publishes_a_readable_private_marker(tmp_path, monkey
 
     def observe_publication(source, target):
         if target.name == "CURRENT":
-            published_modes.append(stat.S_IMODE(source.stat().st_mode))
+            published_modes.append(stat.S_IMODE(os.stat(source).st_mode))
         replace(source, target)
 
     monkeypatch.setattr(keys.os, "replace", observe_publication)
@@ -88,8 +88,27 @@ def test_file_root_rotation_publishes_a_readable_private_marker(tmp_path, monkey
         assert stat.S_IMODE((provider._dir / "CURRENT").stat().st_mode) == 0o600
         assert stat.S_IMODE((provider._dir / f"{second}.key").stat().st_mode) == 0o400
         assert not (provider._dir / "CURRENT.tmp").exists()
+        assert not list(provider._dir.glob(".*.tmp"))
     finally:
         os.umask(previous_umask)
+
+
+@pytest.mark.parametrize("abandoned", ["CURRENT.tmp", "root-0001.key.tmp", ".CURRENT.abandoned.tmp"])
+def test_file_root_rotation_ignores_abandoned_temporary_files(tmp_path, abandoned):
+    directory = tmp_path / "keys"
+    directory.mkdir(mode=0o700)
+    stale = directory / abandoned
+    stale.write_bytes(b"synthetic-abandoned-file")
+    stale.chmod(0o664)
+    provider = keys.FileRootKeyProvider(directory)
+    key_id = provider.rotate()
+    assert provider.current_key_id() == key_id
+    sealed = keys.Envelope(provider).seal(CANARY.encode(), record_id=REF)
+    assert keys.Envelope(provider).open(sealed, record_id=REF) == CANARY.encode()
+    assert stat.S_IMODE((directory / "CURRENT").stat().st_mode) == 0o600
+    assert stat.S_IMODE((directory / f"{key_id}.key").stat().st_mode) == 0o400
+    assert stale.read_bytes() == b"synthetic-abandoned-file"
+    assert set(directory.iterdir()) == {stale, directory / "CURRENT", directory / f"{key_id}.key"}
 
 
 def test_same_original_record_survives_store_restart_and_refuses_replacement(rig):

@@ -29,6 +29,7 @@ import os
 import re
 import secrets
 import stat
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -245,26 +246,28 @@ class FileRootKeyProvider:
         existing = sorted(p.stem for p in self._dir.glob("*.key"))
         key_id = f"root-{len(existing) + 1:04d}"
         path = self._key_path(key_id)
-        tmp = path.with_suffix(".key.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
-        try:
-            os.write(fd, secrets.token_bytes(KEY_BYTES))
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(tmp, path)
+        _publish_private_file(path, secrets.token_bytes(KEY_BYTES), mode=0o400)
         marker = self._dir / "CURRENT"
-        marker_tmp = self._dir / "CURRENT.tmp"
         # The marker must satisfy our owned-file reader even on hosts whose
         # default umask permits group writes. Publish a complete private file.
-        marker_fd = os.open(marker_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(marker_fd, "w", encoding="utf-8") as marker_file:
-            marker_file.write(key_id)
-            marker_file.flush()
-            os.fsync(marker_file.fileno())
-        os.replace(marker_tmp, marker)
+        _publish_private_file(marker, key_id.encode("utf-8"), mode=0o600)
         _fsync_dir(self._dir)
         return key_id
+
+
+def _publish_private_file(path: Path, value: bytes, *, mode: int) -> None:
+    # A unique name lets rotation recover after a crash leaves a temporary
+    # key or marker behind. Never follow or overwrite that abandoned inode.
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            os.fchmod(output.fileno(), mode)
+            output.write(value)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _fsync_dir(directory: Path) -> None:
