@@ -3,7 +3,7 @@
 
 """The universal consent denial: hosted agents AND external delegated clients
 each receive an actionable path — the same focused Connection Hub deep link,
-plus the one-click grant action for hosted agents."""
+with Card consent review for hosted agents."""
 
 from __future__ import annotations
 
@@ -21,6 +21,26 @@ from connection_hub.delegated_to_kdcube.public_base import (
 )
 
 RESOURCE = "*/kdcube-services@1-0/public/mcp/named_services*"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entries, expected", [([], None), ([SimpleNamespace(spec=SimpleNamespace(metadata={}))], []),
+    ([SimpleNamespace(spec=SimpleNamespace(metadata={"connected_accounts": "invalid"}))], None)])
+async def test_completion_discovery_distinguishes_no_accounts_from_missing_or_invalid_metadata(monkeypatch, entries, expected):
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import discovery
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.consent_denial import _kdcube_requirements_loader
+
+    async def registered(_namespace):
+        return entries
+
+    monkeypatch.setattr(discovery, "_redis_client_from_settings", lambda: None)
+    monkeypatch.setattr(discovery, "RedisNamedServiceDiscovery", lambda *_args, **_kwargs:
+                        SimpleNamespace(entries_for_namespace=registered))
+    if expected is None:
+        with pytest.raises((LookupError, ValueError)):
+            await _kdcube_requirements_loader(namespace="slides", tenant="t", project="p", require_registered=True)
+    else:
+        assert await _kdcube_requirements_loader(namespace="metadata", tenant="t", project="p", require_registered=True) == expected
 
 
 def _request(client_id: str, registry_access_id: str = ""):
@@ -59,10 +79,11 @@ def test_hub_grant_url_shape():
     assert "claims=mail%3Aread" in url
 
 
-def test_hosted_agent_gets_grant_action_and_link():
+def test_hosted_agent_gets_card_review_link_without_resource_only_grant():
     denial = _denial("kdcube-agent:app:main")
     consent = denial["consent"]
-    assert consent["grant"]["payload"]["claims"] == ["slack:read"]
+    assert consent["claims"] == ["slack:read"]
+    assert consent["agent_card_consent"] is True and "grant" not in consent
     assert consent["connection_hub_url"].startswith("https://runtime.example/")
     assert "pending_agent_grant=1" in consent["connection_hub_url"]
 
@@ -151,9 +172,7 @@ def test_the_demand_names_the_inner_operation_it_wants():
 
     assert consent["namespace"] == "slack"
     assert consent["operation"] == "object.search"
-    assert consent["grant"]["payload"]["named_service_operations"] == {
-        "slack": ["object.search"],
-    }
+    assert consent["agent_card_consent"] is True and "grant" not in consent
     url = consent["connection_hub_url"]
     assert "namespace=slack" in url
     assert "operation=object.search" in url
@@ -223,7 +242,7 @@ def test_agent_bearer_resource_comes_from_credential_resource_grants():
     consent = denial["consent"]
     assert consent["agent_client_id"] == "kdcube-agent:ported-langgraph-agents@2026-07-13:lg-react"
     assert consent["resource"] == door               # NOT '' — the banner can now rise
-    assert consent["grant"]["payload"]["resource"] == door
+    assert "grant" not in consent
     assert consent["connection_hub_url"]             # deep link built (resource present)
 
 
@@ -258,13 +277,13 @@ def test_card_denial_for_a_hosted_agent_names_the_uncovered_operation():
     assert consent["reason"] == "delegated_capability_not_granted"
     assert consent["namespace"] == "conv" and consent["operation"] == "object.search"
     assert consent["claims"] == []
-    assert consent["grant"]["payload"]["named_service_operations"] == {"conv": ["object.search"]}
+    assert consent["agent_card_consent"] is True and "grant" not in consent
     assert "pending_agent_grant=1" in consent["connection_hub_url"]
 
 
 def test_card_denial_keeps_the_claims_the_card_still_misses():
     enriched = _card_consent("kdcube-agent:app:main", _card_denial(claims=["conversations:read"]))
-    assert enriched["consent"]["grant"]["payload"]["claims"] == ["conversations:read"]
+    assert enriched["consent"]["claims"] == ["conversations:read"]
 
 
 def test_other_denials_pass_through_unchanged():

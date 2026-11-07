@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Any
+from typing import Any, Mapping
 
 from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_to_kdcube.store import (
@@ -79,6 +79,7 @@ async def author_consent_granted_events(
     user_id: str,
     provider_id: str,
     granted_claims: list | tuple,
+    granted_account_scope: Mapping[str, Any] | None = None,
     granted_named_service_operations: Any = None,
     granted_resource_operations: Any = None,
     granted_resource: str = "",
@@ -104,11 +105,19 @@ async def author_consent_granted_events(
                 user_id=user_id,
                 agent_id=str(entry.get("agent_id") or "") or "main",
             )
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.consent_denial import (
+        _kdcube_requirements_loader,
+    )
+    async def completion_requirements(**kwargs: Any) -> Any:
+        return await _kdcube_requirements_loader(**kwargs, require_registered=True)
+
     return await _core.author_consent_granted_events(
         redis=redis,
         user_id=user_id,
         provider_id=provider_id,
         granted_claims=granted_claims,
+        granted_account_scope=granted_account_scope,
+        requirements_loader=completion_requirements,
         granted_named_service_operations=granted_named_service_operations,
         granted_resource_operations=granted_resource_operations,
         granted_resource=granted_resource,
