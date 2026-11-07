@@ -21,6 +21,7 @@ import os
 import re
 import stat
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -162,10 +163,22 @@ class UserSecretFileStore:
             raise UserSecretFileError("user_secret_storage_unavailable")
 
     @staticmethod
+    def _settled_record_info(read_stat):
+        # The existing runtime file store uses the same bounded wait for a
+        # create-only hard-link publication to shed its temporary name. Never
+        # accept a record with multiple links, including after a publisher crash.
+        for _ in range(20):
+            info = read_stat()
+            if info.st_nlink != 2:
+                return info
+            time.sleep(0.01)
+        return info
+
+    @staticmethod
     def _check_record(path: Path) -> bool:
         """True for an existing private record, False when absent; an unsafe one is refused, never repaired."""
         try:
-            info = path.lstat()
+            info = UserSecretFileStore._settled_record_info(path.lstat)
         except FileNotFoundError:
             return False
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != _owner_uid()
@@ -180,7 +193,7 @@ class UserSecretFileStore:
         except FileNotFoundError:
             return None
         try:
-            info = os.fstat(descriptor)
+            info = UserSecretFileStore._settled_record_info(lambda: os.fstat(descriptor))
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != _owner_uid()
                     or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
                 raise UserSecretFileError("user_secret_storage_unavailable")
@@ -216,7 +229,7 @@ class UserSecretFileStore:
     def set(self, *, user_id: str, bundle_id: str | None, key: str, value: str) -> None:
         self._write(self._chain(bundle_id, user_id), encode_segment(key) + _SUFFIX, value)
 
-    def _write(self, chain: list[Path], name: str, value: str) -> None:
+    def _write(self, chain: list[Path], name: str, value: str, *, if_absent: bool = False) -> bool:
         try:
             if type(value) is not str or len(value.encode("utf-8")) > _MAX_VALUE_BYTES:
                 raise ValueError
@@ -234,13 +247,23 @@ class UserSecretFileStore:
                     stream.write(encoded)
                     stream.flush()
                     os.fsync(stream.fileno())
-                os.replace(temporary, folder / name)
+                if if_absent:
+                    try:
+                        # Publish a complete private record atomically, never
+                        # replace a key created by another bootstrap process.
+                        os.link(temporary, folder / name, follow_symlinks=False)
+                    except FileExistsError:
+                        self._check_record(folder / name)
+                        return False
+                else:
+                    os.replace(temporary, folder / name)
             finally:
                 try:
                     os.unlink(temporary)
                 except FileNotFoundError:
                     pass
             self._fsync_folder(folder)
+            return True
         except OSError:
             raise UserSecretFileError("user_secret_storage_unavailable") from None
 
@@ -281,6 +304,11 @@ class UserSecretFileStore:
 
     def set_app(self, *, bundle_id: str | None, key: str, value: str) -> None:
         self._write(self._chain(bundle_id)[:2], encode_segment(key) + _SUFFIX, value)
+
+    def create_app(self, *, bundle_id: str, key: str, value: str) -> bool:
+        """Create one durable app key; preserve any existing record."""
+        return self._write(self._chain(bundle_id)[:2], encode_segment(key) + _SUFFIX,
+                           value, if_absent=True)
 
     def delete_app(self, *, bundle_id: str | None, key: str) -> None:
         self._unlink(self._chain(bundle_id)[:2], encode_segment(key) + _SUFFIX)

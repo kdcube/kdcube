@@ -384,6 +384,17 @@ props-style refresh/notify cycle for secrets.
 
 ## Write Path
 
+Trusted deployment bootstrap may use
+`ISecretsManager.create_bundle_secret(provider_key, value)` to create a durable
+bundle key only if absent. It returns whether creation won, preserves existing
+values, and has no read-then-overwrite fallback on unsupported providers. The
+local installer uses this before application startup for Connection Hub's
+three deployment signers. See the
+[CLI secret management section](../../../src/kdcube-ai-app/kdcube_cli/README.md#secret-management)
+for selected-provider behavior and deployment limits. This capability is
+separate from runtime-acquired ephemeral custody and is not exposed as a model
+or delegated management bootstrap operation.
+
 Use supported helpers or platform APIs rather than editing runtime files from
 bundle code.
 

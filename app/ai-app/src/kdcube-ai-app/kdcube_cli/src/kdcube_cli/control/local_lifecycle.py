@@ -40,6 +40,7 @@ from kdcube_cli.host_vault import (
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
 )
 from kdcube_cli.host_vault_service import ensure_host_vault_running
+from kdcube_cli.hub_signers import hub_signer_bootstrap_command, prepare_hub_signing_refs
 
 
 class LocalLifecycleController:
@@ -76,7 +77,8 @@ class LocalLifecycleController:
         self._check_before_start()
         try:
             assembly = installer_mod.prepare_runtime_secrets(self._context.config_dir)
-        except HostVaultConfigurationError as exc:
+            has_hub = prepare_hub_signing_refs(self._context.config_dir)
+        except (HostVaultConfigurationError, ValueError) as exc:
             raise OperationFailedError(
                 "start", self._reference.target_id, f"Secrets startup preflight failed: {exc}",
             ) from exc
@@ -137,6 +139,30 @@ class LocalLifecycleController:
                     runtime_env,
                     event_sink=event_sink,
                 )
+            if has_hub:
+                # Compose starts and waits for this service's infrastructure
+                # dependencies. No application service is started before the
+                # trusted bootstrap verifies durable keys in the chosen provider.
+                bootstrap = hub_signer_bootstrap_command(
+                    [*base_command, *profile_args], build=request.build,
+                )
+                self._emit_command(event_sink, bootstrap)
+                bootstrapped = self._run_command(
+                    bootstrap, cwd=self._context.docker_dir,
+                    env=compose_environment(runtime_env), capture_output=True,
+                )
+                if bootstrapped.returncode != 0:
+                    # Do not echo subprocess errors or descriptor contents.
+                    raise OperationFailedError(
+                        "start", self._reference.target_id,
+                        "Connection Hub signing secret bootstrap failed; application startup refused.",
+                        returncode=bootstrapped.returncode,
+                    )
+                if event_sink is not None:
+                    event_sink(ControlEvent(
+                        kind=ControlEventKind.PROGRESS,
+                        message="Connection Hub signing secrets verified in the selected provider.",
+                    ))
             self._emit_command(event_sink, command)
             result = self._run_command(
                 command,

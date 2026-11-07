@@ -388,8 +388,49 @@ def test_local_start_and_stop_use_typed_lifecycle_and_lock(tmp_path):
     assert any("down" in command and "--remove-orphans" in command for command in compose_commands)
     assert [event.kind for event in events] == [
         ControlEventKind.COMMAND,
+        ControlEventKind.PROGRESS,
+        ControlEventKind.COMMAND,
         ControlEventKind.COMMAND,
     ]
+    bootstrap_index = next(i for i, command in enumerate(compose_commands) if "run" in command)
+    start_index = next(i for i, command in enumerate(compose_commands) if "up" in command)
+    assert bootstrap_index < start_index
+    assert compose_commands[bootstrap_index][-4:] == (
+        "chat-proc", "python", "-m", "kdcube_ai_app.infra.secrets.deployment_bootstrap",
+    )
+
+
+def test_local_start_refuses_bootstrap_failure_before_starting_applications(tmp_path):
+    repo, workdir = _make_runtime(tmp_path)
+
+    class RefusingRunner(FakeRunner):
+        def run(self, command, **kwargs):
+            result = super().run(command, **kwargs)
+            if "kdcube_ai_app.infra.secrets.deployment_bootstrap" in command:
+                return CommandResult(returncode=1, stderr="sensitive-provider-value")
+            return result
+
+    runner = RefusingRunner()
+    target = LocalDeploymentTarget(
+        DeploymentTargetRef.local(workdir), repo_root=repo, runner=runner,
+        lock_file=tmp_path / "cli-lock.json",
+    )
+    with pytest.raises(OperationFailedError, match="application startup refused") as caught:
+        target.start(LocalStartRequest())
+    assert "sensitive-provider-value" not in str(caught.value)
+    assert not any("up" in call["command"] for call in runner.calls)
+
+
+def test_local_start_without_hub_does_not_run_signer_bootstrap(tmp_path):
+    repo, workdir = _make_runtime(tmp_path)
+    _write_yaml(workdir / "config" / "bundles.yaml", {"bundles": {"items": []}})
+    runner = FakeRunner()
+    target = LocalDeploymentTarget(
+        DeploymentTargetRef.local(workdir), repo_root=repo, runner=runner,
+        lock_file=tmp_path / "cli-lock.json",
+    )
+    target.start(LocalStartRequest())
+    assert not any("run" in call["command"] for call in runner.calls)
 
 
 def test_local_start_activates_proxy_login_for_delegated_auth(tmp_path):

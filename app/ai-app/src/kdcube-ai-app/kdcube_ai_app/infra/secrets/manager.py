@@ -353,6 +353,15 @@ class ISecretsManager(ABC):
     async def set_secret(self, key: str, value: str) -> None:
         raise SecretsManagerWriteError(f"{self.provider_type} provider does not support writes")
 
+    async def create_bundle_secret(self, key: str, value: str) -> bool:
+        """Create a durable bundle key only if absent, returning whether created.
+
+        This is deployment bootstrap, separate from runtime ephemeral custody.
+        Providers must preserve existing values and refuse unavailable storage;
+        there is deliberately no read-then-set fallback.
+        """
+        raise SecretsManagerWriteError("Provider does not support create-only bundle secrets")
+
     async def delete_secret(self, key: str) -> None:
         raise SecretsManagerWriteError(f"{self.provider_type} provider does not support deletes")
 
@@ -508,6 +517,16 @@ class InMemorySecretsManager(ISecretsManager):
             if _secret_inventory_prefix(key) is not None:
                 return
             self._data[key] = value
+
+    async def create_bundle_secret(self, key: str, value: str) -> bool:
+        key = validate_secret_provider_key(key)
+        if _split_bundle_secret_key(key) is None or _secret_inventory_prefix(key) is not None:
+            raise SecretsManagerWriteError("Create-only write requires a bundle secret key")
+        with self._lock:
+            if key in self._data:
+                return False
+            self._data[key] = value
+            return True
 
     async def delete_secret(self, key: str) -> None:
         key = validate_secret_provider_key(key)
@@ -1175,6 +1194,21 @@ class SecretsFileSecretsManager(ISecretsManager):
         except UserSecretFileError as exc:
             raise SecretsManagerWriteError(str(exc)) from None
 
+    async def create_bundle_secret(self, key: str, value: str) -> bool:
+        key = validate_secret_provider_key(key)
+        bundle = _split_bundle_secret_key(key)
+        if bundle is None or _secret_inventory_prefix(key) is not None:
+            raise SecretsManagerWriteError("Create-only write requires a bundle secret key")
+        from kdcube_ai_app.infra.secrets.user_secret_files import UserSecretFileError
+
+        def create() -> bool:
+            try:
+                return self._user_store().create_app(bundle_id=bundle[0], key=bundle[1], value=value)
+            except UserSecretFileError:
+                raise SecretsManagerWriteError("Bundle secret storage is unavailable") from None
+
+        return await _run_blocking_critical_section(create)
+
     def secret_source(self, key: str) -> Path | None:
         """The exact file a key's value is read from, for a file-validated cache (W670); None when the value
         is not file-backed here (inventories, a remote yaml): such callers keep their time-bounded cache."""
@@ -1827,6 +1861,28 @@ class SecretsServiceSecretsManager(ISecretsManager):
             raise SecretsManagerWriteError("secrets-service set request failed") from None
         self._validate_write_response(response, operation="set")
 
+    async def create_bundle_secret(self, key: str, value: str) -> bool:
+        key = validate_secret_provider_key(key)
+        if _split_bundle_secret_key(key) is None or _secret_inventory_prefix(key) is not None:
+            raise SecretsManagerWriteError("Create-only write requires a bundle secret key")
+        if not self.can_write():
+            raise SecretsManagerWriteError("secrets-service provider is not configured for writes")
+        if not await self.qualify_host_vault():
+            raise SecretsManagerWriteError("Create-only bundle bootstrap requires the durable host-vault backend")
+        try:
+            async with _get_httpx().AsyncClient(timeout=self._write_timeout) as client:
+                response = await client.post(
+                    f"{self._url}/set",
+                    json={"key": key, "value": value, "expected_generation": 0},
+                    headers={"X-KDCUBE-ADMIN-TOKEN": self._admin_token},
+                )
+        except Exception:
+            raise SecretsManagerWriteError("secrets-service create request failed") from None
+        if response.status_code == 409:
+            return False
+        self._validate_write_response(response, operation="create")
+        return True
+
     async def create_ephemeral_secret(
         self,
         *,
@@ -2386,6 +2442,41 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
         if platform_tail is None:
             raise SecretsManagerError("Secret provider key scope is invalid")
         return platform_tail
+
+    async def create_bundle_secret(self, key: str, value: str) -> bool:
+        key = validate_secret_provider_key(key)
+        if _split_bundle_secret_key(key) is None or _secret_inventory_prefix(key) is not None:
+            raise SecretsManagerWriteError("Create-only write requires a bundle secret key")
+        inventory_id = self._inventory_secret_id()
+        async with self._write_lock:
+            # Use the same deployment lock as set_many/delete_many. AWS grouped
+            # documents have no conditional leaf write. Refuse an unlocked
+            # bootstrap rather than racing another SDK writer.
+            redis, token = await self._acquire_distributed_lock(inventory_id)
+            if redis is None or not token:
+                raise SecretsManagerWriteError("Create-only AWS bootstrap requires the deployment write lock")
+            try:
+                payload = await self._load_grouped_payload_for_key(key, strict=True) or {}
+                tail = self._tail_for_key(key)
+                if _resolve_nested_value(payload, tail) is not None:
+                    return False
+                parent = payload
+                for part in tail.split(".")[:-1]:
+                    if part not in parent:
+                        break
+                    if not isinstance(parent[part], dict):
+                        raise SecretsManagerWriteError("Bundle secret path conflicts with an existing value")
+                    parent = parent[part]
+                inventory = await self._inventory_for_mutation()
+                inventory.add(key)
+                await self._write_inventory(inventory)
+                _set_nested_value(payload, tail, value)
+                await self._put_secret_string_by_id(
+                    self._secret_id(key), json.dumps(payload, ensure_ascii=False), key=key,
+                )
+                return True
+            finally:
+                await self._release_distributed_lock(redis, token, inventory_id)
 
     async def set_many(self, values: Mapping[str, str]) -> None:
         grouped: dict[str, dict[str, str]] = {}
