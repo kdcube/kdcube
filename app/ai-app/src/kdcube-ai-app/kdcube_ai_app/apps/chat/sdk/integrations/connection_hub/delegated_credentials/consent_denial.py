@@ -24,7 +24,7 @@ DELEGATED_CONSENT_REQUIRED = _core.DELEGATED_CONSENT_REQUIRED
 
 
 async def _kdcube_requirements_loader(
-    *, namespace: str, tenant: str, project: str
+    *, namespace: str, tenant: str, project: str, require_registered: bool = False,
 ) -> Sequence[Mapping[str, Any]]:
     from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
         RedisNamedServiceDiscovery,
@@ -37,11 +37,17 @@ async def _kdcube_requirements_loader(
         project=project,
     )
     entries = await discovery.entries_for_namespace(namespace)
+    if require_registered and not entries:
+        raise LookupError("named_service_requirements_unavailable")
     requirements: list[Mapping[str, Any]] = []
     for entry in entries or ():
         spec = getattr(entry, "spec", None)
         metadata = dict(getattr(spec, "metadata", None) or {})
         raw = metadata.get("connected_accounts")
+        if require_registered and raw is not None and (
+            not isinstance(raw, (list, tuple)) or any(not isinstance(item, Mapping) for item in raw)
+        ):
+            raise ValueError("named_service_requirements_invalid")
         if isinstance(raw, (list, tuple)):
             requirements.extend(
                 item for item in raw if isinstance(item, Mapping)

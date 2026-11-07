@@ -101,6 +101,38 @@ def _unmet(claim: str) -> ClaimResolution:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("accounts, proposed", [((), ""), (("work",), "work"), (("work", "personal"), "")])
+async def test_account_binding_review_proposes_only_a_sole_capable_account(monkeypatch, accounts, proposed):
+    from urllib.parse import parse_qs, urlsplit
+    from connection_hub.agent_account_scope import bind_agent_account_scope
+    from connection_hub.delegated_to_kdcube import public_base
+    from connection_hub.delegated_to_kdcube.consent_demand import PENDING_DEMANDS_REGISTRY_KEY
+
+    resolution = ClaimResolution(ok=False, provider_id="google", claim="slides:read",
+        error="agent_grant_required", retry_hint=True,
+        candidates=tuple({"account_id": account, "claims": ["slides:read"], "status": "connected"}
+                         for account in accounts))
+    source, comm, props, _client = _install_fakes(monkeypatch, resolution)
+    monkeypatch.setattr(public_base, "connection_hub_public_base_url", lambda: "https://hub.test")
+    resource = "*/kdcube-services@1-0/public/mcp/named_services*"
+    with bind_agent_account_scope({}, client_id="kdcube-agent:workspace@1-0:main", resource=resource):
+        await ca.resolve_connected_account_claim(source, provider_id="google", claim="slides:read",
+                                                 tool_name="slides.list")
+    assert len(comm.events) == 1
+    consent = comm.events[0]["data"]["consent"]
+    params = parse_qs(urlsplit(consent["url"]).query)
+    assert params["agent_card_consent"] == ["1"]
+    assert params["account_provider_id"] == ["google"]
+    assert params["account_claim"] == ["slides:read"]
+    assert params.get("account_id", [""]) == [proposed]
+    assert "claims" not in params  # a provider claim is not a door grant
+    assert "grant" not in consent
+    registry = props[("u1", "connection-hub@1-0", PENDING_DEMANDS_REGISTRY_KEY)]
+    assert registry["demands"][0]["account_provider_id"] == "google"
+    assert registry["demands"][0]["account_id"] == proposed
+
+
+@pytest.mark.asyncio
 async def test_attempt_returns_structured_consent_and_emits_the_scoped_banner(monkeypatch):
     source, comm, props, client = _install_fakes(monkeypatch, _unmet("slack:post"))
 
