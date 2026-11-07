@@ -7,6 +7,7 @@ import dataclasses
 import json
 import time
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import FastAPI, Request
@@ -1161,7 +1162,7 @@ def test_live_multi_resource_card_allows_one_bearer_at_each_granted_resource(mon
     assert second.json() == {"ok": True}
 
 
-def test_hosted_agent_outer_operation_denial_carries_exact_grant_action(monkeypatch):
+def test_hosted_agent_outer_operation_denial_opens_its_card_without_direct_grant(monkeypatch):
     client_id = "kdcube-agent:workspace@1-0:main"
     client = _client(
         monkeypatch,
@@ -1184,10 +1185,14 @@ def test_hosted_agent_outer_operation_denial_carries_exact_grant_action(monkeypa
     assert consent["agent_client_id"] == client_id
     assert consent["outer_operation"] == "records_export"
     assert consent["claims"] == ["records:read"]
-    assert consent["grant"]["payload"]["claims"] == ["records:read"]
-    assert consent["grant"]["payload"]["resource_operations"] == {
-        GUARD_RESOURCE: ["records_export"]
-    }
+    assert consent["agent_card_consent"] is True
+    assert "grant" not in consent
+    query = parse_qs(urlsplit(consent["connection_hub_url"]).query)
+    assert query["agent_card_consent"] == ["1"]
+    assert query["agent_client_id"] == [client_id]
+    assert query["resource"] == [GUARD_RESOURCE]
+    assert query["claims"] == ["records:read"]
+    assert query["outer_operation"] == ["records_export"]
 
 
 def test_external_client_outer_operation_denial_links_the_denied_card(monkeypatch):
@@ -1214,6 +1219,8 @@ def test_external_client_outer_operation_denial_links_the_denied_card(monkeypatc
     consent = body["consent"]
     assert consent["agent_client_id"] == "claude"
     assert "grant" not in consent
+    assert "agent_card_consent" not in consent
+    assert "agent_card_consent" not in parse_qs(urlsplit(consent["connection_hub_url"]).query)
     assert "access_id=oauth-access-1" in consent["connection_hub_url"]
 
 
