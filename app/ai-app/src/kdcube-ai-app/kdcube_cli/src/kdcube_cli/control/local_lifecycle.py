@@ -40,7 +40,7 @@ from kdcube_cli.host_vault import (
     validate_assembly_for_start as validate_host_vault_assembly_for_start,
 )
 from kdcube_cli.host_vault_service import ensure_host_vault_running
-from kdcube_cli.hub_signers import hub_signer_bootstrap_command, prepare_hub_signing_refs
+from kdcube_cli.hub_signers import hub_signer_bootstrap_command, prepare_hub_signing_refs, public_bootstrap_failure
 
 
 class LocalLifecycleController:
@@ -155,7 +155,8 @@ class LocalLifecycleController:
                     # Do not echo subprocess errors or descriptor contents.
                     raise OperationFailedError(
                         "start", self._reference.target_id,
-                        "Connection Hub signing secret bootstrap failed; application startup refused.",
+                        "Connection Hub signing secret bootstrap failed; application startup refused."
+                        + public_bootstrap_failure(bootstrapped.stdout),
                         returncode=bootstrapped.returncode,
                     )
                 if event_sink is not None:

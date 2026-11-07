@@ -132,7 +132,7 @@ def backend(request, tmp_path, monkeypatch):
             await lock.acquire()
             return lock, "held"
 
-        async def release(*_):
+        async def release(*_, **__):
             lock.release()
 
         monkeypatch.setattr(manager, "_acquire_distributed_lock", acquire)
@@ -209,7 +209,7 @@ async def test_retry_after_partial_creation_preserves_first_key(backend, monkeyp
 
     with monkeypatch.context() as patch:
         patch.setattr(manager, "create_bundle_secret", fail_second)
-        with pytest.raises(SecretsManagerWriteError, match="unavailable"):
+        with pytest.raises(bootstrap.DeploymentBootstrapError, match="provider_create_unavailable"):
             await bootstrap.ensure_hub_signers(manager, bundles=descriptor())
     first = await manager.get_secret_strict(calls[0])
     assert len(await bootstrap.ensure_hub_signers(manager, bundles=descriptor())) == 2
@@ -235,7 +235,7 @@ async def test_unsupported_provider_with_missing_key_refuses():
         async def get_secret(self, key):
             return None
 
-    with pytest.raises(SecretsManagerWriteError, match="create-only"):
+    with pytest.raises(bootstrap.DeploymentBootstrapError, match="provider_create_unavailable"):
         await bootstrap.ensure_hub_signers(ReadOnly(), bundles=descriptor())
 
 
@@ -256,7 +256,7 @@ async def test_remote_read_failure_is_not_absence(backend, error):
 async def test_service_missing_key_refuses_ephemeral_backend(backend):
     _, manager, io = backend
     io.durable = False
-    with pytest.raises(SecretsManagerWriteError, match="durable host-vault"):
+    with pytest.raises(bootstrap.DeploymentBootstrapError, match="provider_create_unavailable"):
         await bootstrap.ensure_hub_signers(manager, bundles=descriptor())
     assert io.writes == []
 
@@ -292,7 +292,7 @@ def test_invalid_or_colliding_references_refuse(refresh, management):
 
 
 def test_management_consumer_reference_must_match_admission():
-    with pytest.raises(SecretsManagerError, match="must match"):
+    with pytest.raises(SecretsManagerError, match="must_match"):
         bootstrap.signing_paths(descriptor()["bundles"]["items"][0]["config"], management_secret_ref="different")
 
 
@@ -326,7 +326,7 @@ async def test_aws_missing_key_requires_the_existing_deployment_lock(backend, mo
         return None, None
 
     monkeypatch.setattr(manager, "_acquire_distributed_lock", no_lock)
-    with pytest.raises(SecretsManagerWriteError, match="deployment write lock"):
+    with pytest.raises(bootstrap.DeploymentBootstrapError, match="provider_create_unavailable"):
         await bootstrap.ensure_hub_signers(manager, bundles=descriptor())
     assert io.writes == []
 
@@ -338,10 +338,114 @@ async def test_aws_add_absent_preserves_unrelated_keys_and_refuses_parent_collis
     doc = f"fixture/bundles/{bootstrap.HUB_ID}/secrets"
     io.data[doc] = json.dumps({"unrelated": "existing", "oauth_original": "parent-value"})
     before = io.data[doc]
-    with pytest.raises(SecretsManagerWriteError, match="conflicts"):
+    with pytest.raises(bootstrap.DeploymentBootstrapError, match="provider_create_unavailable"):
         await bootstrap.ensure_hub_signers(manager, bundles=descriptor())
     assert io.data[doc] == before
     assert io.writes == []
     io.data[doc] = json.dumps({"unrelated": "existing"})
     assert len(await bootstrap.ensure_hub_signers(manager, bundles=descriptor())) == 3
     assert json.loads(io.data[doc])["unrelated"] == "existing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [1, 31, 4097])
+async def test_invalid_explicit_refresh_seed_is_refused_without_publishing(size):
+    manager = InMemorySecretsManager()
+    seed = {"bundles": {"items": [{"id": bootstrap.HUB_ID, "secrets": {
+        "oauth_original": {"refresh_signing_secret": "x" * size},
+    }}]}}
+    with pytest.raises(bootstrap.DeploymentBootstrapError, match="invalid_signing_seed_length") as caught:
+        await bootstrap.ensure_hub_signers(manager, bundles=descriptor(), seed_bundles=seed)
+    assert caught.value.key == f"bundles.{bootstrap.HUB_ID}.secrets.{bootstrap.REFRESH_SIGNER}"
+    assert await manager.list_all_secret_keys() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["aws"], indirect=True)
+async def test_aws_expired_lease_refuses_bootstrap_even_after_write(backend, monkeypatch):
+    _, manager, io = backend
+
+    class ExpiredLease:
+        async def eval(self, *args):
+            return 0
+
+    async def acquire(_):
+        return ExpiredLease(), "expired-token"
+
+    monkeypatch.setattr(manager, "_acquire_distributed_lock", acquire)
+    monkeypatch.setattr(manager, "_release_distributed_lock",
+                        AwsSecretsManagerSecretsManager._release_distributed_lock.__get__(manager))
+    with pytest.raises(bootstrap.DeploymentBootstrapError, match="provider_write_lease_lost"):
+        await bootstrap.ensure_hub_signers(manager, bundles=descriptor())
+    # Detection cannot undo a completed AWS put; do not claim success or rotate it.
+    assert io.writes
+
+
+def test_main_reports_finite_seed_reason_and_key_only(monkeypatch, capsys):
+    key = f"bundles.{bootstrap.HUB_ID}.secrets.{bootstrap.REFRESH_SIGNER}"
+
+    async def fail():
+        raise bootstrap.DeploymentBootstrapError("invalid_signing_seed_length", key)
+
+    monkeypatch.setattr(bootstrap, "_run", fail)
+    assert bootstrap.main() == 1
+    assert capsys.readouterr().out.strip() == (
+        f"Connection Hub signing secret bootstrap refused: invalid_signing_seed_length [{key}]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_host_vault_http_app_maps_conflict_to_409_and_reads_race_winner(tmp_path, monkeypatch):
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    import httpx
+    from kdcube_ai_app.infra.secrets.host_vault.broker import BrokerReadResult, BrokerResult
+    from kdcube_ai_app.infra.secrets.host_vault.protocol import ErrorCode
+
+    for name in ("host-vault-client.crt", "host-vault-client.key", "host-vault-ca.crt"):
+        (tmp_path / name).write_text("synthetic identity; no TLS connection is made")
+    monkeypatch.setenv("KDCUBE_HOST_VAULT_IDENTITY_DIR", str(tmp_path))
+    monkeypatch.setenv("KDCUBE_HOST_VAULT_ADDR", "127.0.0.1:1")
+    monkeypatch.setenv("KDCUBE_SECRETS_TENANT", "fixture")
+    monkeypatch.setenv("KDCUBE_SECRETS_PROJECT", "fixture")
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(tmp_path / "absent-assembly.yaml"))
+    script = Path(__file__).resolve().parents[6] / "deployment/docker/all_in_one_kdcube/secrets/host_vault/broker_server.py"
+    spec = importlib.util.spec_from_file_location("w1019_broker_http_app", script)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    winner = "another-bootstrap-winner-" + "x" * 40
+    values = {}
+
+    class RacingBroker:
+        def health(self):
+            return {"ok": True, "code": "ok"}
+
+        def read(self, *, application, key):
+            return BrokerReadResult(True, ErrorCode.OK, values[key], 1) if key in values else BrokerReadResult(False, ErrorCode.NOT_FOUND)
+
+        def set(self, *, application, key, value, expected_generation):
+            assert expected_generation == 0
+            values[key] = winner
+            return BrokerResult(False, ErrorCode.CONFLICT)
+
+    monkeypatch.setattr(module, "BROKER", RacingBroker())
+    monkeypatch.setattr(module, "ADMIN_TOKEN", "writer")
+    monkeypatch.setattr(module, "READ_TOKENS", {"reader"})
+    transport = httpx.ASGITransport(app=module.app)
+    monkeypatch.setattr(providers, "_get_httpx", lambda: SimpleNamespace(
+        AsyncClient=lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs),
+    ))
+    manager = SecretsServiceSecretsManager(SecretsManagerConfig(
+        provider="secrets-service", component="test", url="http://fixture", token="reader", admin_token="writer",
+    ))
+    # Exercise the actual HTTP /set mapping, then the manager's loser readback.
+    async with httpx.AsyncClient(transport=transport) as client:
+        response = await client.post("http://fixture/set", json={"key": "bundles.connection-hub@1-0.secrets.probe", "value": "candidate", "expected_generation": 0}, headers={"X-KDCUBE-ADMIN-TOKEN": "writer"})
+    assert response.status_code == 409
+    assert response.json() == {"detail": ErrorCode.CONFLICT.value}
+    values.clear()
+    assert await bootstrap.ensure_hub_signers(manager, bundles=descriptor()) == ()
+    assert len(values) == 3 and set(values.values()) == {winner}

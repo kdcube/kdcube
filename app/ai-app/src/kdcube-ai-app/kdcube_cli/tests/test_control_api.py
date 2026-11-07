@@ -479,6 +479,8 @@ def test_local_start_removes_proxy_login_after_it_is_disabled(tmp_path):
     assert [event.kind for event in events] == [
         ControlEventKind.COMMAND,
         ControlEventKind.COMMAND,
+        ControlEventKind.PROGRESS,
+        ControlEventKind.COMMAND,
     ]
 
 

@@ -274,6 +274,10 @@ class SecretsManagerWriteError(SecretsManagerError):
     pass
 
 
+class SecretsManagerLeaseLost(SecretsManagerWriteError):
+    """A durable write's cooperative lease was lost; its result is unqualified."""
+
+
 @dataclass(frozen=True)
 class SecretsManagerConfig:
     provider: str
@@ -2084,19 +2088,28 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
             await asyncio.sleep(0.25)
         raise SecretsManagerWriteError(f"Failed to acquire distributed aws-sm write lock for {secret_id}")
 
-    async def _release_distributed_lock(self, redis, token: str | None, secret_id: str) -> None:
+    async def _release_distributed_lock(
+        self, redis, token: str | None, secret_id: str, *, require_owned: bool = False,
+    ) -> None:
         if redis is None or not token:
+            if require_owned:
+                raise SecretsManagerLeaseLost("AWS deployment write lease was lost")
             return
         lock_key = self._doc_lock_key(secret_id)
         try:
-            await redis.eval(
+            removed = await redis.eval(
                 "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
                 1,
                 lock_key,
                 token,
             )
         except Exception:
+            if require_owned:
+                raise SecretsManagerLeaseLost("AWS deployment write lease could not be verified") from None
             logger.debug("Failed to release distributed aws-sm write lock", exc_info=True)
+            return
+        if require_owned and removed != 1:
+            raise SecretsManagerLeaseLost("AWS deployment write lease was lost")
 
     async def _get_secret_string_by_id(
         self,
@@ -2476,7 +2489,7 @@ class AwsSecretsManagerSecretsManager(ISecretsManager):
                 )
                 return True
             finally:
-                await self._release_distributed_lock(redis, token, inventory_id)
+                await self._release_distributed_lock(redis, token, inventory_id, require_owned=True)
 
     async def set_many(self, values: Mapping[str, str]) -> None:
         grouped: dict[str, dict[str, str]] = {}

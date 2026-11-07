@@ -4,7 +4,7 @@ title: "Bundle Properties And Secrets Lifecycle"
 summary: "Concise bundle-author lifecycle for code defaults, descriptor/admin bundle props, effective runtime props, bundle secrets, user-scoped state, and what is merged versus only stored as authority."
 tags: ["sdk", "bundle", "configuration", "props", "secrets", "lifecycle", "descriptor"]
 keywords: ["bundle props lifecycle", "bundle secrets lifecycle", "configuration_defaults", "bundle_props_defaults", "effective bundle props", "bundles.yaml config", "bundles.secrets.yaml", "descriptor authority", "redis bundle props cache", "set_bundle_prop", "set_bundle_secret", "bundle props merge", "bundle props materialization"]
-updated_at: 2026-07-17
+updated_at: 2026-11-07
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md

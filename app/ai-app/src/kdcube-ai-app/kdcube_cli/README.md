@@ -4,7 +4,7 @@ title: "KDCube CLI"
 summary: "Installs and operates KDCube runtimes, checks the active app-owned delegated catalog, manages exact secrets through their selected provider, and exposes typed deployment and management APIs for application-specific CLIs."
 tags: ["kdcube", "cli", "runtime", "deployment-target", "secrets", "python-api"]
 keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube bundle catalog check", "app-owned delegated catalog", "kdcube bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "kdcube_cli.control", "kdcube_cli.management"]
-updated_at: 2026-09-13
+updated_at: 2026-11-07
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/deployment-target-control-api-README.md
@@ -83,6 +83,14 @@ Do not run an out-of-band AWS import or console write concurrently with this
 bootstrap, because those writers do not share the SDK lock. Provider read
 errors and malformed records refuse startup. An all-present provider is a
 no-op even if it has no create-only capability.
+
+The AWS lock has the existing 30-second lease. Bootstrap checks ownership at
+atomic release and refuses startup if the lease expired or could not be
+verified. This detects a lost lease after the write; it cannot undo a completed
+AWS update. A crash after inventory update but before document publication can
+leave an inventory hint without a value; strict reads, rather than inventory
+alone, decide whether a signer exists. Short or oversized refresh seeds refuse
+with a key name and a finite reason, and are never silently replaced.
 
 The local CLI invocation does not cover cloud or custom deployment launchers.
 Those launchers must explicitly run
