@@ -34,9 +34,11 @@ def _agent_card_review(consent: Any) -> Any:
     from connection_hub.delegated_credentials.consent_denial import connection_hub_grant_url
 
     identity = get_current_user_identity() or {}
+    account_only = bool(fields.get("account_provider_id") and fields.get("account_claim")
+                        and not fields.get("namespace") and not fields.get("operation"))
     fields["connection_hub_url"] = connection_hub_grant_url(
         tenant=str(identity.get("tenant_id") or ""), project=str(identity.get("project_id") or ""),
-        client_id=client_id, resource=consent.resource, claims=consent.claims,
+        client_id=client_id, resource=consent.resource, claims=[] if account_only else consent.claims,
         namespace=str(fields.get("namespace") or ""), operation=str(fields.get("operation") or ""),
         outer_operation=str(fields.get("outer_operation") or ""), access_id=str(fields.get("access_id") or ""),
         account_id=str(fields.get("account_id") or ""), account_claim=str(fields.get("account_claim") or ""),

@@ -121,3 +121,12 @@ test('Agent Card consent preserves the account-only link across the chat scene h
   assert.equal('namespace' in open.params, false)
   assert.equal('operation' in open.params, false)
 })
+
+test('an account-only structured request keeps provider claims out of door grants without a URL', () => {
+  const open = agentGrantConsentOpen({agentClientId: 'kdcube-agent:app:main',
+    resource: 'urn:named-services', claims: ['slides:read'],
+    accountProviderId: 'google', accountClaim: 'slides:read', accountId: 'work'})
+  assert.equal(open.params.agent_card_consent, '1')
+  assert.equal(open.params.account_claim, 'slides:read')
+  assert.equal('claims' in open.params, false)
+})
