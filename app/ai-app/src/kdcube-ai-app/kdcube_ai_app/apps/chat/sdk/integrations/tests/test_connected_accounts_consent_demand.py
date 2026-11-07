@@ -116,7 +116,7 @@ async def test_account_binding_review_proposes_only_a_sole_capable_account(monke
     monkeypatch.setattr(public_base, "connection_hub_public_base_url", lambda: "https://hub.test")
     resource = "*/kdcube-services@1-0/public/mcp/named_services*"
     with bind_agent_account_scope({}, client_id="kdcube-agent:workspace@1-0:main", resource=resource):
-        await ca.resolve_connected_account_claim(source, provider_id="google", claim="slides:read",
+        await ca.resolve_connected_account_claim(source, provider_id="google", connector_app_id="slides", claim="slides:read",
                                                  tool_name="slides.list")
     assert len(comm.events) == 1
     consent = comm.events[0]["data"]["consent"]
