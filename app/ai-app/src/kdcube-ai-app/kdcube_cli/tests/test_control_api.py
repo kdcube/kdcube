@@ -400,6 +400,51 @@ def test_local_start_and_stop_use_typed_lifecycle_and_lock(tmp_path):
     )
 
 
+@pytest.mark.parametrize("created_refs", [
+    (),
+    ("oauth_original.refresh_signing_secret",),
+    (
+        "oauth_original.refresh_signing_secret",
+        "connections.delegated_credentials.admission.services.kdcube-management.signing_secret",
+        "connections.delegated_credentials.grantor_authority_secret",
+    ),
+])
+def test_local_start_reports_created_signer_names_without_raw_output(tmp_path, created_refs):
+    repo, workdir = _make_runtime(tmp_path)
+    created_lines = [
+        f"Created missing signing secret: bundles.connection-hub@1-0.secrets.{ref}"
+        for ref in created_refs
+    ]
+
+    class CreatingRunner(FakeRunner):
+        def run(self, command, **kwargs):
+            result = super().run(command, **kwargs)
+            if "kdcube_ai_app.infra.secrets.deployment_bootstrap" in command:
+                return CommandResult(
+                    returncode=0,
+                    stdout="\n".join([
+                        "sensitive-provider-value", *created_lines,
+                        "Created missing signing secret: bundles.connection-hub@1-0.secrets.bad..key",
+                        "Created missing signing secret: bundles.connection-hub@1-0.secrets.key = sensitive-provider-value",
+                    ]),
+                    stderr="sensitive-provider-value",
+                )
+            return result
+
+    runner = CreatingRunner()
+    events = []
+    target = LocalDeploymentTarget(
+        DeploymentTargetRef.local(workdir), repo_root=repo, runner=runner,
+        lock_file=tmp_path / "cli-lock.json",
+    )
+    target.start(LocalStartRequest(), event_sink=events.append)
+    assert [event.message for event in events if event.kind == ControlEventKind.PROGRESS] == [
+        *created_lines, "Connection Hub signing secrets verified in the selected provider.",
+    ]
+    assert "sensitive-provider-value" not in repr(events)
+    assert any("up" in call["command"] for call in runner.calls)
+
+
 def test_local_start_refuses_bootstrap_failure_before_starting_applications(tmp_path):
     repo, workdir = _make_runtime(tmp_path)
 
@@ -407,7 +452,10 @@ def test_local_start_refuses_bootstrap_failure_before_starting_applications(tmp_
         def run(self, command, **kwargs):
             result = super().run(command, **kwargs)
             if "kdcube_ai_app.infra.secrets.deployment_bootstrap" in command:
-                return CommandResult(returncode=1, stderr="sensitive-provider-value")
+                return CommandResult(
+                    returncode=1, stderr="sensitive-provider-value",
+                    stdout="Created missing signing secret: bundles.connection-hub@1-0.secrets.custom.refresh",
+                )
             return result
 
     runner = RefusingRunner()
@@ -415,9 +463,11 @@ def test_local_start_refuses_bootstrap_failure_before_starting_applications(tmp_
         DeploymentTargetRef.local(workdir), repo_root=repo, runner=runner,
         lock_file=tmp_path / "cli-lock.json",
     )
+    events = []
     with pytest.raises(OperationFailedError, match="application startup refused") as caught:
-        target.start(LocalStartRequest())
+        target.start(LocalStartRequest(), event_sink=events.append)
     assert "sensitive-provider-value" not in str(caught.value)
+    assert not any("Created missing signing secret:" in (event.message or "") for event in events)
     assert not any("up" in call["command"] for call in runner.calls)
 
 

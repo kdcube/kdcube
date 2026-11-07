@@ -37,6 +37,17 @@ def public_bootstrap_failure(output: str) -> str:
     return ""
 
 
+def public_bootstrap_created_lines(output: str) -> tuple[str, ...]:
+    """Select the bootstrap's name-only creation receipts from captured output."""
+    return tuple(
+        line for line in output.splitlines()
+        if re.fullmatch(
+            r"Created missing signing secret: bundles\.connection-hub@1-0\.secrets\."
+            r"[\w-]+(?:\.[\w-]+)*", line,
+        )
+    )
+
+
 def hub_signer_bootstrap_command(base_command: list[str], *, build: bool) -> list[str]:
     return [
         *base_command, "run", "--rm", "-T", *(["--build"] if build else []),
