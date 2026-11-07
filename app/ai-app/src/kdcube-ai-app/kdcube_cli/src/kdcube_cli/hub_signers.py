@@ -53,6 +53,18 @@ def _child(node, key, *, require_block=True):
     return matches[0] if matches else None
 
 
+def _content_end(node):
+    # Container end marks can skip comments before the next sibling. Anchor
+    # insertion to the last actual value instead, before ownership markers or
+    # comments belonging to another application.
+    if not getattr(node, "flow_style", False):
+        if isinstance(node, yaml.MappingNode) and node.value:
+            return _content_end(node.value[-1][1])
+        if isinstance(node, yaml.SequenceNode) and node.value:
+            return _content_end(node.value[-1])
+    return node.end_mark
+
+
 def _insert_reference(text: str, dotted: str, default: str) -> str:
     # YAML node marks locate an insertion; the original bytes are never
     # serialized again. Alias/flow/null forms refuse rather than modifying a
@@ -81,7 +93,8 @@ def _insert_reference(text: str, dotted: str, default: str) -> str:
                 for line in yaml.safe_dump(addition, sort_keys=False).splitlines()
             )
             lines = text.splitlines(keepends=True)
-            offset = sum(map(len, lines[:node.end_mark.line]))
+            end = _content_end(node)
+            offset = sum(map(len, lines[:end.line + (1 if end.column else 0)]))
             if offset and not text[:offset].endswith(("\n", "\r")):
                 inserted = newline + inserted
             return text[:offset] + inserted + text[offset:]

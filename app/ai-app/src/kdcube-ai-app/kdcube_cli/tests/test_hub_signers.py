@@ -83,6 +83,8 @@ bundles:
     path.write_bytes(text.encode())
     assert prepare_hub_signing_refs(tmp_path)
     actual = path.read_bytes().decode()
+    assert actual.index("refresh_signing_secret_ref:") < actual.index("# The board entry")
+    assert actual.index("secret_ref:") < actual.index("# The board entry")
     for line in (
         "              refresh_signing_secret_ref: oauth_original.refresh_signing_secret",
         "                secret_ref: connections.delegated_credentials.admission.services.kdcube-management.signing_secret",
