@@ -84,18 +84,21 @@ def test_consent_pending_drop_raises_a_demand_not_a_silent_gap() -> None:
     assert len(consents) == 1
     c = consents[0]
     assert c.claims == ["memories:read"]
-    # The demand is actionable: it carries the one-click grant for THIS agent.
-    grant = c.consent["grant"]
-    assert grant["payload"]["client_id"] == "kdcube-agent:ported-langgraph-agents@2026-07-13:lg-react"
-    assert grant["payload"]["resource"] == "https://h/api/mcp/mem"
+    # The demand is actionable: it opens THIS hosted agent's Card review for the
+    # same resource and claims. A hosted agent gets no direct one-click grant.
+    assert c.consent["agent_card_consent"] is True
+    assert "grant" not in c.consent
+    assert c.consent["agent_client_id"] == "kdcube-agent:ported-langgraph-agents@2026-07-13:lg-react"
+    assert c.consent["resource"] == "https://h/api/mcp/mem"
+    assert c.consent["claims"] == ["memories:read"]
 
 
 def test_demand_keys_on_the_declared_resource_id_not_the_url() -> None:
     # A deployment's delegated-resource catalog often configures a WILDCARD
     # pattern; the connection declares it via `resource` while `url` stays the
-    # concrete endpoint. The demand (and its one-click grant payload) must key
-    # on the pattern — the grant is created, validated, and looked up under
-    # that exact id, and the guard fnmatches the request URL against it.
+    # concrete endpoint. The demand (and the Card review it opens) must key on
+    # the pattern — the grant is created, validated, and looked up under that
+    # exact id, and the guard fnmatches the request URL against it.
     m = _mcp_module()
     conn = {
         **_MCP_CONN,
@@ -111,7 +114,8 @@ def test_demand_keys_on_the_declared_resource_id_not_the_url() -> None:
     assert tools == [] and len(consents) == 1
     c = consents[0]
     assert c.resource == conn["resource"]
-    assert c.consent["grant"]["payload"]["resource"] == conn["resource"]
+    assert c.consent["resource"] == conn["resource"]
+    assert c.consent["agent_card_consent"] is True and "grant" not in c.consent
 
 
 def test_consent_stub_raises_the_demand_at_the_ATTEMPT_not_at_build() -> None:
@@ -144,7 +148,8 @@ def test_consent_stub_raises_the_demand_at_the_ATTEMPT_not_at_build() -> None:
     result = asyncio.run(stub.coroutine(reason="user asked about cities"))
     assert announced == consents                       # the ATTEMPT announced it
     assert result["ok"] is False
-    assert result["consent"]["grant"]["payload"]["claims"] == ["memories:read"]
+    assert result["consent"]["claims"] == ["memories:read"]
+    assert result["consent"]["agent_card_consent"] is True and "grant" not in result["consent"]
 
 
 def test_named_services_pending_grant_asks_only_for_the_door() -> None:
@@ -165,9 +170,10 @@ def test_named_services_pending_grant_asks_only_for_the_door() -> None:
     ))
     assert len(consents) == 1
     assert consents[0].claims == ["named_services:use"]
-    payload = consents[0].consent["grant"]["payload"]
-    assert payload["claims"] == ["named_services:use"]
-    assert "conv:read" not in payload["claims"]
+    consent = consents[0].consent
+    assert consent["agent_card_consent"] is True and "grant" not in consent
+    assert consent["claims"] == ["named_services:use"]
+    assert "conv:read" not in consent["claims"]
 
 
 def test_no_user_drop_stays_silent() -> None:
