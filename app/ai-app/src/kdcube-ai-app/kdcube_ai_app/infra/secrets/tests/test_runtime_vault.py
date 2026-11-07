@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import time
 import traceback
 
@@ -56,6 +58,38 @@ def rig(tmp_path, monkeypatch):
                                               namespace=namespace, authorized_namespaces=grants)
 
     return adapter, native, transport, store, provider, wall
+
+
+@pytest.mark.parametrize("umask", [0o002, 0o022, 0o077])
+def test_file_root_rotation_publishes_a_readable_private_marker(tmp_path, monkeypatch, umask):
+    provider = keys.FileRootKeyProvider(tmp_path / "keys")
+    published_modes = []
+    replace = os.replace
+
+    def observe_publication(source, target):
+        if target.name == "CURRENT":
+            published_modes.append(stat.S_IMODE(source.stat().st_mode))
+        replace(source, target)
+
+    monkeypatch.setattr(keys.os, "replace", observe_publication)
+    previous_umask = os.umask(umask)
+    try:
+        first = provider.rotate()
+        envelope = keys.Envelope(provider)
+        original = envelope.seal(CANARY.encode(), record_id=REF)
+        second = provider.rotate()
+        fresh = keys.FileRootKeyProvider(provider._dir)
+        assert fresh.current_key_id() == second != first
+        assert keys.Envelope(fresh).open(original, record_id=REF) == CANARY.encode()
+        latest = keys.Envelope(fresh).seal(b"synthetic-after-rotation", record_id=REF)
+        assert latest.root_key_id == second
+        assert keys.Envelope(fresh).open(latest, record_id=REF) == b"synthetic-after-rotation"
+        assert published_modes == [0o600, 0o600]
+        assert stat.S_IMODE((provider._dir / "CURRENT").stat().st_mode) == 0o600
+        assert stat.S_IMODE((provider._dir / f"{second}.key").stat().st_mode) == 0o400
+        assert not (provider._dir / "CURRENT.tmp").exists()
+    finally:
+        os.umask(previous_umask)
 
 
 def test_same_original_record_survives_store_restart_and_refuses_replacement(rig):

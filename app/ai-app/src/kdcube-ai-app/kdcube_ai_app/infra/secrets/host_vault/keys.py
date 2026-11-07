@@ -255,7 +255,13 @@ class FileRootKeyProvider:
         os.replace(tmp, path)
         marker = self._dir / "CURRENT"
         marker_tmp = self._dir / "CURRENT.tmp"
-        marker_tmp.write_text(key_id, encoding="utf-8")
+        # The marker must satisfy our owned-file reader even on hosts whose
+        # default umask permits group writes. Publish a complete private file.
+        marker_fd = os.open(marker_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(marker_fd, "w", encoding="utf-8") as marker_file:
+            marker_file.write(key_id)
+            marker_file.flush()
+            os.fsync(marker_file.fileno())
         os.replace(marker_tmp, marker)
         _fsync_dir(self._dir)
         return key_id
