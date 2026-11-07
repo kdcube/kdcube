@@ -168,7 +168,12 @@ not authorization evidence.
 
 A configured missing, malformed or unavailable capability fails closed. It
 does not fall back to ordinary consume/mint. An absent binding retains the
-existing workflow during source adoption.
+existing workflow during source adoption. The host composition must connect
+the durable original mapping, full authenticated plan/result readers, both
+original reservations, the signing keys and the live target fence. Those concrete
+provider binding, configured encrypted-provider qualification, and installed/live
+acceptance remain host integration gates; transport selection alone proves none of them.
+Ordinary human login and the existing delegated minter are unchanged.
 
 An exchange error answers `503 temporarily_unavailable` and never echoes the
 exception's text, because provider errors can carry secrets. One deterministic
@@ -178,12 +183,7 @@ Card decision can carry (`issuance_too_many_policies`, raised non-retryable by
 sentence asking the person to select fewer operations and approve again. Only
 that exact non-retryable code takes this path; the same code marked retryable,
 any other code and any other exception stay `503`. The Hub's effect bound and
-the issuance decision are unchanged: nothing is split or truncated. The host composition must connect
-the durable original mapping, full authenticated plan/result readers, both
-original reservations, the signing keys and the live target fence. Those concrete
-provider binding, configured encrypted-provider qualification, and installed/live
-acceptance remain host integration gates; transport selection alone proves none of them.
-Ordinary human login and the existing delegated minter are unchanged.
+the issuance decision are unchanged: nothing is split or truncated.
 
 `read_prepared_delegated_client_access_token` recovers the existing original
 access receipt and signing time through the public session authority's
