@@ -1,4 +1,5 @@
 from pathlib import Path
+from subprocess import CompletedProcess
 
 import pytest
 import yaml
@@ -125,3 +126,32 @@ def test_public_created_lines_accept_custom_names_and_filter_other_output():
         "Created missing signing secret: bundles.connection-hub@1-0.secrets.signer sensitive-provider-value",
         "Created missing signing secret: bundles.connection-hub@1-0.secrets.signer=private",
     ])) == (created,)
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_legacy_installer_reports_only_successful_bootstrap_key_names(returncode):
+    from kdcube_cli.installer import _report_hub_signer_bootstrap
+
+    class RecordingConsole:
+        def __init__(self):
+            self.messages = []
+
+        def print(self, message):
+            self.messages.append(message)
+
+    console = RecordingConsole()
+    created = "Created missing signing secret: bundles.connection-hub@1-0.secrets.custom.refresh"
+    result = CompletedProcess(
+        args=[], returncode=returncode,
+        stdout=f"sensitive-provider-value\n{created}\n", stderr="sensitive-provider-value",
+    )
+    if returncode:
+        with pytest.raises(SystemExit, match="application startup refused") as caught:
+            _report_hub_signer_bootstrap(console, result)
+        assert "sensitive-provider-value" not in str(caught.value)
+        assert console.messages == []
+    else:
+        _report_hub_signer_bootstrap(console, result)
+        assert console.messages == [
+            created, "Connection Hub signing secrets verified in the selected provider.",
+        ]
