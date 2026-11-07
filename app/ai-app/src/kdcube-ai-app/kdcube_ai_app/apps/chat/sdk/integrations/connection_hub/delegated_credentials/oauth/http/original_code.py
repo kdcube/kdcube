@@ -44,6 +44,28 @@ def _unavailable(reason: str) -> JSONResponse:
     return _error("temporarily_unavailable", 503)
 
 
+# W1018: deterministic Hub refusals the person can act on. Only these exact, non-retryable reason
+# codes leave the generic 503; each answers a fixed OAuth error and a sentence written here, never
+# the exception's own text. Anything else, including the same code marked retryable, stays 503.
+_ACTIONABLE_REFUSALS = {
+    "issuance_too_many_policies": (
+        "invalid_scope",
+        "This consent selects more operations than one approval can carry. "
+        "Select fewer operations and approve again.",
+    ),
+}
+
+
+def _actionable_refusal(exc: BaseException) -> JSONResponse | None:
+    refusal = _ACTIONABLE_REFUSALS.get(str(exc))
+    if refusal is None or getattr(exc, "retryable", None) is not False:
+        return None
+    LOGGER.warning("[connection-hub.oauth] original code exchange refused reason=%s", _reason(exc))
+    error, description = refusal
+    return JSONResponse({"error": error, "error_description": description}, status_code=400,
+                        headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+
 def oauth_tenant_project(request: Any) -> tuple[str, str]:
     config = oauth_delegated_config(request)
     return config.tenant, config.project
@@ -151,4 +173,4 @@ async def original_authorization_code_response(request: Any, form: Mapping[str, 
         # Provider errors can contain secrets. Neither the response nor a
         # traceback/log receives their text; an uncertain result stays closed.
         # The log names only the exception's class and a bare reason code.
-        return _unavailable(_reason(exc))
+        return _actionable_refusal(exc) or _unavailable(_reason(exc))

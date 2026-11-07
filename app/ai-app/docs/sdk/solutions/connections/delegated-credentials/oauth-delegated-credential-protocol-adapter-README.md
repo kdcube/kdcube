@@ -168,7 +168,17 @@ not authorization evidence.
 
 A configured missing, malformed or unavailable capability fails closed. It
 does not fall back to ordinary consume/mint. An absent binding retains the
-existing workflow during source adoption. The host composition must connect
+existing workflow during source adoption.
+
+An exchange error answers `503 temporarily_unavailable` and never echoes the
+exception's text, because provider errors can carry secrets. One deterministic
+Hub refusal is the exception: when the consent selects more operations than one
+Card decision can carry (`issuance_too_many_policies`, raised non-retryable by
+`begin_oauth_issuance`), the exchange answers `400 invalid_scope` with a fixed
+sentence asking the person to select fewer operations and approve again. Only
+that exact non-retryable code takes this path; the same code marked retryable,
+any other code and any other exception stay `503`. The Hub's effect bound and
+the issuance decision are unchanged: nothing is split or truncated. The host composition must connect
 the durable original mapping, full authenticated plan/result readers, both
 original reservations, the signing keys and the live target fence. Those concrete
 provider binding, configured encrypted-provider qualification, and installed/live

@@ -108,6 +108,47 @@ async def test_provider_error_never_echoes_credentials_or_exception_details():
     assert b"unit-canary" not in response.body
 
 
+class IssuanceRefused(ValueError):
+    """The Hub's named refusal, as begin_oauth_issuance raises it: its message is the bare code."""
+
+    def __init__(self, reason, *, retryable=False):
+        self.reason, self.retryable = reason, retryable
+        super().__init__(reason)
+
+
+@pytest.mark.asyncio
+async def test_a_selection_over_the_effect_bound_is_a_named_refusal_not_an_outage(caplog):
+    """W1018: the Hub refuses a consent whose policies exceed one decision's effect bound. That is
+    deterministic, so it answers 400 invalid_scope with a fixed sentence, never a retryable 503."""
+    async def too_many(**kwargs):
+        raise IssuanceRefused("issuance_too_many_policies")
+
+    caplog.set_level("INFO", logger="kdcube.connection_hub.oauth")
+    response = await routes.token(request(lambda: handler(too_many)))
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_scope",
+        "error_description": "This consent selects more operations than one approval can carry. "
+                             "Select fewer operations and approve again.",
+    }
+    assert response.headers["cache-control"] == "no-store" and response.headers["pragma"] == "no-cache"
+    assert "reason=IssuanceRefused:issuance_too_many_policies" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raised", [
+    IssuanceRefused("issuance_too_many_policies", retryable=True),   # the same code, marked transient
+    IssuanceRefused("issuance_invocation_policies_unavailable", retryable=False),  # another Hub code
+    RuntimeError("issuance_too_many_policies"),                      # no retryable verdict at all
+])
+async def test_only_the_allowlisted_non_retryable_refusal_leaves_the_generic_503(raised):
+    async def exchange(**kwargs):
+        raise raised
+    response = await routes.token(request(lambda: handler(exchange)))
+    assert response.status_code == 503
+    assert json.loads(response.body)["error"] == "temporarily_unavailable"
+
+
 @pytest.mark.asyncio
 async def test_a_host_reason_code_is_logged_but_never_free_text(caplog):
     """W929: a host refusal raised as a bare reason code was answered 503 with nothing logged, so a
