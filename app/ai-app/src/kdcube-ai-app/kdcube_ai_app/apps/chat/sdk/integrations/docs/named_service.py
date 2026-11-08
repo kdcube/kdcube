@@ -1816,55 +1816,6 @@ def _mime_for_image(measured: Mapping[str, Any]) -> str:
     )
 
 
-def origin_unreachable_refusal(
-    detail: str,
-) -> Callable[[NamedServiceRequest], NamedServiceResponse]:
-    """The public origin did not answer at all."""
-
-    def _refuse(request: NamedServiceRequest) -> NamedServiceResponse:
-        return _image_refusal(
-            request,
-            code="docs_image_origin_unreachable",
-            message=(
-                "This deployment's public origin did not answer a fetch of the "
-                "staged file, so the document provider will not reach it "
-                "either. Nothing was written."
-            ),
-            status=502,
-            details={"error": detail},
-        )
-
-    return _refuse
-
-
-def origin_answer_refusal(
-    status: int, media_type: str
-) -> Callable[[NamedServiceRequest], NamedServiceResponse]:
-    """The public origin answered with something other than the file."""
-
-    def _refuse(request: NamedServiceRequest) -> NamedServiceResponse:
-        return _image_refusal(
-            request,
-            code="docs_image_origin_not_public",
-            message=(
-                "This deployment's public origin answered an anonymous "
-                f"browser-like fetch with {media_type or 'no content type'} "
-                f"(HTTP {status}) instead of the image. Something in front of "
-                "the deployment - a tunnel's warning page, a proxy, a login "
-                "screen - answers before the file is reached, so the document "
-                "provider would receive that page rather than the picture. "
-                "This is a deployment setting rather than a problem with the "
-                "file: the origin must serve it to an anonymous caller. Pass "
-                "image_uri with an already public URL to insert an image "
-                "meanwhile."
-            ),
-            status=502,
-            details={"origin_status": status, "origin_media_type": media_type},
-        )
-
-    return _refuse
-
-
 def _image_refusal(
     request: NamedServiceRequest,
     *,
@@ -2623,49 +2574,19 @@ class DocsNamedServiceProvider(NamedServiceProvider):
                 ),
                 status=409,
             )
-        reachable = await self._origin_serves_the_file(url)
-        if reachable is not None:
+        from kdcube_ai_app.apps.chat.sdk.integrations.public_reachability import (
+            PublicURLExpectation, deployment_origin_error, probe_public_url,
+        )
+
+        result = await probe_public_url(
+            url, caller="browser", expect=PublicURLExpectation(media_prefix="image/")
+        )
+        error = deployment_origin_error(result, purpose="docs.embed_image")
+        if error is not None:
             _cleanup()
-            return None, reachable(request)
+            return None, error.as_response(request, provider=self._provider_identity())
         payload["image_uri"] = url
         return _cleanup, None
-
-    async def _origin_serves_the_file(
-        self, url: str
-    ) -> Callable[[NamedServiceRequest], NamedServiceResponse] | None:
-        """Check that the minted URL answers an anonymous fetch with the file.
-
-        A provider fetches with no credential and a browser-like agent, and a
-        tunnel or proxy in front of this deployment may answer such a request
-        with a page of its own - a warning interstitial, a login screen - which
-        the provider then reports as a broken image. Asking the same way the
-        provider will turns that into a diagnosis of the deployment, which is
-        what it actually is.
-
-        Returns None when the origin serves the file, or a refusal builder.
-        """
-
-        import httpx
-
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(
-                    url,
-                    follow_redirects=True,
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36"
-                        )
-                    },
-                )
-        except Exception as exc:
-            return origin_unreachable_refusal(f"{type(exc).__name__}: {exc}")
-
-        media_type = _text(response.headers.get("content-type")).split(";")[0].lower()
-        if response.status_code == 200 and media_type.startswith("image/"):
-            return None
-        return origin_answer_refusal(response.status_code, media_type)
 
     async def _conversation_file_bytes(
         self,

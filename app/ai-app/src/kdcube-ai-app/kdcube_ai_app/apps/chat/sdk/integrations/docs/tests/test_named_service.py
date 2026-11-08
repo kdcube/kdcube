@@ -35,8 +35,6 @@ from kdcube_ai_app.apps.chat.sdk.integrations.docs.named_service import (
     DOCS_SNAPSHOT_SCHEMA,
     DOCS_WRITE_CLAIM,
     DocsNamedServiceProvider,
-    origin_answer_refusal,
-    origin_unreachable_refusal,
     document_export_ref,
     document_ref,
     document_source_ref,
@@ -2054,7 +2052,9 @@ def _staged(tmp_path, data: bytes, filename: str = "chart.png") -> tuple[Any, st
 def _hosting_provider(
     fake,
     root,
+    monkeypatch,
     *,
+    fetches=None,
     url: str = "https://example.invalid/d/x",
     origin: str = "serves_the_file",
 ):
@@ -2077,20 +2077,22 @@ def _hosting_provider(
         provider_fetch_url_factory=_mint,
     )
 
-    if origin == "serves_the_file":
-        async def _preflight(_url: str):
-            return None
-    else:
-        verdict = (
-            origin_answer_refusal(200, "text/html")
-            if origin == "interstitial"
-            else origin_unreachable_refusal("ConnectError: no route")
-        )
+    import httpx
 
-        async def _preflight(_url: str):
-            return verdict
+    real_client = httpx.AsyncClient
 
-    provider._origin_serves_the_file = _preflight  # type: ignore[assignment]
+    def _origin(request):
+        if fetches is not None:
+            fetches.append(request)
+        if origin == "unreachable":
+            raise httpx.ConnectError("cannot reach " + str(request.url), request=request)
+        if not request.headers.get("user-agent", "").startswith("Mozilla/"):
+            return httpx.Response(403, headers={"content-type": "application/json"})
+        if origin == "interstitial":
+            return httpx.Response(200, headers={"content-type": "text/html"}, content=b"tunnel warning")
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=_png_bytes())
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(_origin), **kw))
     return provider, minted
 
 
@@ -2105,12 +2107,12 @@ def _embed_request(**payload: Any) -> NamedServiceRequest:
 
 
 @pytest.mark.anyio
-async def test_a_staged_file_is_served_to_google_and_then_removed(tmp_path) -> None:
+async def test_a_staged_file_is_served_to_google_and_then_removed(tmp_path, monkeypatch) -> None:
     from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import parse_staged_ref
 
     fake = _FakeDocs()
     root, staged_ref = _staged(tmp_path, _png_bytes())
-    provider, minted = _hosting_provider(fake, root)
+    provider, minted = _hosting_provider(fake, root, monkeypatch)
 
     response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
 
@@ -2130,7 +2132,7 @@ async def test_a_staged_file_is_served_to_google_and_then_removed(tmp_path) -> N
 
 
 @pytest.mark.anyio
-async def test_a_staged_name_never_decides_the_served_type(tmp_path) -> None:
+async def test_a_staged_name_never_decides_the_served_type(tmp_path, monkeypatch) -> None:
     from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import parse_staged_ref
 
     # Bytes after a PNG's end do not stop it from measuring as a PNG, so a name
@@ -2139,7 +2141,7 @@ async def test_a_staged_name_never_decides_the_served_type(tmp_path) -> None:
     root, staged_ref = _staged(
         tmp_path, _png_bytes() + b"<html><script>1</script></html>", filename="page.html"
     )
-    provider, minted = _hosting_provider(fake, root)
+    provider, minted = _hosting_provider(fake, root, monkeypatch)
 
     response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
 
@@ -2149,13 +2151,13 @@ async def test_a_staged_name_never_decides_the_served_type(tmp_path) -> None:
 
 
 @pytest.mark.anyio
-async def test_the_staged_copy_goes_even_when_the_write_fails(tmp_path) -> None:
+async def test_the_staged_copy_goes_even_when_the_write_fails(tmp_path, monkeypatch) -> None:
     from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import parse_staged_ref
 
     fake = _FakeDocs()
     fake.error = {"ok": False, "error": {"code": "google_docs_provider_error", "message": "nope", "status": 400}}
     root, staged_ref = _staged(tmp_path, _png_bytes())
-    provider, _minted = _hosting_provider(fake, root)
+    provider, _minted = _hosting_provider(fake, root, monkeypatch)
 
     response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
 
@@ -2165,10 +2167,10 @@ async def test_the_staged_copy_goes_even_when_the_write_fails(tmp_path) -> None:
 
 
 @pytest.mark.anyio
-async def test_naming_both_a_file_and_a_url_is_refused(tmp_path) -> None:
+async def test_naming_both_a_file_and_a_url_is_refused(tmp_path, monkeypatch) -> None:
     fake = _FakeDocs()
     root, staged_ref = _staged(tmp_path, _png_bytes())
-    provider, _minted = _hosting_provider(fake, root)
+    provider, _minted = _hosting_provider(fake, root, monkeypatch)
 
     response = await provider.dispatch(
         _ctx(),
@@ -2181,10 +2183,10 @@ async def test_naming_both_a_file_and_a_url_is_refused(tmp_path) -> None:
 
 
 @pytest.mark.anyio
-async def test_a_file_google_will_not_take_is_refused_before_the_write(tmp_path) -> None:
+async def test_a_file_google_will_not_take_is_refused_before_the_write(tmp_path, monkeypatch) -> None:
     fake = _FakeDocs()
     root, staged_ref = _staged(tmp_path, b"not an image at all", filename="notes.txt")
-    provider, _minted = _hosting_provider(fake, root)
+    provider, _minted = _hosting_provider(fake, root, monkeypatch)
 
     response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
 
@@ -2194,10 +2196,10 @@ async def test_a_file_google_will_not_take_is_refused_before_the_write(tmp_path)
 
 
 @pytest.mark.anyio
-async def test_an_image_larger_than_google_takes_is_refused(tmp_path) -> None:
+async def test_an_image_larger_than_google_takes_is_refused(tmp_path, monkeypatch) -> None:
     fake = _FakeDocs()
     root, staged_ref = _staged(tmp_path, _png_bytes(2400, 100))
-    provider, _minted = _hosting_provider(fake, root)
+    provider, _minted = _hosting_provider(fake, root, monkeypatch)
 
     response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
 
@@ -2207,10 +2209,10 @@ async def test_an_image_larger_than_google_takes_is_refused(tmp_path) -> None:
 
 
 @pytest.mark.anyio
-async def test_a_deployment_with_no_public_origin_says_so(tmp_path) -> None:
+async def test_a_deployment_with_no_public_origin_says_so(tmp_path, monkeypatch) -> None:
     fake = _FakeDocs()
     root, staged_ref = _staged(tmp_path, _png_bytes())
-    provider, _minted = _hosting_provider(fake, root, url="http://inside.invalid/d/x")
+    provider, _minted = _hosting_provider(fake, root, monkeypatch, url="http://inside.invalid/d/x")
 
     response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
 
@@ -2233,20 +2235,62 @@ async def test_without_the_hosting_injections_a_file_ref_is_refused() -> None:
 
 
 @pytest.mark.anyio
-async def test_an_origin_that_answers_with_a_page_is_named_as_the_cause(tmp_path) -> None:
+async def test_an_origin_that_answers_with_a_page_is_named_as_the_cause(tmp_path, monkeypatch) -> None:
     from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import parse_staged_ref
 
     fake = _FakeDocs()
     root, staged_ref = _staged(tmp_path, _png_bytes())
-    provider, _minted = _hosting_provider(fake, root, origin="interstitial")
+    provider, _minted = _hosting_provider(fake, root, monkeypatch, origin="interstitial")
 
     response = await provider.dispatch(_ctx(), _embed_request(file_ref=staged_ref))
 
     # A tunnel's warning page reaches the provider as a broken image; saying so
     # here is the difference between a deployment fix and a guessing game.
     assert response.ok is False
-    assert response.error.code == "docs_image_origin_not_public"
+    assert response.error.code == "deployment_origin_not_public"
+    assert response.status == 502
+    assert response.error.details["where"] == "deployment_config"
+    assert response.error.details["purpose"] == "docs.embed_image"
     assert "text/html" in response.error.details["origin_media_type"]
     assert not [row for row in fake.calls if row["operation"] == "embed_image"]
     staged_id, filename = parse_staged_ref(staged_ref)
     assert not (root / staged_id / filename).exists()
+
+
+@pytest.mark.anyio
+async def test_unreachable_origin_refuses_before_docs_write_and_hides_capability(tmp_path, monkeypatch):
+    fake = _FakeDocs()
+    root, source = _staged(tmp_path, _png_bytes())
+    fetches = []
+    provider, minted = _hosting_provider(
+        fake, root, monkeypatch, origin="unreachable", fetches=fetches,
+        url="https://origin.example/file?capability=private-test-capability",
+    )
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=source))
+    assert not response.ok
+    assert response.error.code == "deployment_origin_unreachable"
+    assert response.status == 502
+    assert response.error.details == {
+        "where": "deployment_config", "purpose": "docs.embed_image", "error": "ConnectError", "status": 502,
+    }
+    assert "private-test-capability" not in str(response)
+    assert not [row for row in fake.calls if row["operation"] == "embed_image"]
+    assert len(fetches) == 1
+    from kdcube_ai_app.apps.chat.sdk.integrations.file_staging import load_staged
+    for ref in (source, minted[0]["staged_ref"]):
+        with pytest.raises(FileNotFoundError):
+            load_staged(root, ref, owner=_ctx())
+
+
+@pytest.mark.anyio
+async def test_docs_origin_probe_is_browser_like_and_anonymous(tmp_path, monkeypatch):
+    fake = _FakeDocs()
+    root, source = _staged(tmp_path, _png_bytes())
+    fetches = []
+    provider, _ = _hosting_provider(fake, root, monkeypatch, fetches=fetches)
+    response = await provider.dispatch(_ctx(), _embed_request(file_ref=source))
+    assert response.ok
+    assert len(fetches) == 1
+    assert fetches[0].headers["user-agent"].startswith("Mozilla/")
+    assert "authorization" not in fetches[0].headers
+    assert "cookie" not in fetches[0].headers
