@@ -34,7 +34,7 @@ def test_second_style_occurrence_uses_utf16_after_a_surrogate_pair():
 
 
 @pytest.mark.parametrize("kind", ["style", "comment"])
-def test_ambiguity_reports_occurrence_location_and_80_character_context(kind):
+def test_ambiguity_reports_occurrence_location_and_80_characters_on_each_side(kind):
     raw, view = repeated("prefix " * 20 + "hit " * 25 + "suffix " * 20)
     with pytest.raises(SlidesValidationError) as exc:
         if kind == "style":
@@ -48,7 +48,28 @@ def test_ambiguity_reports_occurrence_location_and_80_character_context(kind):
     for number, candidate in enumerate(details["candidates"], 1):
         assert set(candidate) == {"occurrence", "where", "context"}
         assert candidate["occurrence"] == number and candidate["where"] == {"slide": "slide_a", "element": "title_a"}
-        assert "hit" in candidate["context"] and len(candidate["context"]) <= 80
+        assert "hit" in candidate["context"] and len(candidate["context"]) <= 80 + len("hit") + 80
+
+
+@pytest.mark.parametrize("kind", ["style", "comment"])
+def test_long_quote_candidates_keep_the_full_quote_and_distinguishing_distant_context(kind):
+    quote = "A long quoted phrase: " + "q" * 90
+    before_first = "p" * 20 + "FIRST" + "p" * 55
+    before_second = "p" * 20 + "SECOND" + "p" * 54
+    after_first = "s" * 55 + "FIRST_AFTER" + "s" * 30
+    after_second = "s" * 55 + "SECOND_AFTER" + "s" * 30
+    raw, view = repeated(before_first + quote + after_first + "\n" + before_second + quote + after_second)
+    with pytest.raises(SlidesValidationError) as exc:
+        if kind == "style":
+            style(raw, view, quoted_text=quote)
+        else:
+            compile_anchor(raw, view, {"quoted_text": quote})
+    assert exc.value.code == "slides_text_ambiguous"
+    first, second = [candidate["context"] for candidate in exc.value.details["candidates"]]
+    assert quote in first and quote in second
+    assert len(first) == len(second) == 80 + len(quote) + 80
+    assert first.startswith(before_first) and second.startswith(before_second)
+    assert "FIRST_AFTER" in first and "SECOND_AFTER" in second
 
 
 def test_comment_occurrence_counts_across_shapes_in_slide_order():

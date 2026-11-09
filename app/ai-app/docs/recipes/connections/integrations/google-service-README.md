@@ -1261,7 +1261,8 @@ computed as UTF-16 units; agents supply quoted text and selectors.
 Repeated quoted text requires a 1-based `occurrence` within the selected
 scope. Shape matches follow slide and element order; a cell selector counts
 only within that cell. Ambiguity returns up to 20 candidates shaped as
-`{occurrence, where, context}`, each context at most 80 characters, with
+`{occurrence, where, context}`. Context includes the full quote and up to 80
+characters before and after it, matching the Docs scheme, with
 `occurrences` and `candidates_truncated`. `where` names the slide and element,
 or the table, row and column. An occurrence without quoted text is refused.
 

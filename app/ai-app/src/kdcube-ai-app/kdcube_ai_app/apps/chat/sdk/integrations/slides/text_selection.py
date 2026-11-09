@@ -5,7 +5,7 @@ import re
 
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError
 
-CONTEXT_CHARS = 80
+PREVIEW_WINDOW_CHARS = 80  # On each side of the complete literal match, as in Docs.
 MAX_CANDIDATES = 20
 
 
@@ -25,8 +25,8 @@ def select_text_match(matches, occurrence=None):
             chosen = {**item, "occurrence": total}
         if total <= MAX_CANDIDATES:
             text, match = item["text"], item["match"]
-            start = max(0, min(match.start() - CONTEXT_CHARS // 2, len(text) - CONTEXT_CHARS))
-            candidates.append({"occurrence": total, "where": item["where"], "context": text[start:start + CONTEXT_CHARS]})
+            context = text[max(0, match.start() - PREVIEW_WINDOW_CHARS):match.end() + PREVIEW_WINDOW_CHARS]
+            candidates.append({"occurrence": total, "where": item["where"], "context": context})
     details = {"occurrences": total, "candidates": candidates, "candidates_truncated": total > MAX_CANDIDATES}
     if not total:
         raise SlidesValidationError("slides_text_not_found", "The quoted text does not occur in the selected target.", details=details)
