@@ -328,17 +328,17 @@ class ConnectionsProviderBase(NamedServiceProvider):
                 )
                 or {}
             )
-        except Exception as exc:
-            return self._error("connections_agent_capability_sync_failed", str(exc))
+        except Exception:
+            result = {"ok": False, "error": "connections_agent_capability_sync_failed", "retryable": True, "status": 503}
         if result.get("ok") is not True:
-            status = int(result.get("status") or 400)
-            code = str(result.get("error") or "connections_agent_capability_sync_failed")
-            message = str(result.get("message") or result.get("reason") or code)
+            from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
+
+            failure = capability_sync_failure(result, code="connections_agent_capability_sync_failed")
             return NamedServiceResponse.error_response(
-                code=code,
-                message=message,
-                status=status,
-                details=result,
+                code=failure["error"],
+                message=failure["error"],
+                status=failure["status"],
+                details=failure,
                 provider=self.provider_identity(),
                 namespace=NAMESPACE,
             )

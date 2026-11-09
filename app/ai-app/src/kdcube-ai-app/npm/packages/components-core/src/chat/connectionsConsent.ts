@@ -94,7 +94,7 @@ export function consentOpenForClaims(args: {
 /** Hub-open payload for a per-agent grant demand: lands on the "Delegated by
  *  KDCube" tab (the automation/delegated-access panel — an agent grant is a kind
  *  of automation access) with the pending agent + resource + claims, so the panel
- *  can offer a one-click grant. `url` is the served deep-link fallback for hosts
+ *  can open Card consent review. `url` is the served deep-link fallback for hosts
  *  without the scene contract. */
 export function agentGrantConsentOpen(args: {
   agentClientId: string
@@ -108,15 +108,26 @@ export function agentGrantConsentOpen(args: {
   invocationChangeId?: string
   accountId?: string
   accountClaim?: string
+  accountProviderId?: string
   url?: string
 }): ConnectionsConsentOpen {
+  const url = String(args.url || '').trim()
+  const reviewed = deepLinkTabAndParams(url)
+  if (reviewed?.tab === 'delegated_by_kdcube' && reviewed.params.agent_card_consent === '1') {
+    // The Card-review request is complete, including an intentionally empty
+    // door-claim selection. Preserve it rather than rebuilding from a richer
+    // banner and dropping the account-only context.
+    return { ...reviewed, url }
+  }
   const params: Record<string, string> = { pending_agent_grant: '1' }
   const client = String(args.agentClientId || '').trim()
   if (client) params.agent_client_id = client
+  if (client.startsWith('kdcube-agent:')) params.agent_card_consent = '1'
   const resource = String(args.resource || '').trim()
   if (resource) params.resource = resource
   const claims = (args.claims || []).map((item) => String(item || '').trim()).filter(Boolean)
-  if (claims.length) params.claims = claims.join(',')
+  const accountOnly = Boolean(args.accountProviderId && args.accountClaim && !args.namespace && !args.operation)
+  if (claims.length && !accountOnly) params.claims = claims.join(',')
   // The demand names one inner operation; the panel seeds its picker from these
   // two, so omitting them opens the grant with nothing selected.
   const namespace = String(args.namespace || '').trim()
@@ -135,7 +146,9 @@ export function agentGrantConsentOpen(args: {
   if (accountId) params.account_id = accountId
   const accountClaim = String(args.accountClaim || '').trim()
   if (accountClaim) params.account_claim = accountClaim
-  return { tab: 'delegated_by_kdcube', params, url: String(args.url || '').trim() }
+  const accountProvider = String(args.accountProviderId || '').trim()
+  if (accountProvider) params.account_provider_id = accountProvider
+  return { tab: 'delegated_by_kdcube', params, url }
 }
 
 /** Build the structured hub-open payload from a consent card's fields.

@@ -1551,6 +1551,9 @@ def ensure_generated_runtime_secrets(config_dir: Path) -> Dict[str, str]:
     versions. `kdcube refresh` intentionally reuses staged descriptors, so it
     must repair this small class of generated local secrets before restart.
     """
+    from kdcube_cli.hub_signers import prepare_hub_signing_refs
+
+    prepare_hub_signing_refs(config_dir)
     secrets_path = config_dir / "secrets.yaml"
     secrets_data = load_release_descriptor(secrets_path) if secrets_path.exists() else {}
     global_root = canonical_global_secret_root(secrets_data)
@@ -5698,6 +5701,19 @@ def gather_configuration(
     }, runtime_secrets
 
 
+def _report_hub_signer_bootstrap(console: Console, result: subprocess.CompletedProcess) -> None:
+    from kdcube_cli.hub_signers import public_bootstrap_created_lines, public_bootstrap_failure
+
+    if result.returncode != 0:
+        raise SystemExit(
+            "Connection Hub signing secret bootstrap failed; application startup refused."
+            + public_bootstrap_failure(result.stdout)
+        )
+    for line in public_bootstrap_created_lines(result.stdout):
+        console.print(line)
+    console.print("Connection Hub signing secrets verified in the selected provider.")
+
+
 def run_setup(
     console: Console,
     *,
@@ -6398,6 +6414,17 @@ def run_setup(
                 )
                 force_recreate_flag = []
                 no_recreate_flag = ["--no-recreate"]
+            from kdcube_cli.hub_signers import (
+                hub_signer_bootstrap_command, prepare_hub_signing_refs,
+            )
+
+            if prepare_hub_signing_refs(config_dir):
+                bootstrapped = subprocess.run(
+                    hub_signer_bootstrap_command(base_cmd, build=bool(build_flag)),
+                    cwd=ctx.docker_dir, env=compose_env(runtime_env), capture_output=True,
+                    check=False, text=True,
+                )
+                _report_hub_signer_bootstrap(console, bootstrapped)
             up_cmd = [*base_cmd, "up", "-d", *force_recreate_flag, *build_flag]
             if services:
                 up_cmd = [*base_cmd, "up", "-d", *no_deps_flag, *force_recreate_flag, *build_flag, *services]

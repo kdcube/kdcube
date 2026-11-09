@@ -22,6 +22,49 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_to_kdcube
 _RES = "https://h/api/integrations/bundles/t/p/user-memories@2026-06-26/public/mcp/memories"
 
 
+def test_native_hosted_demand_builds_a_complete_card_review_url(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    from connection_hub.delegated_to_kdcube import public_base
+    from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx
+
+    monkeypatch.setattr(comm_ctx, "get_current_user_identity", lambda: {"tenant_id": "t", "project_id": "p"})
+    monkeypatch.setattr(public_base, "connection_hub_public_base_url", lambda: "https://hub.test")
+    exc = mcp_consent_from_denial({"status": 403}, resource=_RES, claims=[],
+        namespace="slides", operation="object.list", outer_operation="tools/call",
+        agent_client_id="kdcube-agent:workspace@1-0:main")
+    params = parse_qs(urlsplit(exc.chat_event_payload()["consent"]["url"]).query)
+    assert params["agent_card_consent"] == ["1"]
+    assert params["agent_client_id"] == ["kdcube-agent:workspace@1-0:main"]
+    assert params["resource"] == [_RES]
+    assert params["namespace"] == ["slides"] and params["operation"] == ["object.list"]
+    assert params["outer_operation"] == ["tools/call"]
+    assert "claims" not in params
+
+
+@pytest.mark.asyncio
+async def test_sdk_announcement_preserves_account_only_context_without_an_existing_url(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    from connection_hub.delegated_to_kdcube import public_base
+    from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub import mcp_consent
+
+    monkeypatch.setattr(comm_ctx, "get_current_user_identity", lambda: {"tenant_id": "t", "project_id": "p"})
+    monkeypatch.setattr(public_base, "connection_hub_public_base_url", lambda: "https://hub.test")
+    seen = []
+
+    async def announce(consent, **_kwargs):
+        seen.append(consent)
+
+    monkeypatch.setattr(mcp_consent._core, "announce_agent_consent", announce)
+    consent = MCPConsentRequired(resource=_RES, claims=["slides:read"], agent_message="Approve the account",
+        consent={"agent_client_id": "kdcube-agent:app:main", "account_provider_id": "google",
+                 "account_claim": "slides:read", "account_id": "work"})
+    await mcp_consent.announce_agent_consent(consent)
+    params = parse_qs(urlsplit(seen[0].consent["connection_hub_url"]).query)
+    assert params["account_provider_id"] == ["google"] and params["account_id"] == ["work"]
+    assert "claims" not in params
+
+
 def test_403_authority_mismatch_is_a_consent_denial():
     assert is_kdcube_mcp_consent_denial({"status": 403, "reason": "authority_mismatch"}) is True
     assert is_kdcube_mcp_consent_denial({"status": 403}) is True            # bare 403 -> surface consent
@@ -41,7 +84,7 @@ def test_consent_payload_carries_the_chat_contract_and_claims():
     assert exc.consent["connection_hub_url"] == "https://h/hub"
 
 
-def test_agent_client_id_adds_a_one_click_grant_action():
+def test_hosted_agent_requires_card_review_before_grant():
     exc = mcp_consent_from_denial(
         {"status": 403, "reason": "authority_mismatch"},
         resource=_RES, claims=["memories:read"], tool_name="memory_search",
@@ -49,16 +92,11 @@ def test_agent_client_id_adds_a_one_click_grant_action():
     )
     assert exc.consent["kind"] == "delegated_agent_grant"
     assert exc.consent["agent_client_id"] == "kdcube-agent:app@v1:lg-react"
-    grant = exc.consent["grant"]
-    assert grant["operation"] == "delegated_agent_grant_create"
-    assert grant["payload"] == {
-        "client_id": "kdcube-agent:app@v1:lg-react",
-        "resource": _RES,
-        "claims": ["memories:read"],
-    }
+    assert exc.consent["agent_card_consent"] is True
+    assert "grant" not in exc.consent
 
 
-def test_chat_event_payload_is_the_nested_banner_shape_with_grant():
+def test_chat_event_payload_is_the_nested_banner_shape_with_card_review():
     exc = mcp_consent_from_denial(
         {"status": 403, "reason": "authority_mismatch"},
         resource=_RES, claims=["memories:read"], tool_name="memory_search",
@@ -72,10 +110,10 @@ def test_chat_event_payload_is_the_nested_banner_shape_with_grant():
     block = ev["consent"]
     assert block["claims"] == ["memories:read"]
     assert block["resource"] == _RES
-    assert block["url"] == "https://h/hub"
-    assert block["action_label"] == "Grant access"          # a grant, not connect
+    assert block["url"] == "https://h/hub?agent_card_consent=1"
+    assert block["action_label"] == "Review agent access"
     assert block["agent_client_id"] == "kdcube-agent:app@v1:lg-react"
-    assert block["grant"]["operation"] == "delegated_agent_grant_create"
+    assert block["agent_card_consent"] is True and "grant" not in block
     assert ev["tools"] == ["memory_search"]
 
 

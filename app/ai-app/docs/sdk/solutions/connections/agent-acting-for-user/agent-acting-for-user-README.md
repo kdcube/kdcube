@@ -148,10 +148,12 @@ three coordinated things:
 
 1. **A chat consent banner.** `MCPConsentRequired.chat_event_payload()` emits
    the same nested consent-event shape connected-account tools raise, carrying
-   the claims and a one-click **grant action**
-   (`{operation: delegated_agent_grant_create, payload: {client_id, resource,
-   claims, resource_operations?}}`). The chat UI deep-links the Connection Hub
-   "Delegated by KDCube" tab pre-loaded with the pending request. An exact
+   the claims and `agent_card_consent: true`. The chat UI opens the requesting
+   Agent Card in Connection Hub's "Delegated by KDCube" tab at its account
+   picker. The review names the requested capability and provider permission;
+   one **Approve** persists both the capability and `account_scope`, with no
+   later normal Card Save. Hosted demands omit the direct resource-only
+   `grant` shortcut. An exact
    operation demand lets the user choose **Allow once** or **Allow always**;
    that choice and the operation grant commit as one fail-closed change.
 2. **An agent-explainable block.** The exception's message tells the model what
@@ -178,7 +180,7 @@ turn 1: user asks about memory
   memories is consent-gated -> the agent calls its stub
   -> THAT consent demand bubbles in chat (slack, also pending, stays silent)
   agent: "I need your approval for memories:read"
-  user: clicks Grant access -> hub tab -> Grant  (one grant, THIS agent)
+  user: clicks Review agent access -> Agent Card -> Approve
 turn 2: bearer_provider returns the bound token
   memory tools bind -> the agent reads the user's own memory
 later: user revokes in the same tab -> the tool drops back to the gated stub
@@ -189,7 +191,7 @@ agent (the workspace React agent) calls a namespace the deployment's delegated
 catalog publishes, the generic tool layer checks the calling agent's grant via
 the `connections` named service (`agent_grant.check`) before dispatch — the
 operation's declared grants plus the resource's entry-tool grants. Pending →
-the same attempt-time demand and one-click grant; sequential grants on the same
+the same attempt-time demand and Card consent review; sequential grants on the same
 resource MERGE into one record (granting slack after memories never revokes
 memories). Connecting a provider account (Delegated to KDCube) stays a
 separate, per-call-checked layer and never authorizes an agent by itself. The
@@ -207,6 +209,29 @@ own Connection Hub card. Hosted chat can render the URL as an action, while an
 external or headless caller receives it as structured recovery data. Following
 the URL and retrying are explicit caller/user actions; neither happens
 automatically.
+
+Card review applies to hosted agents running on the KDCube harness, including
+their delegated access to KDCube data such as the memory service. That agent
+permission is separate from the user's own memory preferences: the
+`memories_widget_preferences_update` API writes `memory_enabled` and
+`memory_scope` to the user settings store and does not edit the Agent Card.
+Connection Hub continues to own the agent's delegated service permission.
+
+An SDK binding demand carries `account_provider_id`, `account_claim` and an
+optional proposed `account_id` in the served Card-review URL. Its door `claims`
+can be empty. A sole capable account can be proposed for review; multiple
+accounts require an explicit choice. The chat scene hop preserves that URL's
+complete request, so provider claims displayed in the banner do not replace
+empty door claims. Card resolution, current revision, Control and provider
+state are revalidated before approval commits.
+
+The app passes the resulting Card's `granted_account_scope` to
+`author_consent_granted_events`. Completion requires the requested provider
+claim on the selected account as well as the capability. Current discovery
+resolves account requirements for named operations; missing registrations,
+invalid metadata or ambiguous flat vocabularies leave the demand pending.
+The completion event is passive context for the addressed conversation and
+does not start a turn.
 
 The proactive counterpart — showing given/pending consent per claim in the
 capabilities picker before any call is attempted — is the claim-driven consent

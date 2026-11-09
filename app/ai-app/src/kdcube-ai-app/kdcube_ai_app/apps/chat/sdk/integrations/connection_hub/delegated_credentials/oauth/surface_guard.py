@@ -458,6 +458,7 @@ def _outer_operation_consent_payload(
         connection_hub_grant_url,
     )
 
+    hosted_agent = client_id.startswith(AGENT_CLIENT_PREFIX)
     tenant, project = oauth_tenant_project(request)
     auth = auth if isinstance(auth, Mapping) else {}
     hub_bundle_id = str(
@@ -476,6 +477,7 @@ def _outer_operation_consent_payload(
         # The denied card by id: an OAuth card id is derived from the concrete
         # URL the client consented at, which the declared resource above is not.
         access_id=str(ret.get("access_id") or "").strip(),
+        agent_card_consent=hosted_agent,
     )
     consent: dict[str, Any] = {
         "kind": "delegated_agent_grant",
@@ -488,16 +490,10 @@ def _outer_operation_consent_payload(
     }
     if hub_url:
         consent["connection_hub_url"] = hub_url
-    if client_id.startswith(AGENT_CLIENT_PREFIX):
-        consent["grant"] = {
-            "operation": "delegated_agent_grant_create",
-            "payload": {
-                "client_id": client_id,
-                "resource": resource,
-                "claims": missing_grants,
-                "resource_operations": {resource: [operation]},
-            },
-        }
+    if hosted_agent:
+        # Raw surface denials can reach a client without passing through the
+        # chat adapter. They must already carry the hosted Card-review contract.
+        consent["agent_card_consent"] = True
     return {**dict(payload), "consent": consent}
 
 

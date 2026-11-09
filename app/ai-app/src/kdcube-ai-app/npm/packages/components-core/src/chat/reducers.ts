@@ -312,6 +312,7 @@ function connectedAccountConsentBanner(data: Record<string, unknown> | undefined
         invocationChangeId,
         accountId,
         accountClaim,
+        accountProviderId: firstString(consent.account_provider_id, urlParams.account_provider_id),
         url,
       }),
       // The supersession prefix runs through the FIRST '|': keep agent AND

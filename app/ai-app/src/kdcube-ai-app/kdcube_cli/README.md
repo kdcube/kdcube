@@ -4,7 +4,7 @@ title: "KDCube CLI"
 summary: "Installs and operates KDCube runtimes, checks the active app-owned delegated catalog, manages exact secrets through their selected provider, and exposes typed deployment and management APIs for application-specific CLIs."
 tags: ["kdcube", "cli", "runtime", "deployment-target", "secrets", "python-api"]
 keywords: ["kdcube-cli", "kdcube init", "kdcube start", "kdcube stop", "kdcube secrets", "kdcube bundle catalog check", "app-owned delegated catalog", "kdcube bundle delete", "managed bundle deletion", "purge-data", "force-retire", "targeted bundle retirement", "kdcube_cli.control", "kdcube_cli.management"]
-updated_at: 2026-09-13
+updated_at: 2026-11-07
 see_also:
   - repo:kdcube/app/ai-app/docs/service/cicd/cli-README.md
   - repo:kdcube/app/ai-app/docs/service/cicd/deployment-target-control-api-README.md
@@ -54,6 +54,52 @@ for capabilities, explicit surface selection, endpoint-only behavior, and
 structured errors.
 
 ## Secret Management
+
+Before starting a local deployment containing `connection-hub@1-0`, the
+installer and local lifecycle run a trusted one-shot bootstrap in the processor
+image. This covers the first start after `init`, `start`, and the start phase
+of `refresh`. Compose waits for the processor's infrastructure dependencies;
+the application startup command runs only after bootstrap succeeds.
+
+Bootstrap creates three missing deployment signers through the selected
+`ISecretsManager`: the original OAuth refresh signer at
+`connections.delegated_credentials.oauth.original_exchange.refresh_signing_secret_ref`,
+the management signer at the configured admission service's `secret_ref`, and
+`connections.delegated_credentials.grantor_authority_secret`. Omitted reference
+properties receive the skeleton defaults; configured references stay intact.
+The management service and Hub must name the same management signer.
+
+Existing provider values are preserved. When a provider key is absent, an
+existing non-placeholder seed in `bundles.secrets.yaml` is adopted; otherwise
+bootstrap generates 32 random bytes encoded as 64 hexadecimal characters.
+Only key names and status can be reported. These durable signers are separate
+from runtime-acquired ephemeral credentials and delegated management consent.
+
+File mode publishes private per-secret records without replacement. Service
+mode requires a qualified durable host-vault backend and uses
+`expected_generation=0`. AWS mode uses the SDK's deployment inventory write
+lock and a strict grouped-document merge; a missing lock refuses creation.
+Do not run an out-of-band AWS import or console write concurrently with this
+bootstrap, because those writers do not share the SDK lock. Provider read
+errors and malformed records refuse startup. An all-present provider is a
+no-op even if it has no create-only capability.
+On success, the installer reports each newly created signing key by name,
+then confirms verification in the selected provider.
+
+The AWS lock has the existing 30-second lease. Bootstrap checks ownership at
+atomic release and refuses startup if the lease expired or could not be
+verified. This detects a lost lease after the write; it cannot undo a completed
+AWS update. A crash after inventory update but before document publication can
+leave an inventory hint without a value; strict reads, rather than inventory
+alone, decide whether a signer exists. Short or oversized refresh seeds refuse
+with a key name and a finite reason, and are never silently replaced.
+
+The local CLI invocation does not cover cloud or custom deployment launchers.
+Those launchers must explicitly run
+`python -m kdcube_ai_app.infra.secrets.deployment_bootstrap` in the selected
+deployment's service image and configuration before starting the applications.
+Do not rotate these keys as part of refresh: issued OAuth credentials and
+existing authority proofs depend on stable signing material.
 
 Logical secret operations are backend-neutral. They address one exact
 platform or bundle key through the running KDCube management service, which

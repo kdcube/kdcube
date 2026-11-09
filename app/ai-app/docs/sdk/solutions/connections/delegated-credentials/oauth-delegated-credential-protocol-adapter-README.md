@@ -175,6 +175,16 @@ provider binding, configured encrypted-provider qualification, and installed/liv
 acceptance remain host integration gates; transport selection alone proves none of them.
 Ordinary human login and the existing delegated minter are unchanged.
 
+An exchange error answers `503 temporarily_unavailable` and never echoes the
+exception's text, because provider errors can carry secrets. One deterministic
+Hub refusal is the exception: when the consent selects more operations than one
+Card decision can carry (`issuance_too_many_policies`, raised non-retryable by
+`begin_oauth_issuance`), the exchange answers `400 invalid_scope` with a fixed
+sentence asking the person to select fewer operations and approve again. Only
+that exact non-retryable code takes this path; the same code marked retryable,
+any other code and any other exception stay `503`. The Hub's effect bound and
+the issuance decision are unchanged: nothing is split or truncated.
+
 `read_prepared_delegated_client_access_token` recovers the existing original
 access receipt and signing time through the public session authority's
 `read_prepared_bound_session`. That reader has no signing dependency
