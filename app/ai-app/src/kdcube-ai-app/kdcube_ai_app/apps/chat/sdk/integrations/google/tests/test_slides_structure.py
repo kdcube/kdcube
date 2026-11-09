@@ -15,7 +15,7 @@ CALIBRATION = json.loads((FIXTURES / "fit-calibration.json").read_text())
 @pytest.mark.parametrize("theme", ["simple_table", "streamline_rotated", "focus_group", "material_group_rotated", "pptx_converted"])
 def test_probe_theme_snapshots_are_bounded_and_keep_layout_words(theme):
     raw = json.loads((FIXTURES / (theme + ".json")).read_text())
-    result = snapshot(raw, limit=2)
+    result = snapshot(raw, limit=2, include=["layouts"])
     assert result["schema"] == "kdcube.slides.snapshot.v1"
     assert result["presentation"]["page"]["aspect"] == "16:9"
     assert len(result["slides"]) <= 2

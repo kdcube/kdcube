@@ -14,7 +14,7 @@ def _walk(value):
             yield from _walk(child)
 
 
-def touched_slide_ids(before, after, requests):
+def touched_slide_ids(before, after, requests, *, replies=()):
     """Resolve compiled request targets, including notes, groups and new ids.
 
     Only native request identity fields are considered. Replacement operations
@@ -35,14 +35,18 @@ def touched_slide_ids(before, after, requests):
                 owners[notes_id] = page_id
     touched = set()
     identity_fields = {"objectId", "imageObjectId", "pageObjectId", "pageObjectIds", "slideObjectIds", "childrenObjectIds", "pageElementObjectIds", "groupObjectId"}
-    for request in requests:
+    for index, request in enumerate(requests):
+        reply = replies[index] if index < len(replies) else {}
         if "duplicateObject" in request:
             spec = request["duplicateObject"]
-            target = spec["objectIds"][spec["objectId"]]
-            touched.add(target)
-            for new_id in spec["objectIds"].values():
-                owners[new_id] = target
+            target = reply.get("duplicateObject", {}).get("objectId") or spec.get("objectIds", {}).get(spec.get("objectId"))
+            if target:
+                touched.add(owners.get(target, target))
             continue
+        if "createSlide" in request:
+            target = reply.get("createSlide", {}).get("objectId") or request["createSlide"].get("objectId")
+            if target:
+                touched.add(target)
         replacement = request.get("replaceAllText") or request.get("replaceAllShapesWithImage")
         if replacement is not None:
             needle = replacement["containsText"]["text"]

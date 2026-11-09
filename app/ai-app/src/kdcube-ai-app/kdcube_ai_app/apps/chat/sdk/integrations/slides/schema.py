@@ -61,7 +61,7 @@ _INSTRUCTIONS = {
     "fill_template": "Pass source, title, values as a tag-to-text map and optional images as a tag-to-image map (image_uri or file_ref). Tags are discovered before copying; missing tags and unreadable templates are refused. Pass preview to validate without creating a copy.",
     "replace_text": "Pass replacements as literal text-to-text pairs, optionally slides as selectors or slide plus element selector. Pass revision_id from object.get and preview to inspect changes without writing.",
     "replace_shapes_with_image": "Pass tag or text, one image_uri (public HTTPS PNG/JPEG/GIF) or file_ref, optional slide/slides selectors, and fit CENTER_INSIDE or CENTER_CROP. Pass revision_id and preview to validate before writing.",
-    "add_slide": "Address a presentation. Pass exactly one layout word or exact layout_name listed by object.get; optional title, subtitle, body and body_2 are text or items lists. Use before/after as a slide selector; default is the end. All content placeholders receive known refs; unfilled ones are deleted unless keep_empty_placeholders is true. Optional notes are written after creation. Pass revision_id and preview; inspect fit and shorten or split overflowing text.",
+    "add_slide": "Address a presentation. Read object.get with include: [layouts], then pass exactly one listed layout word or exact layout_name; optional title, subtitle, body and body_2 are text or items lists. Use before/after as a slide selector; default is the end. All content placeholders receive known refs; unfilled ones are deleted unless keep_empty_placeholders is true. Optional notes are written after creation. Pass revision_id and preview; inspect fit and shorten or split overflowing text.",
     "set_text": "Pass one slide and element selector, exactly one text or items list, and mode replace (default) or append. Items become bullets. Append inserts before the implicit terminal newline. Pass revision_id and preview; inspect predicted fit.",
     "style_text": "Pass slide and element selectors, quoted_text that occurs exactly once, and style with bold/italic booleans, font_size_pt, color #RRGGBB or link. UTF-16 ranges are resolved internally. Pass revision_id and preview and inspect fit after size changes.",
     "set_notes": "Pass one slide selector, notes as text and mode replace (default) or append. The current speaker-notes placeholder is resolved on the fresh read. Pass revision_id and preview.",
@@ -90,16 +90,34 @@ _INSTRUCTIONS = {
 }
 SLIDES_SCHEMA = {
     "namespace": "slides", "snapshot_schema": "kdcube.slides.snapshot.v1",
-    "refs": ["slides:google:<account_id>:presentation:<presentation_id>", "slides:google:<account_id>:slide:<slide_id>:<presentation_id>", "slides:google:<account_id>:export:<pdf|pptx>:<presentation_id>", "slides:google:<account_id>:thumbnail:<SMALL|MEDIUM|LARGE>:<slide_id>:<presentation_id>"],
+    "refs": {"presentation": "slides:google:<account_id>:presentation:<presentation_id>", "slide": "slides:google:<account_id>:slide:<slide_id>:<presentation_id>", "export": "slides:google:<account_id>:export:<pdf|pptx>:<presentation_id>", "thumbnail": "slides:google:<account_id>:thumbnail:<SMALL|MEDIUM|LARGE>:<slide_id>:<presentation_id>"},
     "object_kinds": {"slides.presentation": {"description": "A native presentation with a theme and slides."}, "slides.slide": {"description": "One slide in a native presentation."}, "slides.export": {"description": "PDF or PowerPoint bytes."}, "slides.thumbnail": {"description": "A rendered PNG slide."}},
     "operations": {name: {**meta, "instruction": SLIDES_INTRO} for name,meta in SLIDES_PRESENTATION.items() if "." in name},
     "actions": {name: {"label": SLIDES_PRESENTATION[name]["label"], "description": _INSTRUCTIONS[name]} for name in SLIDES_ACTIONS},
     "selectors": {"slide": ["position", "title", "title_contains", "tag", "kind", "ref", "last"], "element": ["role", "text_contains", "alt_text", "kind", "index", "ref"]},
     "diagnostics": "Mutation results include diagnostics_summary for the whole deck and detailed fit, overlaps and off_slide only for touched slides. Whole-deck creations (create, import, copy, fill_template) return the summary only. Read object.get for full per-element diagnostics. Preview summaries are predicted; import previews report diagnostics unavailable before conversion.",
-    "pagination": "object.get filters.start_slide (1-based) and slide_limit (1..50); next_slide names the next range. Table details use filters.table_start_row and table_row_limit (1..50), with next_row in each table. Search/list and list_comments use cursor/next_cursor.",
+    "pagination": "object.get filters.start_slide (1-based) and slide_limit (1..50, default 10); next_slide names the next range. Include layouts or relations explicitly with filters.include. Trivial grids and empty free regions are omitted. Table details use filters.table_start_row and table_row_limit (1..50), with next_row in each table. Search/list and list_comments use cursor/next_cursor.",
     "connected_account_claims": ["slides:read", "slides:write", "slides:delete", "slides:comment"],
     "limitations": ["Animations, transitions and master/theme editing are outside this service.", "Fit flags are geometric estimates. Text written through the API does not automatically shrink.", "Charts are selected as existing elements; new charts and typed raw requests are outside this service.", "Selector edits and comment anchors support tables with at most 2000 physical cells; reads explicitly mark larger table details unavailable.", "Trash/restore refuses decks created before the service creation marker existed."],
 }
+
+SLIDES_SCHEMA["selectors"].update({
+    "object_schema": {
+        "description": "Schema selectors are mutually exclusive. The view is inferred; only schema_view=full is set explicitly.",
+        "schema_path": "One catalog path such as /reading or /tables.",
+        "query": "Search capability descriptions; mutually exclusive with schema_path, object_kind, object_ref and schema_operation.",
+        "object_kind": "One object kind; mutually exclusive with object_ref and catalog/search selectors.",
+        "object_ref": "Infer one object kind from its opaque ref; mutually exclusive with object_kind and catalog/search selectors.",
+        "schema_operation": "One exact operation contract, paired with its object_kind or object_ref.",
+        "schema_view": "Set only full explicitly, without other schema selectors, to request the complete schema.",
+    },
+    "presentation": {"description": "Use a canonical account-bound presentation ref returned by this provider."},
+})
+SLIDES_SCHEMA.update({
+    "search": {"filters": ["account_id"], "description": "Search presentation titles or list recent presentations."},
+    "get": {"filters": ["account_id", "start_slide", "slide_limit", "slide_selector", "table_start_row", "table_row_limit", "include"], "default_slide_limit": 10, "include": ["relations", "layouts"]},
+    "materialization": "Read artifact refs with streaming object.get to receive bytes, or use their deployment-signed download URL.",
+})
 
 
 SLIDES_SCHEMA["actions"]["import"]["object_ref"] = "none"

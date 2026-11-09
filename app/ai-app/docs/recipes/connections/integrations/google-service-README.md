@@ -1059,7 +1059,7 @@ claim, connector allowed claim, capability and every exact named-service action.
 
 Start with `object.search` and the title, or `object.list` for recent decks.
 `object.get` returns `kdcube.slides.snapshot.v1`: presentation title/revision,
-theme layouts, slide titles, element roles and text, notes, rotation and fit
+slide titles, element roles and text, notes, rotation and fit
 flags. Layout words follow Google's predefined names in lower case. PPTX
 layout `OBJECT` maps to `title_and_body`, and `TWO_OBJECTS` maps to
 `title_and_two_columns`; other imported names keep `layout: null` and their
@@ -1083,7 +1083,10 @@ writes, with a 10-second connection timeout. Other requests retain the
 retried automatically: search for the intended title before copying again.
 
 Read pages with `filters.start_slide` (1-based) and `filters.slide_limit`
-(1–50). Follow `snapshot.range.next_slide` until null. Text is bounded to
+(1–50, default 10). Follow `snapshot.range.next_slide` until null. Request
+`filters.include: ["layouts"]` for the theme layout list or `["relations"]`
+for bounded pairwise element relations; combine both names when needed.
+Trivial one-cell grids and empty free_regions are omitted. Text is bounded to
 12,000 characters per element and 100,000 per call, with explicit truncation
 flags. Fit, grid and relation diagnostics are heuristic. Text fit was calibrated
 on captured Arial, Lato and Roboto examples, with one documented conservative
@@ -1254,6 +1257,19 @@ Provider refusals retain Google's sanitized message, status and code. Comment
 400s also include `next_step` guidance to reread thread refs and anchor routing;
 a reason absent from Google's response remains absent.
 
+### Progressive presentation discovery
+
+`object.schema` and `provider.about` return a compact capability catalog by
+default. Browse `schema_path` `/reading`, `/building`, `/text`, `/layout`,
+`/tables`, `/slides`, `/comments` or `/lifecycle`, or search capabilities with
+`query`. Request one executable contract with `object_kind: slides.presentation`
+and `schema_operation`, for example `object.action:compose`. Ref-based kind
+inference uses `object_ref`. Catalog path, capability query and kind selection
+are mutually exclusive; an operation can narrow its selected kind. Views are
+inferred. Set only `schema_view: full` explicitly, without other selectors, to
+request the complete schema. Reference patterns are keyed by object kind in
+the schema's `refs` map. This discovery reads no Google account.
+
 ### Advanced typed presentation tools
 
 The managed `productivity` MCP endpoint publishes 38 `productivity_slides_*`
@@ -1270,8 +1286,11 @@ additionally demands `drive:write`.
 `ret.structure`: masked native presentation JSON with object IDs, a
 `revision_id` and physical size/translation geometry in EMU. Group transforms
 retain their hierarchy; text styling keeps its own units. Provider capability
-URLs stay server-side. The raw structure is bounded by the provider-read limit
-of 16 MB; use the ordinary bounded snapshot for routine reads.
+URLs stay server-side. Select one slide with `slide_selector`, or page with
+`start_slide` and `slide_limit` (1–50, default 10). Follow `ret.range.next_slide`;
+each read carries its fresh revision. Layouts and masters are omitted unless
+requested with `include: ["layouts", "masters"]`. The underlying provider read
+retains its 16 MB limit; use the ordinary bounded snapshot for routine reads.
 
 `productivity_slides_batch_update` requires `presentation_ref`, `requests` and
 `requiredRevisionId` copied from the fresh structure read. It accepts 1–50
@@ -1284,6 +1303,9 @@ After a fresh read, the exact revision and all delete targets are checked
 before one write. `deleteObject` accepts only existing page elements from that
 read. Use `delete_slide` for slides and the dedicated comment tools for comments.
 A revision race or uncertain write is returned without an implicit retry.
+Successful raw writes return revision, replies and only the affected pages in
+`ret.structure.slides`, identified by `ret.touched_slide_ids`; they return no
+layout or master collection.
 Google may generate IDs for raw `createSlide` and `duplicateObject`; the adapter
 reads those IDs from the corresponding replies. Any failure after an accepted
 write returns a managed refusal with `ret.outcome_unknown: true` and
@@ -1338,7 +1360,8 @@ retain their ordinary group representation.
 Grid readback derives tracks, gutters and spans from ordinary content boxes;
 each group counts once. It stores no layout metadata in alt text. Alignment
 currently uses a named 1.5% page-relative tolerance pending further calibration.
-Free-form or overlapping content falls back to relations and diagnostics.
+Free-form or overlapping content retains geometry diagnostics; request
+`include: ["relations"]` when pairwise position relationships are useful.
 
 `duplicate_slide_like` resolves one reference from the fresh snapshot, copies
 its elements under new IDs and places the copy relative to the original

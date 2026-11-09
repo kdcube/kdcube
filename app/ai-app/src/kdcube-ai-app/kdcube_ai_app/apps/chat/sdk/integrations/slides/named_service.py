@@ -17,6 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema import (
     action_claims,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, parse_slides_ref, presentation_id, slides_ref
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema_projection import SLIDES_SCHEMA_PROJECTION
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceProvider, NamedServiceProviderSpec, NamedServiceResponse,
     NamedServiceSearchScope, NamedServiceStreamResult,
@@ -69,6 +70,8 @@ def _materialize(request):
 
 
 class SlidesNamedServiceProvider(NamedServiceProvider):
+    schema_projection_index = SLIDES_SCHEMA_PROJECTION
+
     def __init__(self, *, execute_operation, bundle_id=None, file_url_factory=None, staging_root_factory=None, provider_fetch_url_factory=None):
         super().__init__(slides_named_service_spec(bundle_id=bundle_id))
         self._execute_operation = execute_operation

@@ -81,13 +81,17 @@ def validate_delete_targets(presentation, requests):
     for slide in presentation.get("slides", []):
         walk(slide.get("pageElements", []))
     for request in requests:
-        if "deleteObject" in request and request["deleteObject"].get("objectId") not in elements:
-            raise SlidesValidationError("slides_batch_delete_target_forbidden", "Raw deleteObject may delete only an existing page element from get_structure. Use delete_slide for slides; it preserves the last-slide guard.")
+        if "deleteObject" in request:
+            target = request["deleteObject"].get("objectId")
+            if not isinstance(target, str) or target not in elements:
+                raise SlidesValidationError("slides_batch_delete_target_forbidden", "Raw deleteObject may delete only an existing page element from get_structure. Use delete_slide for slides; it preserves the last-slide guard.")
 
 
-def structure(presentation):
+def structure(presentation, *, slide_ids=None, include=()):
     """Keep the fixed provider read mask and normalize physical geometry to EMU."""
-    result = deepcopy({key: presentation[key] for key in ("presentationId", "title", "revisionId", "pageSize", "slides", "layouts", "masters") if key in presentation})
+    result = deepcopy({key: presentation[key] for key in ("presentationId", "title", "revisionId", "pageSize", "slides", *[name for name in ("layouts", "masters") if name in include]) if key in presentation})
+    if slide_ids is not None:
+        result["slides"] = [page for page in result.get("slides", []) if page.get("objectId") in slide_ids]
     def normalize(value):
         if isinstance(value, dict):
             for key in ("contentUrl", "sourceUrl", "thumbnailUrl"):

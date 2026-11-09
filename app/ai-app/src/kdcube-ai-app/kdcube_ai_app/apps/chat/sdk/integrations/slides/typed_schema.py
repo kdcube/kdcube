@@ -21,7 +21,7 @@ def payload_schema(operation):
     if operation == "search":
         properties = {"query": {"type": "string", "maxLength": 300}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": {"type": "string"}}
     elif operation == "get":
-        properties = {"slide_selector": SELECTOR, "start_slide": {"type": "integer", "minimum": 1}, "slide_limit": {"type": "integer", "minimum": 1, "maximum": 50}, "table_start_row": {"type": "integer", "minimum": 1}, "table_row_limit": {"type": "integer", "minimum": 1, "maximum": 50}}
+        properties = {"slide_selector": SELECTOR, "start_slide": {"type": "integer", "minimum": 1}, "slide_limit": {"type": "integer", "minimum": 1, "maximum": 50}, "table_start_row": {"type": "integer", "minimum": 1}, "table_row_limit": {"type": "integer", "minimum": 1, "maximum": 50}, "include": {"type": "array", "items": {"enum": ["relations", "layouts"]}, "uniqueItems": True}}
     elif operation in ("create", "rename"):
         properties["title"] = {"type": "string", "minLength": 1, "maxLength": 1000}
         required = ["title"]

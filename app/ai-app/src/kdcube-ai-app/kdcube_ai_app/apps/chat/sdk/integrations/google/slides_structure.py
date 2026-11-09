@@ -36,7 +36,9 @@ def _fit_box(element, parent):
     }
 
 
-def snapshot(presentation, *, start=1, limit=20, table_start=1, table_limit=20):
+def snapshot(presentation, *, start=1, limit=10, table_start=1, table_limit=20, include=()):
+    if not isinstance(include, (list, tuple, set)) or any(not isinstance(value, str) or value not in {"relations", "layouts"} for value in include):
+        raise SlidesValidationError("slides_invalid_include", "Pass include as an array containing relations and/or layouts.")
     if type(start) is not int or start < 1 or type(limit) is not int or not 1 <= limit <= MAX_SLIDES:
         raise SlidesValidationError("slides_invalid_range", f"Use a 1-based start_slide and a slide_limit from 1 to {MAX_SLIDES}.")
     page = presentation.get("pageSize", {})
@@ -110,7 +112,7 @@ def snapshot(presentation, *, start=1, limit=20, table_start=1, table_limit=20):
         notes = notes[:max(0,min(MAX_ELEMENT_TEXT,budget))]
         budget -= len(notes)
         available_regions, unsupported_regions = regions(presentation, slide)
-        slides.append({"position": position, "ref": slide.get("objectId", ""), "kind": classify(elements, layout.get("layout"), title), "layout_name": layout.get("layout_name", ""), "title": title, "skipped": bool(props.get("isSkipped")), "elements": elements, "notes": notes, "notes_truncated": len(notes)<len(raw_notes), "regions": list(available_regions), "unsupported_regions": [{"region": name, **details} for name, details in unsupported_regions.items()], **_layout_read(elements,width,height)})
+        slides.append({"position": position, "ref": slide.get("objectId", ""), "kind": classify(elements, layout.get("layout"), title), "layout_name": layout.get("layout_name", ""), "title": title, "skipped": bool(props.get("isSkipped")), "elements": elements, "notes": notes, "notes_truncated": len(notes)<len(raw_notes), "regions": list(available_regions), "unsupported_regions": [{"region": name, **details} for name, details in unsupported_regions.items()], **_layout_read(elements,width,height,include_relations="relations" in include)})
     next_slide = start + len(slides)
     truncated = budget <= 0 or any(e["text_truncated"] for slide in slides for e in slide["elements"]) or any(slide["notes_truncated"] for slide in slides)
-    return {"schema": SCHEMA, "presentation": {"title": presentation.get("title", ""), "revision_id": presentation.get("revisionId", ""), "slides": len(all_slides), "page": {"aspect": f"{ratio.numerator}:{ratio.denominator}"}}, "layouts": layouts, "slides": slides, "range": {"start_slide": start, "returned": len(slides), "next_slide": next_slide if next_slide <= len(all_slides) else None}, "text_truncated": truncated}
+    return {"schema": SCHEMA, "presentation": {"title": presentation.get("title", ""), "revision_id": presentation.get("revisionId", ""), "slides": len(all_slides), "page": {"aspect": f"{ratio.numerator}:{ratio.denominator}"}}, **({"layouts": layouts} if "layouts" in include else {}), "slides": slides, "range": {"start_slide": start, "returned": len(slides), "next_slide": next_slide if next_slide <= len(all_slides) else None}, "text_truncated": truncated}

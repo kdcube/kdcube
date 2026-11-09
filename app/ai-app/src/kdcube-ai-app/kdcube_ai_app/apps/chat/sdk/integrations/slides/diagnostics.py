@@ -34,7 +34,7 @@ def _tracks(elements, axis, dimension, page_extent):
     return tracks, assignments, any(len(group) > 1 for group in groups)
 
 
-def layout_read(elements, width, height):
+def layout_read(elements, width, height, *, include_relations=False):
     top = [e for e in elements if not e.get("group_ref") and e["geometry"]["width"] > 0 and e["geometry"]["height"] > 0]
     off_slide = [e["ref"] for e in top if e["geometry"]["x"] < 0 or e["geometry"]["y"] < 0 or e["geometry"]["x"]+e["geometry"]["width"] > width or e["geometry"]["y"]+e["geometry"]["height"] > height]
     overlaps, relations = [], []
@@ -45,6 +45,8 @@ def layout_read(elements, width, height):
             if intersects(a, b):
                 overlaps.append([left["ref"], right["ref"]])
                 continue
+            if not include_relations:
+                continue
             if a["x"]+a["width"] <= b["x"]:
                 relations.append({"element": left["ref"], "left_of": right["ref"]})
             elif b["x"]+b["width"] <= a["x"]:
@@ -53,7 +55,9 @@ def layout_read(elements, width, height):
                 relations.append({"element": left["ref"], "above": right["ref"]})
             elif b["y"]+b["height"] <= a["y"]:
                 relations.append({"element": right["ref"], "above": left["ref"]})
-    result = {"relations": relations[:100], "overlaps": overlaps[:100], "off_slide": off_slide[:100], "free_regions": [], "geometry_diagnostics_truncated": len(top)>50 or len(relations)>100 or len(overlaps)>100 or len(off_slide)>100}
+    result = {"overlaps": overlaps[:100], "off_slide": off_slide[:100], "geometry_diagnostics_truncated": len(top)>50 or len(relations)>100 or len(overlaps)>100 or len(off_slide)>100}
+    if include_relations:
+        result["relations"] = relations[:100]
     # Content grids exclude title/footer placeholders. Each top-level group
     # remains a single composed box, and its children do not become tracks.
     content = [e for e in top if e.get("role") not in ("title", "date_and_time", "footer", "header", "slide_number")]
@@ -69,6 +73,9 @@ def layout_read(elements, width, height):
         cells.append({"at": [yy[0], xx[0]], "row_span": len(yy), "col_span": len(xx), "element": element["ref"]})
         occupied.update((r, c) for r in yy for c in xx)
     widths, heights = [b-a for a, b in cols], [b-a for a, b in rows]
-    result["grid"] = {"region": "content", "cols": [round(v/sum(widths), 4) for v in widths], "rows": [round(v/sum(heights), 4) for v in heights], "cells": cells}
-    result["free_regions"] = [{"at": [r, c]} for r in range(len(rows)) for c in range(len(cols)) if (r, c) not in occupied]
+    if len(cells) > 1:
+        result["grid"] = {"region": "content", "cols": [round(v/sum(widths), 4) for v in widths], "rows": [round(v/sum(heights), 4) for v in heights], "cells": cells}
+    free = [{"at": [r, c]} for r in range(len(rows)) for c in range(len(cols)) if (r, c) not in occupied]
+    if free:
+        result["free_regions"] = free
     return result

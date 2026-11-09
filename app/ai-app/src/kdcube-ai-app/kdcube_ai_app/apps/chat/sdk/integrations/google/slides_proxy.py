@@ -277,15 +277,15 @@ async def _run(api, operation, payload):
         return {"presentation_id": deck_id, "format": fmt, "mime_type": EXPORT_FORMATS[fmt], "byte_size": len(response.content), "content_base64": base64.b64encode(response.content).decode("ascii")}
     presentation = await api.get(deck_id, include_comments=True) if operation in COMMENT_ACTIONS else await api.get(deck_id)
     if operation in ("get_structure", "batch_update"):
-        return await run_native(api, operation, deck_id, presentation, requests=native[0] if native else None, revision=native[1] if native else None, preview=bool(payload.get("preview")))
+        return await run_native(api, operation, deck_id, presentation, requests=native[0] if native else None, revision=native[1] if native else None, preview=bool(payload.get("preview")), payload=payload)
     if operation == "get":
         if payload.get("slide_selector") is not None:
             selected=resolve_slide((await api.all_snapshot(presentation))["slides"],payload["slide_selector"])
-            result=snapshot(presentation,start=selected["position"],limit=1,table_start=payload.get("table_start_row", 1),table_limit=payload.get("table_row_limit", 20))
+            result=snapshot(presentation,start=selected["position"],limit=1,table_start=payload.get("table_start_row", 1),table_limit=payload.get("table_row_limit", 20),include=payload.get("include", ()))
             result["range"]["next_slide"]=None
             result["range"]["selection"]="one_slide"
         else:
-            result = snapshot(presentation, start=payload.get("start_slide", 1), limit=payload.get("slide_limit", 20), table_start=payload.get("table_start_row", 1), table_limit=payload.get("table_row_limit", 20))
+            result = snapshot(presentation, start=payload.get("start_slide", 1), limit=payload.get("slide_limit", 10), table_start=payload.get("table_start_row", 1), table_limit=payload.get("table_row_limit", 20), include=payload.get("include", ()))
         return {"presentation_id": deck_id, "title": presentation.get("title", ""), "snapshot": result, "revision_id": presentation.get("revisionId")}
     expected = payload.get("revision_id")
     if expected and expected != presentation.get("revisionId"):
