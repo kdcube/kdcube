@@ -43,7 +43,7 @@ def test_unrecognized_shapes_never_fall_back_to_search_or_call_google(operation,
     if operation == "object.search":
         assert response.ok and response.ret["items"] == []
     else:
-        assert not response.ok and response.error["code"] == "slides_presentation_not_found"
+        assert not response.ok and response.error.code == "slides_presentation_not_found"
 
 
 @pytest.mark.parametrize("operation", ["object.search", "object.get"])
@@ -51,14 +51,14 @@ def test_two_natural_selectors_are_refused(operation):
     async def execute(**_):
         pytest.fail("Conflicting selector shapes must not execute")
     response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request(operation, filters={"url": "deck", "presentation_id": "deck"})))
-    assert not response.ok and response.error["code"] == "slides_invalid_selector"
+    assert not response.ok and response.error.code == "slides_invalid_selector"
 
 
 def test_a_natural_filter_cannot_retarget_a_bound_ref():
     async def execute(**_):
         pytest.fail("A conflicting bound identity must not execute")
     response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request("object.get", object_ref="slides:google:bound:presentation:deck", filters={"url": "other"})))
-    assert not response.ok and response.error["code"] == "slides_source_mismatch"
+    assert not response.ok and response.error.code == "slides_source_mismatch"
 
 
 @pytest.mark.parametrize("operation", ["object.search", "object.get"])
@@ -69,5 +69,5 @@ def test_natural_lookup_preserves_account_required_and_labeled_candidates(operat
         return {"ok": False, "error": {"code": "needs_connected_account_consent", "message": "Choose an account"}, "consent": {"reason": "account_required", "candidates": candidates}}
     response = asyncio.run(provider(execute).dispatch(NamedServiceContext(), request(operation, filters={"presentation_id": "deck"})))
     assert not response.ok
-    assert response.error["details"]["reason"] == "account_required"
-    assert response.error["details"]["candidates"] == candidates
+    assert response.error.details["reason"] == "account_required"
+    assert response.error.details["candidates"] == candidates

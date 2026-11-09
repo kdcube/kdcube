@@ -46,4 +46,6 @@ def test_full_schema_is_explicit_and_path_read_does_not_load_action_payloads():
 def test_related_kinds_have_a_focused_read_contract(kind):
     schema = discover(object_kind=kind, schema_operation="object.get")
     assert schema["schema_projection"]["object_kind"] == kind
-    assert list(schema["operations"]) == ["object.get"]
+    assert schema["schema_projection"]["view"] == "operation"
+    assert schema["operation"]["id"] == "object.get"
+    assert "operations" not in schema and "actions" not in schema
