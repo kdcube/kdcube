@@ -1070,7 +1070,8 @@ For an exact identity, use namespace `slides` and exactly one filter `url` or
 The provider recognizes bare IDs, Google Slides `/presentation/d/<id>/…`
 and `/presentation/u/<n>/d/<id>/…` links, Drive `/file/d/<id>/…` and
 `/open?id=<id>` links. Query strings and slide fragments do not change the
-presentation identity. It makes an exact provider read and returns
+presentation identity. Published `/d/e/.../pub` handles do not identify the
+editable presentation and match nothing. The provider makes an exact read and returns
 `slides:google:<account>:presentation:<id>`. An unrecognized shape returns no
 search matches, or `slides_presentation_not_found` on get, without a provider
 call or title fallback. A missing exact search result also returns no matches;

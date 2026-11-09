@@ -28,6 +28,10 @@ def natural_presentation_id(value):
         return None
     if url.scheme != "https" or url.netloc not in ("docs.google.com", "drive.google.com"):
         return None
+    # Published /d/e/... handles are not editable presentation IDs. They cannot
+    # be translated to an account-bound deck by dropping the publish token.
+    if re.match(r"/presentation/(?:u/\d+/)?d/e/", url.path):
+        return None
     path = r"/presentation/(?:u/\d+/)?d/([A-Za-z0-9_-]+)(?:/.*)?" if url.hostname == "docs.google.com" else r"/file/d/([A-Za-z0-9_-]+)(?:/.*)?"
     match = re.fullmatch(path, url.path)
     if match:

@@ -35,7 +35,7 @@ def test_natural_lookup_returns_a_canonical_account_bound_ref(operation, selecto
 
 
 @pytest.mark.parametrize("operation", ["object.search", "object.get"])
-@pytest.mark.parametrize("value", ["not a presentation URL", "https://example.org/presentation/d/deck/edit", "https://docs.google.com.evil/presentation/d/deck/edit", "https://[", "slides:google:a:presentation:deck", None])
+@pytest.mark.parametrize("value", ["not a presentation URL", "https://example.org/presentation/d/deck/edit", "https://docs.google.com.evil/presentation/d/deck/edit", "https://docs.google.com/presentation/d/e/published-token/pub", "https://[", "slides:google:a:presentation:deck", None])
 def test_unrecognized_shapes_never_fall_back_to_search_or_call_google(operation, value):
     async def execute(**_):
         pytest.fail("An invalid selector must not resolve credentials or search titles")
