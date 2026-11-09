@@ -4,9 +4,12 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
+from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_fit import shape_text
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.layouts import walk
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import (
     SlidesValidationError, resolve_slide, resolve_element,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.text_selection import match_range, select_text_match, text_matches
 
 MAX_REPLACEMENTS = 100
 MAX_REPLACEMENT_TEXT = 20_000
@@ -49,12 +52,68 @@ def selected_slides(snapshot, payload):
     return list({s["ref"]: s for s in found}.values())
 
 
-def replace_text_requests(snapshot, payload):
+def _occurrence_replacement(slides, payload, values, presentation):
+    if len(values) != 1:
+        raise SlidesValidationError("slides_invalid_replacements", "An occurrence selects one literal replacement. Pass one replacements entry.")
+    old, new = next(iter(values.items()))
+    if payload.get("element") is not None and len(slides) != 1:
+        raise SlidesValidationError("slides_element_ambiguous", "Name one slide when selecting an element.")
+    raw = {s["objectId"]: s for s in presentation.get("slides", [])} if presentation is not None else {}
+
+    def matches():
+        for slide in sorted(slides, key=lambda s: s["position"]):
+            elements = [resolve_element(slide, payload["element"])] if payload.get("element") is not None else slide["elements"]
+            native = {e["objectId"]: e for e in walk(raw.get(slide["ref"], {}).get("pageElements", []))}
+            for element in elements:
+                identity = element.get("_content_ref", element["ref"])
+                where = {"slide": slide["ref"], "element": element["ref"]}
+                target = {"objectId": identity}
+                if element["kind"] in ("shape", "callout"):
+                    if element.get("text_truncated") and not native:
+                        raise SlidesValidationError("slides_element_not_editable", "Read untruncated text before selecting its occurrence.")
+                    text = shape_text(native[identity]["shape"]) if identity in native else element.get("text", "")
+                    yield from text_matches(text, old, where, match_case=payload.get("match_case", True), target=target)
+                elif element["kind"] == "table":
+                    if identity in native:
+                        # Local import avoids the tables -> editing -> templates cycle.
+                        from kdcube_ai_app.apps.chat.sdk.integrations.slides.tables import table_record
+                        table = table_record(native[identity])
+                        cells = ((r+1, c+1, cell) for r, row in enumerate(table["cells"]) for c, cell in enumerate(row))
+                    else:
+                        table = element.get("table", {})
+                        if table.get("text_truncated") or table.get("next_row"):
+                            raise SlidesValidationError("slides_element_not_editable", "Read a complete table before selecting its text occurrence.")
+                        cells = ((row["row"], cell["column"], cell) for row in table.get("cells", []) for cell in row["cells"])
+                    for r, c, cell in cells:
+                        location = {"rowIndex": r-1, "columnIndex": c-1}
+                        yield from text_matches(cell["text"], old, {**where, "table": element["ref"], "row": r, "column": c}, match_case=payload.get("match_case", True), target={**target, "cellLocation": location}, merged=cell.get("merged", False))
+
+    chosen = select_text_match(matches(), payload["occurrence"])
+    if chosen.get("merged"):
+        raise SlidesValidationError("slides_table_cell_merged", "Select text in an unmerged table cell.", details={"where": chosen["where"]})
+    text, match = chosen["text"], chosen["match"]
+    updated = text[:match.start()] + new + text[match.end():]
+    if len(updated) > 100_000:
+        raise SlidesValidationError("slides_text_too_large", "Keep targeted element or cell text within 100000 characters.")
+    bounds, target = match_range(chosen), chosen["target"]
+    requests = []
+    if match.group() != new:
+        requests.append({"deleteText": {**target, "textRange": bounds}})
+        if new:
+            requests.append({"insertText": {**target, "text": new, "insertionIndex": bounds["startIndex"]}})
+    return requests, [{**chosen["where"], "occurrence": chosen["occurrence"], "before": text[:12000], "after": updated[:12000], "before_truncated": len(text)>12000, "after_truncated": len(updated)>12000}]
+
+
+def replace_text_requests(snapshot, payload, *, presentation=None):
     values = _replacements(payload)
     slides = selected_slides(snapshot, payload)
     page_ids = [s["ref"] for s in slides]
     if not page_ids:
         raise SlidesValidationError("slides_slide_not_found", "This presentation has no slides to edit.")
+    if "occurrence" in payload:
+        if payload["occurrence"] is None:
+            raise SlidesValidationError("slides_invalid_occurrence", "occurrence must be a positive 1-based integer.")
+        return _occurrence_replacement(slides, payload, values, presentation)
     if payload.get("element") is not None:
         if len(slides) != 1:
             raise SlidesValidationError("slides_element_ambiguous", "Name one slide when replacing text within an element.")

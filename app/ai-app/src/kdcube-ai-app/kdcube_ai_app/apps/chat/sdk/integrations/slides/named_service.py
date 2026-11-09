@@ -16,7 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema import (
     SLIDES_ACTIONS, SLIDES_CONNECTED_ACCOUNT_REQUIREMENTS, CLAIMS_BY_OPERATION,
     action_claims,
 )
-from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, parse_slides_ref, presentation_id, slides_ref
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, natural_selector, parse_slides_ref, presentation_id, slides_ref
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema_projection import SLIDES_SCHEMA_PROJECTION
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceProvider, NamedServiceProviderSpec, NamedServiceResponse,
@@ -117,7 +117,11 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
 
     async def _search(self, request, query):
         account = str(request.filters.get("account_id") or "")
-        result, error = await self._execute(request, "search", {"query": query, "limit": request.limit or 20, "cursor": request.cursor or ""}, account)
+        exact, deck_id = natural_selector(request.filters)
+        if exact and not deck_id:
+            return NamedServiceResponse.ok_response(namespace="slides", items=[], extra={"incomplete_search": False})
+        payload = {"presentation_id": deck_id} if exact else {"query": query, "limit": request.limit or 20, "cursor": request.cursor or ""}
+        result, error = await self._execute(request, "search", payload, account)
         if error is not None:
             return error
         account = result.get("account_id") or account
@@ -126,6 +130,13 @@ class SlidesNamedServiceProvider(NamedServiceProvider):
     async def object_get(self, ctx, request):
         payload = dict(request.filters or {})
         account, deck_id, parsed = _input(request, payload)
+        exact, natural_id = natural_selector(payload)
+        if exact:
+            if not natural_id:
+                raise SlidesValidationError("slides_presentation_not_found", "That selector is not a recognized Google Slides URL or presentation ID.", details={"candidates": []})
+            if deck_id and deck_id != natural_id:
+                raise SlidesValidationError("slides_source_mismatch", "The natural selector must match the account-bound object_ref.")
+            deck_id = natural_id
         if parsed and parsed["kind"] in ("export", "thumbnail"):
             return await self._artifact(ctx, request, parsed, materialize=_materialize(request))
         if parsed and parsed["kind"] == "slide":

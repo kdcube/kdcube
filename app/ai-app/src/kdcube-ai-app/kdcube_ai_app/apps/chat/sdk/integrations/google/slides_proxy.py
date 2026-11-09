@@ -231,6 +231,17 @@ async def _run(api, operation, payload):
         raise SlidesValidationError("slides_unsupported_operation", "Choose an operation declared by the Slides schema.")
     native = validate_batch(payload) if operation == "batch_update" else None
     if operation == "search":
+        if "presentation_id" in payload:
+            deck_id = presentation_id(payload["presentation_id"])
+            try:
+                row = await api.request("GET", f"{SLIDES_API}/presentations/{deck_id}", operation="search", params={"fields": "presentationId,title,revisionId"})
+            except _ProviderError as exc:
+                if exc.failure.provider_status != 404:
+                    raise
+                return {"items": [], "incomplete_search": False}
+            if row.get("presentationId") != deck_id:
+                raise SlidesValidationError("google_slides_invalid_response", "Google returned a different presentation identity.")
+            return {"items": [{"presentation_id": deck_id, "title": row.get("title", ""), "revision_id": row.get("revisionId")}], "incomplete_search": False}
         query = str(payload.get("query") or "")
         if len(query) > 300:
             raise SlidesValidationError("slides_invalid_query", "Use a title query of at most 300 characters.")
@@ -350,7 +361,7 @@ async def _run(api, operation, payload):
             _title(payload.get("title"))
             requests, plan = template_requests(view, payload)
         elif operation == "replace_text":
-            requests, plan = replace_text_requests(view, payload)
+            requests, plan = replace_text_requests(view, payload, presentation=presentation)
         else:
             requests, plan = image_requests(view, payload), {"tag": payload.get("tag", payload.get("text"))}
         if payload.get("preview"):

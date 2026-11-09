@@ -1058,6 +1058,27 @@ new claim before comment writes can run. The descriptor catalogs declare the
 claim, connector allowed claim, capability and every exact named-service action.
 
 Start with `object.search` and the title, or `object.list` for recent decks.
+For an exact identity, use namespace `slides` and exactly one filter `url` or
+`presentation_id` on `object.search` or `object.get`, without an `object_ref`:
+
+```json
+{"namespace":"slides","operation":"object.search",
+ "filters":{"url":"https://docs.google.com/presentation/d/<id>/edit?slide=id.s1",
+            "account_id":"<connected account>"}}
+```
+
+The provider recognizes bare IDs, Google Slides `/presentation/d/<id>/…`
+and `/presentation/u/<n>/d/<id>/…` links, Drive `/file/d/<id>/…` and
+`/open?id=<id>` links. Query strings and slide fragments do not change the
+presentation identity. It makes an exact provider read and returns
+`slides:google:<account>:presentation:<id>`. An unrecognized shape returns no
+search matches, or `slides_presentation_not_found` on get, without a provider
+call or title fallback. A missing exact search result also returns no matches;
+authorization and rate-limit failures stay errors. Multiple eligible accounts
+return `account_required` and labeled candidates; retry with `account_id`.
+A bound ref fixes the account and cannot be retargeted by a natural filter.
+URLs remain provider inputs rather than canonical refs or routing patterns.
+
 `object.get` returns `kdcube.slides.snapshot.v1`: presentation title/revision,
 slide titles, element roles and text, notes, rotation and fit
 flags. Layout words follow Google's predefined names in lower case. PPTX
@@ -1100,11 +1121,11 @@ adapter; agents use returned refs, roles and relations.
 | `thumbnail` | one `slide` selector; `size: SMALL`, `MEDIUM` or `LARGE` |
 | `copy` | `source` ref/link and a new `title`; optional `parent_id` |
 | `fill_template` | `source`, new `title`, `values` and optional `images` maps keyed by tag |
-| `replace_text` | literal `replacements`; optional `slides` selectors, or one `slide` plus `element` |
+| `replace_text` | literal `replacements`; optional `slides` selectors, or one `slide` plus `element`; optional 1-based `occurrence` for one replacement pair |
 | `replace_shapes_with_image` | `tag` or literal `text`, `image_uri` or `file_ref`, optional slide selectors and `fit` |
 | `add_slide` | one `layout` word or exact `layout_name`; optional `title`, `subtitle`, `body`, `body_2`, `notes`, `before` or `after` |
 | `set_text` | one `slide` and `element`, `text` or `items`, `mode: replace` or `append` |
-| `style_text` | one `slide` and `element`, unique `quoted_text`, `style` with bold/italic, font_size_pt, color or link |
+| `style_text` | one `slide` and `element`, `quoted_text`, optional 1-based `occurrence`, `style` with bold/italic, font_size_pt, color or link |
 | `set_notes` | one `slide`, `notes` text, optional replace/append `mode` |
 | `move_slide` | `slide` or `slides` selectors and one `before` or `after` selector |
 | `delete_slide` | `slide` or `slides` selectors; at least one slide must remain |
@@ -1219,8 +1240,8 @@ matches. For a larger presentation, page the list and pass its exact ref.
 | Presentation file | no target fields |
 | Slide | `slide` selector |
 | Element | `slide` and `element` selectors |
-| Shape text | unique `quoted_text`, optionally narrowed by slide and element |
-| Table cell | `slide`, `table`, `row`, `column`, optional `header` and `quoted_text` |
+| Shape text | `quoted_text`, optional `occurrence`, optionally narrowed by slide and element |
+| Table cell | `slide`, `table`, `row`, `column`, optional `header`, `quoted_text` and `occurrence` |
 | Table range | `slide`, `table`, `table_range: {from: {row, column}, to: {row, column}}` |
 
 A range is a requested target rather than a durable Google anchor kind. In
@@ -1236,6 +1257,12 @@ than falling back to a file comment. A cell must contain text; a range must
 contain text in at least one cell. Empty targets return
 `slides_comment_target_empty` before a provider mutation. Text offsets are
 computed as UTF-16 units; agents supply quoted text and selectors.
+Repeated quoted text requires a 1-based `occurrence` within the selected
+scope. Shape matches follow slide and element order; a cell selector counts
+only within that cell. Ambiguity returns up to 20 candidates shaped as
+`{occurrence, where, context}`, each context at most 80 characters, with
+`occurrences` and `candidates_truncated`. `where` names the slide and element,
+or the table, row and column. An occurrence without quoted text is refused.
 
 Anchored creation, reply, edit and deletion use Slides comment requests;
 file comments use Drive. Only the head post's author can edit or delete a
@@ -1399,6 +1426,13 @@ preserving styling in untouched runs. The adapter resolves UTF-16 ranges from
 the fresh text and applies occurrences from last to first. Replacement-map
 entries apply in their supplied order; `match_case` defaults to true. Targeted
 edits are bounded to 1000 requests, and preview uses the same ranges.
+Bulk replacement remains the default. To change one literal match, pass one
+`replacements` entry and `occurrence`. Matches follow document order across
+the selected slides, elements and table cells. The selected range alone is
+deleted and inserted; other matches and styled runs are preserved. Merged
+cells are refused. An out-of-range occurrence returns bounded context
+candidates rather than choosing another match. Shape and cell text after a
+targeted replacement is bounded to 100,000 characters.
 
 `add_slide` resolves the theme layout on the fresh read at the insertion
 position. Google layout names take precedence over the supported PowerPoint
@@ -1411,7 +1445,9 @@ deleted unless `keep_empty_placeholders: true`, in which case it appears in
 
 `set_text` replaces the selected element or appends before its implicit
 terminal newline. `style_text` resolves a quoted phrase internally using
-UTF-16 offsets; the phrase must occur exactly once. Its style accepts
+UTF-16 offsets. Pass an optional 1-based `occurrence` to choose repeated text.
+Without it, repeated text returns the same bounded context candidates as
+comment anchors. Its style accepts
 `bold`/`italic` booleans, `font_size_pt`, `color: "#RRGGBB"` and `link`.
 Slide moves use the current order even when selectors are reversed or repeated.
 

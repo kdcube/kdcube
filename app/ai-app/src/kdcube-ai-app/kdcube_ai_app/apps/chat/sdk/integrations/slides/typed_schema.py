@@ -10,6 +10,8 @@ COMMON = {"preview": {"type": "boolean"}, "revision_id": {"type": "string"}}
 SLIDE = {"slide": SELECTOR}
 ELEMENT = {**SLIDE, "element": SELECTOR}
 ITEMS = {"type": "array", "maxItems": 1000, "items": {"type": "string"}}
+NATURAL = {key: {"type": "string", "minLength": 1, "maxLength": 4096, "description": "Exact Google Slides URL or presentation ID; no title-search fallback. Choose url or presentation_id, not both."} for key in ("url", "presentation_id")}
+OCCURRENCE = {"type": "integer", "minimum": 1, "description": "1-based literal match in document order within the selected scope."}
 
 
 def payload_schema(operation):
@@ -19,7 +21,7 @@ def payload_schema(operation):
     properties = dict(COMMON)
     required = []
     if operation == "search":
-        properties = {"query": {"type": "string", "maxLength": 300}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": {"type": "string"}}
+        properties = {**NATURAL, "query": {"type": "string", "maxLength": 300}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": {"type": "string"}}
     elif operation == "get":
         properties = {"slide_selector": SELECTOR, "start_slide": {"type": "integer", "minimum": 1}, "slide_limit": {"type": "integer", "minimum": 1, "maximum": 50}, "table_start_row": {"type": "integer", "minimum": 1}, "table_row_limit": {"type": "integer", "minimum": 1, "maximum": 50}, "include": {"type": "array", "items": {"enum": ["relations", "layouts"]}, "uniqueItems": True}}
     elif operation in ("create", "rename"):
@@ -36,7 +38,7 @@ def payload_schema(operation):
         properties = {**SLIDE, "size": {"enum": ["SMALL", "MEDIUM", "LARGE"]}}
         required = ["slide"]
     elif operation == "replace_text":
-        properties.update({**ELEMENT, "slides": {"type": "array", "items": SELECTOR}, "replacements": {"type": "object", "minProperties": 1, "additionalProperties": TEXT}})
+        properties.update({**ELEMENT, "occurrence": OCCURRENCE, "match_case": {"type": "boolean", "default": True}, "slides": {"type": "array", "items": SELECTOR}, "replacements": {"type": "object", "minProperties": 1, "additionalProperties": TEXT}})
         required = ["replacements"]
     elif operation == "replace_shapes_with_image":
         properties.update({**SLIDE, "slides": {"type": "array", "items": SELECTOR}, "tag": TEXT, "text": TEXT, "image_uri": {"type": "string"}, "file_ref": {"type": "string"}, "fit": {"enum": ["CENTER_INSIDE", "CENTER_CROP"]}})
@@ -47,7 +49,7 @@ def payload_schema(operation):
         if operation == "set_text":
             properties.update({"text": TEXT, "items": ITEMS, "mode": {"enum": ["replace", "append"]}})
         elif operation == "style_text":
-            properties.update({"quoted_text": TEXT, "style": object_schema({"bold": {"type": "boolean"}, "italic": {"type": "boolean"}, "font_size_pt": {"type": "number"}, "color": TEXT, "link": TEXT}, minProperties=1)})
+            properties.update({"quoted_text": TEXT, "occurrence": OCCURRENCE, "style": object_schema({"bold": {"type": "boolean"}, "italic": {"type": "boolean"}, "font_size_pt": {"type": "number"}, "color": TEXT, "link": TEXT}, minProperties=1)})
             required = ["element", "quoted_text", "style"]
         else:
             properties.update({"title": TEXT, "description": TEXT})
@@ -67,7 +69,9 @@ def payload_schema(operation):
         properties.update({"source_file": TEXT, "file_ref": TEXT, "title": TEXT, "parent_id": TEXT})
     elif operation not in ("trash", "restore"):
         raise ValueError(f"Unknown typed Slides operation: {operation}")
-    return object_schema(properties, required=required)
+    if operation in ("search", "get"):
+        properties.update(NATURAL)
+    return object_schema(properties, required=required, **({"not": {"required": ["url", "presentation_id"]}} if operation in ("search", "get") else {}))
 
 
 TYPED_OPERATIONS = ("search", "get", "create", "rename", *SLIDES_ACTIONS)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 class SlidesValidationError(ValueError):
@@ -11,6 +11,39 @@ class SlidesValidationError(ValueError):
         super().__init__(message)
         self.code = code
         self.details = dict(details or {})
+
+
+def natural_presentation_id(value):
+    """Recognize a provider-owned exact selector; never fetch a supplied URL."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if len(text) > 4096:
+        return None
+    if re.fullmatch(r"[A-Za-z0-9_-]+", text):
+        return text
+    try:
+        url = urlparse(text)
+    except ValueError:
+        return None
+    if url.scheme != "https" or url.netloc not in ("docs.google.com", "drive.google.com"):
+        return None
+    path = r"/presentation/(?:u/\d+/)?d/([A-Za-z0-9_-]+)(?:/.*)?" if url.hostname == "docs.google.com" else r"/file/d/([A-Za-z0-9_-]+)(?:/.*)?"
+    match = re.fullmatch(path, url.path)
+    if match:
+        return match.group(1)
+    if url.path.rstrip("/") in ("/open", "/presentation"):
+        ids = parse_qs(url.query).get("id", [])
+        if len(ids) == 1 and re.fullmatch(r"[A-Za-z0-9_-]+", ids[0]):
+            return ids[0]
+    return None
+
+
+def natural_selector(filters):
+    names = {"url", "presentation_id"} & filters.keys()
+    if len(names) > 1:
+        raise SlidesValidationError("slides_invalid_selector", "Pass exactly one of url or presentation_id.")
+    return bool(names), natural_presentation_id(filters[next(iter(names))]) if names else None
 
 
 def presentation_id(value):

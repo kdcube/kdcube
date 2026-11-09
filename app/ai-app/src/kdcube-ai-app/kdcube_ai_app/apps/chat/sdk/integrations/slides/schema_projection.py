@@ -1,16 +1,25 @@
 """Progressive presentation capability discovery, using the shared projector."""
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.schema import SLIDES_ACTIONS, SLIDES_PRESENTATION
 
+SLIDE_ACTIONS = [action for action in SLIDES_ACTIONS if action not in {"copy", "fill_template", "export", "add_slide", "import", "trash", "restore"}]
+
+
+def _kinds(operation):
+    if operation == "object.get":
+        return ("slides.presentation", "slides.slide", "slides.export", "slides.thumbnail")
+    return ("slides.presentation", "slides.slide") if operation in SLIDE_ACTIONS else ("slides.presentation",)
+
 
 def _node(identity, label, description, keywords, operations):
     return {
         "id": identity, "label": label, "description": description,
         "keywords": keywords, "object_kind": "slides.presentation",
         "operations": [
-            {"schema_operation": operation if operation.startswith("object.") else f"object.action:{operation}",
+            {"object_kind": kind,
+             "schema_operation": operation if operation.startswith("object.") else f"object.action:{operation}",
              "label": SLIDES_PRESENTATION[operation]["label"],
              "description": SLIDES_PRESENTATION[operation]["description"]}
-            for operation in operations
+            for operation in operations for kind in _kinds(operation)
         ],
     }
 
@@ -59,7 +68,7 @@ SLIDES_SCHEMA_PROJECTION = {
             "refs": ["slide"], "selectors": ["slide", "element", "object_schema"],
             "related_kinds": ["slides.presentation", "slides.thumbnail"],
             "operations": {"object.get": {"sections": ["get", "pagination"]}},
-            "actions": [action for action in SLIDES_ACTIONS if action not in {"copy", "fill_template", "export", "add_slide", "import", "trash", "restore"}],
+            "actions": SLIDE_ACTIONS,
         },
         "slides.export": {"refs": ["export"], "related_kinds": ["slides.presentation"], "operations": {"object.get": {"sections": ["materialization"]}}},
         "slides.thumbnail": {"refs": ["thumbnail"], "related_kinds": ["slides.slide"], "operations": {"object.get": {"sections": ["materialization"]}}},

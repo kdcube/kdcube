@@ -9,6 +9,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_structure import sha
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.layouts import create_slide_plan, insertion_index, walk
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, resolve_slide, resolve_element
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.templates import selected_slides
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.text_selection import match_range, select_text_match, text_matches
 
 EDIT_ACTIONS = frozenset({"add_slide", "set_text", "style_text", "set_notes", "move_slide", "delete_slide", "skip_slide"})
 MAX_TEXT = 100_000
@@ -149,11 +150,8 @@ def compile_edit(presentation, view, action, payload):
     quoted = payload.get("quoted_text")
     if not isinstance(quoted, str) or not quoted or len(quoted) > MAX_TEXT:
         raise SlidesValidationError("slides_invalid_text_span", "Pass quoted_text from the selected element.")
-    matches = list(re.finditer(re.escape(quoted), current))
-    if len(matches) != 1:
-        raise SlidesValidationError("slides_text_ambiguous" if matches else "slides_text_not_found", "Quote text that occurs exactly once in the selected element.")
+    chosen = select_text_match(text_matches(current, quoted, {"slide": slide["ref"], "element": element["ref"]}), payload.get("occurrence"))
     patch = style(payload.get("style"))
-    match = matches[0]
-    bounds = {"type": "FIXED_RANGE", "startIndex": utf16_len(current[:match.start()]), "endIndex": utf16_len(current[:match.end()])}
+    bounds = match_range(chosen)
     request = {"updateTextStyle": {"objectId": target_id, "textRange": bounds, "style": patch, "fields": ",".join(patch)}}
-    return [request], {"slide": slide["ref"], "ref": element["ref"], "quoted_text": quoted[:12000], "style": dict(payload["style"]), "before": current[:12000], "after": current[:12000]}
+    return [request], {"slide": slide["ref"], "ref": element["ref"], "quoted_text": quoted[:12000], "occurrence": chosen["occurrence"], "style": dict(payload["style"]), "before": current[:12000], "after": current[:12000]}

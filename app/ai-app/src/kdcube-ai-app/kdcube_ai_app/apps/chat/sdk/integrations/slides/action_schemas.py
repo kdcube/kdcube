@@ -90,7 +90,7 @@ def s3_payload_schema(action):
         if action == "resolve_comment":
             properties["content"] = {"type": "string", "minLength": 1, "maxLength": 2048, "description": "Optional native resolution reply text; defaults to Resolved. At most 2048 UTF-8 bytes."}
         if action == "create_comment":
-            properties.update({**_TABLE_SELECTION, **_CELL["properties"], "element": _SELECTOR, "quoted_text": {"type": "string", "minLength": 1}, "table_range": object_schema({"from": _CELL, "to": _CELL}, required=("from", "to"))})
+            properties.update({**_TABLE_SELECTION, **_CELL["properties"], "element": _SELECTOR, "quoted_text": {"type": "string", "minLength": 1}, "occurrence": {"type": "integer", "minimum": 1, "description": "1-based literal match in the selected shape scope or table cell; requires quoted_text."}, "table_range": object_schema({"from": _CELL, "to": _CELL}, required=("from", "to"))})
             properties.pop("comment_ref")
             properties.pop("comment_selector")
         if action == "list_comments":

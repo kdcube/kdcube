@@ -2,19 +2,19 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 
 from kdcube_ai_app.apps.chat.sdk.integrations.google.slides_fit import shape_text
-from kdcube_ai_app.apps.chat.sdk.integrations.slides.editing import content, utf16_len
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.editing import content
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.layouts import walk
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.selectors import SlidesValidationError, resolve_element, resolve_slide
 from kdcube_ai_app.apps.chat.sdk.integrations.slides.tables import cell_location, resolve_table
+from kdcube_ai_app.apps.chat.sdk.integrations.slides.text_selection import match_range, select_text_match, text_matches
 
 READ_COMMENTS = frozenset({"list_comments", "get_comment"})
 WRITE_COMMENTS = frozenset({"create_comment", "reply_comment", "update_comment", "resolve_comment", "delete_comment"})
 COMMENT_ACTIONS = READ_COMMENTS | WRITE_COMMENTS
-TARGET_KEYS = frozenset({"slide", "element", "quoted_text", "table", "row", "column", "table_range"})
+TARGET_KEYS = frozenset({"slide", "element", "quoted_text", "occurrence", "table", "row", "column", "table_range"})
 
 
 def comment_content(value):
@@ -26,18 +26,16 @@ def comment_content(value):
     return value
 
 
-def quote_range(text, quote):
+def quote_range(text, quote, *, occurrence=None, where=None):
     if not isinstance(quote, str) or not quote:
         raise SlidesValidationError("slides_comment_target_required", "Pass nonempty quoted_text from the intended shape or cell.")
-    matches = list(re.finditer(re.escape(quote), text))
-    if len(matches) != 1:
-        raise SlidesValidationError("slides_text_ambiguous" if matches else "slides_text_not_found", "Choose text occurring exactly once in the selected target.")
-    match = matches[0]
-    return {"type": "FIXED_RANGE", "startIndex": utf16_len(text[:match.start()]), "endIndex": utf16_len(text[:match.end()])}
+    return match_range(select_text_match(text_matches(text, quote, where or {}), occurrence))
 
 
 def compile_anchor(presentation, view, payload):
     named = TARGET_KEYS & payload.keys()
+    if "occurrence" in named and "quoted_text" not in named:
+        raise SlidesValidationError("slides_comment_target_required", "occurrence requires quoted_text.")
     if not named:
         return None, {"scope": "file"}
     if "table" in named:
@@ -67,7 +65,7 @@ def compile_anchor(presentation, view, payload):
         text = table["cells"][r][c]["text"]
         if not text.strip():
             raise SlidesValidationError("slides_comment_target_empty", "Add text to the cell before anchoring a comment to it.")
-        bounds = quote_range(text, payload["quoted_text"]) if "quoted_text" in named else {"type": "ALL"}
+        bounds = quote_range(text, payload["quoted_text"], occurrence=payload.get("occurrence"), where={**common, "row": r+1, "column": c+1}) if "quoted_text" in named else {"type": "ALL"}
         return {"tableCellTextAnchor": {"objectId": identity, "cellLocation": {"rowIndex": r, "columnIndex": c}, "textRange": bounds}}, {**common, "scope": "cell", "row": r+1, "column": c+1}
     if {"row", "column", "table_range"} & named:
         raise SlidesValidationError("slides_comment_target_required", "A cell or range comment needs a table selector.")
@@ -78,21 +76,18 @@ def compile_anchor(presentation, view, payload):
         quote = payload["quoted_text"]
         if not isinstance(quote, str) or not quote:
             raise SlidesValidationError("slides_comment_target_required", "Pass nonempty quoted_text.")
-        matches = []
-        for slide in slides:
-            elements = [resolve_element(slide, payload["element"])] if "element" in named else [e for e in slide["elements"] if e["kind"] in ("shape", "callout")]
-            raw_slide = next(s for s in presentation["slides"] if s["objectId"] == slide["ref"])
-            raw = {e["objectId"]: e for e in walk(raw_slide.get("pageElements", []))}
-            for element in elements:
-                identity = element.get("_content_ref", element["ref"])
-                if "shape" not in raw[identity]:
-                    continue
-                text = shape_text(raw[identity]["shape"])
-                matches.extend((slide, identity, text) for _ in re.finditer(re.escape(quote), text))
-        if len(matches) != 1:
-            raise SlidesValidationError("slides_text_ambiguous" if matches else "slides_text_not_found", "Narrow quoted_text to one occurrence with a slide and element selector.")
-        slide, identity, text = matches[0]
-        return {"shapeTextAnchor": {"objectId": identity, "textRange": quote_range(text, quote)}}, {"scope": "text", "slide": slide["ref"], "element": identity, "quoted_text": quote}
+        def matches():
+            for slide in slides:
+                elements = [resolve_element(slide, payload["element"])] if "element" in named else [e for e in slide["elements"] if e["kind"] in ("shape", "callout")]
+                raw_slide = next(s for s in presentation["slides"] if s["objectId"] == slide["ref"])
+                raw = {e["objectId"]: e for e in walk(raw_slide.get("pageElements", []))}
+                for element in elements:
+                    identity = element.get("_content_ref", element["ref"])
+                    if "shape" in raw[identity]:
+                        where = {"slide": slide["ref"], "element": element["ref"]}
+                        yield from text_matches(shape_text(raw[identity]["shape"]), quote, where, identity=identity)
+        chosen = select_text_match(matches(), payload.get("occurrence"))
+        return {"shapeTextAnchor": {"objectId": chosen["identity"], "textRange": match_range(chosen)}}, {"scope": "text", **chosen["where"], "quoted_text": quote, "occurrence": chosen["occurrence"]}
     slide = slides[0]
     element = resolve_element(slide, payload["element"]) if "element" in named else None
     return {"objectId": element["ref"] if element else slide["ref"]}, {"scope": "element" if element else "page", "slide": slide["ref"], **({"element": element["ref"]} if element else {})}
