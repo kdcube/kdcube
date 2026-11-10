@@ -128,6 +128,27 @@ transport sizes its message buffer from `max_message_bytes` when it starts.
 The web proxy's `client_max_body_size` and the model provider's own request
 limits still apply above these caps.
 
+The runtime browser config (`GET /api/cp-frontend-config`) publishes the
+configured caps as `attachments.maxImageBytes`, `maxDocBytes` and
+`maxMessageBytes`. The chat web app refuses a file over its cap in the picker
+and names the file and the limit, instead of uploading bytes ingress will
+reject. Its chat submit requests are bounded (60 s, plus time proportional to
+the attachment size), so a stalled upload fails the turn with a readable error.
+
+A deployment whose users attach phone photos can let the browser shrink them:
+
+```yaml
+frontend:
+  config:
+    attachments:
+      compressImages: true   # default false
+```
+
+With it on, an image above 90% of `max_image_bytes` is scaled to at most
+2048 px on its longer edge and re-encoded as JPEG before the upload; the picker
+then holds such images only to `max_message_bytes`. A browser that cannot
+decode the image sends the original, and the server cap decides.
+
 When composing messages, `build_attachment_message_blocks(...)` in
 `kdcube_ai_app/apps/chat/sdk/runtime/files_and_attachments.py` produces
 multimodal content blocks for LLMs. These appear in the React toolchain.

@@ -72,6 +72,7 @@ export const selectAuthCookieName = (state: RootState) => state.chatSettings.set
 export const selectIdCookieName = (state: RootState) => state.chatSettings.settings.idCookieName
 export const selectAuthCookieOpts = (state: RootState) => state.chatSettings.settings.authCookieOpts
 export const selectStreamIdHeaderName = (state: RootState) => state.chatSettings.settings.streamIdHeaderName
+export const selectAttachmentSettings = (state: RootState) => state.chatSettings.settings.attachments
 export const selectPlatformVersion = (state: RootState) => state.chatSettings.settings.versions?.platform ?? null
 export const selectIdTokenHeaderName = (state: RootState) => {
     return ((state.chatSettings.settings.auth as unknown) as Record<string, string | undefined>).idTokenHeaderName ?? null

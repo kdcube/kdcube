@@ -13,6 +13,7 @@ import {
     chatSubmitErrorFromResponse,
     ConvStatusEnvelope
 } from "./chatBase.ts";
+import {CHAT_SUBMIT_TIMEOUT_MS, chatUploadTimeoutMs, fetchWithTimeout} from "../../utils/fetchWithTimeout.ts";
 
 import {v4 as uuidv4} from "uuid";
 import {ChatServiceEnvelope} from "../chat/serviceEventTypes.ts";
@@ -143,17 +144,28 @@ class SSEChat extends ChatBase {
 
             const headers = makeHeaders(); // auth headers, no content-type for FormData
 
-            const res = await fetch(url, {method: "POST", headers, body: form, credentials: "include"});
+            const uploadBytes = attachments.reduce((total, file) => total + (file.size || 0), 0);
+            const res = await fetchWithTimeout(
+                url,
+                {method: "POST", headers, body: form, credentials: "include"},
+                chatUploadTimeoutMs(uploadBytes),
+                "Message upload",
+            );
             if (!res.ok) throw await chatSubmitErrorFromResponse(res);
             return assertChatSubmitAccepted(await res.json());
         } else {
             const headers = makeHeaders({"Content-Type": "application/json"});
-            const res = await fetch(url, {
-                method: "POST",
-                headers,
-                body: JSON.stringify(eventSubmission),
-                credentials: "include"
-            });
+            const res = await fetchWithTimeout(
+                url,
+                {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify(eventSubmission),
+                    credentials: "include"
+                },
+                CHAT_SUBMIT_TIMEOUT_MS,
+                "Message submit",
+            );
             if (!res.ok) throw await chatSubmitErrorFromResponse(res);
             return assertChatSubmitAccepted(await res.json());
         }

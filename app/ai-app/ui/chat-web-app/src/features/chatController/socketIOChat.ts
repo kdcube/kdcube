@@ -13,6 +13,7 @@ import {
     ChatStartEnvelope,
     ChatStepEnvelope
 } from "./chatBase.ts";
+import {CHAT_SUBMIT_TIMEOUT_MS, chatUploadTimeoutMs, RequestTimeoutError} from "../../utils/fetchWithTimeout.ts";
 import {Manager, Socket} from "socket.io-client";
 import {ChatServiceEnvelope} from "../chat/serviceEventTypes.ts";
 import {v4 as uuidv4} from "uuid";
@@ -237,7 +238,21 @@ class SocketIOChat extends ChatBase {
         }
 
         const data = files.map(value => value.data)
-        return assertChatSubmitAccepted(await this._socket.emitWithAck("chat_message", eventSubmission, ...data));
+        const uploadBytes = data.reduce((total, buffer) => total + buffer.byteLength, 0);
+        // A message larger than the server's buffer closes the connection
+        // without an ack; bound the wait so the turn fails instead of hanging.
+        const timeoutMs = uploadBytes > 0 ? chatUploadTimeoutMs(uploadBytes) : CHAT_SUBMIT_TIMEOUT_MS;
+        let ack: unknown;
+        try {
+            ack = await this._socket.timeout(timeoutMs).emitWithAck("chat_message", eventSubmission, ...data);
+        } catch (err) {
+            // socket.io rejects a timed-out ack with "operation has timed out".
+            if (err instanceof Error && /timed out/i.test(err.message)) {
+                throw new RequestTimeoutError(uploadBytes > 0 ? "Message upload" : "Message submit", timeoutMs);
+            }
+            throw err;
+        }
+        return assertChatSubmitAccepted(ack);
     }
 
     public override async requestConvStatus(conversationId: string) {

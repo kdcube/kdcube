@@ -3,6 +3,8 @@ import {ChatBase, ChatEventHandlers, ChatMessage, ChatRequest,} from "../chatCon
 import {AppDispatch, AppStore, RootState} from "../../app/store.ts";
 import SocketIOChat from "../chatController/socketIOChat.ts";
 import {createClientTurnId} from "../../utils/clientIds.ts";
+import {compressImageForUpload} from "../../utils/imageCompress.ts";
+import {imageCompressionTarget, resolveAttachmentLimits} from "./attachmentLimits.ts";
 import {
     chatCompleted,
     chatConnected,
@@ -54,6 +56,7 @@ import {
     UserInputLockTraitType
 } from "./serviceEventTypes.ts";
 import {selectCurrentBundle} from "../bundles/bundlesSlice.ts";
+import {selectAttachmentSettings} from "./chatSettingsSlice.ts";
 
 type TransportType = "sse" | "websocket";
 
@@ -300,6 +303,9 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                     const message = serverMessage ?? "Attachment was rejected.";
                     const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
                     showPopup(notificationType, message)
+                    // The rejected files would be refused again on the next
+                    // send; clear them as rate_limit.project_exhausted does.
+                    traits.push({type: UserInputAttachmentRejectedType})
                     break;
                 }
                 case "economics.user_underfunded_absorbed":
@@ -443,6 +449,22 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                     if (!message && attachments.length === 0 && !isSteerEvent && !request.externalEvents?.length) {
                         //do not send empty message
                         return;
+                    }
+
+                    const attachmentLimits = resolveAttachmentLimits(selectAttachmentSettings(state))
+                    if (files && attachmentLimits.compressImages) {
+                        // `files` and `attachments` are index-aligned: describe
+                        // each compressed file by its new name, size and type.
+                        const originals = files
+                        const target = imageCompressionTarget(attachmentLimits)
+                        const compressed = await Promise.all(originals.map((file) => compressImageForUpload(file, target)))
+                        attachments = attachments.map((att, i) => compressed[i] === originals[i] ? att : {
+                            ...att,
+                            name: compressed[i].name,
+                            size: compressed[i].size,
+                            ...(att.mime != null ? {mime: compressed[i].type} : {}),
+                        })
+                        files = compressed
                     }
 
                     const conversationId = selectConversationId(state)

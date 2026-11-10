@@ -139,6 +139,37 @@ def _frontend_config_overrides(assembly: Optional[Mapping[str, Any]]) -> dict[st
     return overrides
 
 
+_ATTACHMENT_LIMIT_FIELDS = (
+    ("max_image_bytes", "maxImageBytes"),
+    ("max_doc_bytes", "maxDocBytes"),
+    ("max_message_bytes", "maxMessageBytes"),
+)
+
+
+def _attachment_limits(assembly: Optional[Mapping[str, Any]]) -> dict[str, int]:
+    """assembly.yaml platform.attachments caps, as the browser config names them.
+
+    The server enforces these caps; publishing them lets a client refuse a file
+    the server would reject. Only positive integer values are published, so the
+    client keeps its defaults (the server defaults) for absent fields.
+    """
+    section = get_nested(assembly or {}, "platform", "attachments")
+    if not isinstance(section, Mapping):
+        return {}
+    limits: dict[str, int] = {}
+    for source, target in _ATTACHMENT_LIMIT_FIELDS:
+        raw = section.get(source)
+        if isinstance(raw, bool):
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            limits[target] = value
+    return limits
+
+
 def _assembly_auth_type(assembly: Optional[Mapping[str, Any]]) -> str:
     auth_type = as_text(get_nested(assembly or {}, "auth", "type")).lower()
     auth_idp = as_text(get_nested(assembly or {}, "auth", "idp")).lower()
@@ -357,6 +388,12 @@ def build_frontend_config(
     auth["logoutUrl"] = as_text(auth.get("logoutUrl")) or "/api/platform/logout"
 
     merged["auth"] = auth
+
+    attachment_limits = _attachment_limits(assembly)
+    if attachment_limits:
+        attachments = copy.deepcopy(merged.get("attachments") if isinstance(merged.get("attachments"), dict) else {})
+        attachments.update(attachment_limits)
+        merged["attachments"] = attachments
 
     platform_ref = as_text(get_nested(assembly or {}, "platform", "ref"))
     if platform_ref:
