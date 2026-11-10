@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import json
 import shutil
@@ -18,7 +19,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.automations.owner_segments import (
 )
 
 try:
-    from .executions_storage import AutomationExecutionsStorage
+    from .executions_storage import AutomationExecutionsStorage, _query_matches
 except ImportError:
     import importlib.util
     import sys
@@ -34,7 +35,10 @@ except ImportError:
     sys.modules.setdefault("_kdcube_automations_executions_storage", _automation_executions_storage_mod)
     _automation_executions_storage_spec.loader.exec_module(_automation_executions_storage_mod)
     AutomationExecutionsStorage = _automation_executions_storage_mod.AutomationExecutionsStorage
+    _query_matches = _automation_executions_storage_mod._query_matches
 
+
+logger = logging.getLogger(__name__)
 
 AUTOMATION_STATUSES = {"enabled", "disabled", "archived", "deleted"}
 DEFAULT_VISIBLE_AUTOMATION_STATUSES = {"enabled", "disabled"}
@@ -170,6 +174,35 @@ def _fts_query(text: str) -> str | None:
     return " OR ".join(_dedupe(clauses)) or None
 
 
+def _fts_columns(asset: Dict[str, Any]) -> tuple[str, str, str, str, str, str]:
+    """The six ``automations_fts`` columns for one automation.
+
+    ``rebuild_search_index`` inserts exactly these values, and the no-index
+    fallback searches exactly these values, so the two paths search the same
+    fields by construction.
+    """
+    metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
+    labels = _json_list(metadata.get("labels"))
+    relations = asset.get("relations") if isinstance(asset.get("relations"), dict) else {}
+    relation_terms: List[str] = []
+    for value in relations.values():
+        if isinstance(value, list):
+            relation_terms.extend(_json_list(value))
+        elif value:
+            relation_terms.append(str(value))
+    execution = asset.get("execution") if isinstance(asset.get("execution"), dict) else {}
+    conversation_id = str(asset.get("conversation_id") or "").strip()
+    execution_conversation_id = str(execution.get("conversation_id") or conversation_id or "").strip()
+    return (
+        str(asset.get("id") or ""),
+        str(asset.get("title") or ""),
+        str(asset.get("body") or ""),
+        " ".join(labels),
+        " ".join(relation_terms),
+        " ".join([conversation_id, execution_conversation_id]),
+    )
+
+
 def _filter_markdown_assets(
     paths: Iterable[Path],
     *,
@@ -178,7 +211,7 @@ def _filter_markdown_assets(
     query: str = "",
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    query_norm = (query or "").strip().lower()
+    query_terms = _fts_terms(query)
     status_norm = (status or "").strip().lower()
     rows: List[Dict[str, Any]] = []
     for path in sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True):
@@ -191,16 +224,7 @@ def _filter_markdown_assets(
             continue
         if not status_norm and str(meta.get("status") or "").lower() not in DEFAULT_VISIBLE_AUTOMATION_STATUSES:
             continue
-        haystack = "\n".join(
-            [
-                str(meta.get("id") or ""),
-                str(meta.get("title") or ""),
-                str(meta.get("body") or ""),
-                str(meta.get("metadata") or ""),
-                str(meta.get("traits") or ""),
-            ]
-        ).lower()
-        if query_norm and query_norm not in haystack:
+        if query_terms and not _query_matches("\n".join(_fts_columns(meta)), query_terms):
             continue
         rows.append(meta)
         if len(rows) >= max(1, int(limit or 50)):
@@ -357,12 +381,6 @@ class AutomationStorage:
             metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
             labels = _json_list(metadata.get("labels"))
             relations = asset.get("relations") if isinstance(asset.get("relations"), dict) else {}
-            relation_terms: List[str] = []
-            for value in relations.values():
-                if isinstance(value, list):
-                    relation_terms.extend(_json_list(value))
-                elif value:
-                    relation_terms.append(str(value))
             schedule = asset.get("schedule") if isinstance(asset.get("schedule"), dict) else {}
             execution = asset.get("execution") if isinstance(asset.get("execution"), dict) else {}
             conversation_id = str(asset.get("conversation_id") or "").strip()
@@ -404,15 +422,7 @@ class AutomationStorage:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    docid,
-                    str(asset.get("id") or ""),
-                    str(asset.get("title") or ""),
-                    str(asset.get("body") or ""),
-                    " ".join(labels),
-                    " ".join(relation_terms),
-                    " ".join([conversation_id, execution_conversation_id]),
-                ),
+                (docid, *_fts_columns(asset)),
             )
         conn.execute("INSERT INTO meta (key, value) VALUES ('signature', ?)", (self._signature(),))
         conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)", (self.SCHEMA_VERSION,))
@@ -570,6 +580,14 @@ class AutomationStorage:
                 results.append(automation)
             return results
         except Exception:
+            # The fallback matches the same terms over the same columns as the
+            # index, but cannot rank: no ``score`` key, most-recent-first order.
+            logger.warning(
+                "[automation-search] search index unavailable for user %r; "
+                "answering query %r from the markdown assets instead "
+                "(same matches, no bm25 score, most-recent-first order)",
+                self.user_id, query, exc_info=True,
+            )
             return _filter_markdown_assets(
                 self.automations_dir.glob("*.md"),
                 root=self.root,

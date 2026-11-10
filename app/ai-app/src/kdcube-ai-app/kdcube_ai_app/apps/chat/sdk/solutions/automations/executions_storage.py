@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import uuid
@@ -12,6 +13,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.automations.owner_segments import (
     adopt_legacy_store,
     owner_segment,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
@@ -103,6 +106,50 @@ def _fts_query(text: str) -> str | None:
     for term in _fts_terms(raw):
         clauses.append(f"{term}*" if len(term) >= 3 else term)
     return " OR ".join(_dedupe(clauses)) or None
+
+
+def _query_matches(haystack: str, query_terms: List[str]) -> bool:
+    """Whether ``haystack`` matches the FTS query ``_fts_query`` builds from ``query_terms``.
+
+    ``_fts_query`` emits ``"<phrase>" OR term1* OR term2* ...``: a document
+    matches when ANY term does, a term of three or more characters by prefix,
+    a shorter one exactly. A document holding the whole phrase holds each of
+    its terms, so testing the terms gives the index's answer for the same
+    tokenisation. Used by the no-index fallbacks, which previously required the
+    raw query as ONE substring and so answered "morning report" with nothing
+    where the index found "Morning summary report".
+    """
+    if not query_terms:
+        return True
+    tokens = _fts_terms(haystack)
+    for term in query_terms:
+        if len(term) >= 3:
+            if any(token.startswith(term) for token in tokens):
+                return True
+        elif term in tokens:
+            return True
+    return False
+
+
+def _execution_fts_columns(execution: Dict[str, Any]) -> tuple[str, ...]:
+    """The ``executions_fts`` columns for one execution (index and fallback share them)."""
+    artifact_terms: List[str] = []
+    for artifact in _json_dict_list(execution.get("artifacts")):
+        artifact_terms.extend(
+            str(artifact.get(key) or "")
+            for key in ("id", "filename", "description", "mime_type", "logical_path", "stored_path", "hosted_uri")
+        )
+    metadata = execution.get("metadata") if isinstance(execution.get("metadata"), dict) else {}
+    return (
+        str(execution.get("id") or ""),
+        str(execution.get("automation_id") or ""),
+        str(execution.get("automation_title") or ""),
+        str(execution.get("summary") or ""),
+        str(execution.get("error") or ""),
+        str(execution.get("log_excerpt") or ""),
+        " ".join(artifact_terms),
+        json.dumps(metadata),
+    )
 
 
 def _normalize_execution_artifact(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -253,20 +300,6 @@ class AutomationExecutionsStorage:
                 continue
             docid += 1
             artifacts = _json_dict_list(execution.get("artifacts"))
-            artifact_terms: List[str] = []
-            for artifact in artifacts:
-                artifact_terms.extend(
-                    str(artifact.get(key) or "")
-                    for key in (
-                        "id",
-                        "filename",
-                        "description",
-                        "mime_type",
-                        "logical_path",
-                        "stored_path",
-                        "hosted_uri",
-                    )
-                )
             metadata = execution.get("metadata") if isinstance(execution.get("metadata"), dict) else {}
             result = execution.get("result") if isinstance(execution.get("result"), dict) else {}
             source = execution.get("source") if isinstance(execution.get("source"), dict) else {}
@@ -312,17 +345,7 @@ class AutomationExecutionsStorage:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    docid,
-                    str(execution.get("id") or ""),
-                    str(execution.get("automation_id") or ""),
-                    str(execution.get("automation_title") or ""),
-                    str(execution.get("summary") or ""),
-                    str(execution.get("error") or ""),
-                    str(execution.get("log_excerpt") or ""),
-                    " ".join(artifact_terms),
-                    json.dumps(metadata),
-                ),
+                (docid, *_execution_fts_columns(execution)),
             )
         conn.execute("INSERT INTO meta (key, value) VALUES ('signature', ?)", (self._execution_signature(),))
         conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?)", (self.SCHEMA_VERSION,))
@@ -501,6 +524,10 @@ class AutomationExecutionsStorage:
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
+        rows = self._executions_newest_first(automation_id=automation_id, status=status)
+        return rows[: max(1, int(limit or 50))]
+
+    def _executions_newest_first(self, *, automation_id: str = "", status: str = "") -> List[Dict[str, Any]]:
         status_norm = (status or "").strip().lower()
         paths = (
             sorted(self._execution_dir(automation_id).glob("*.json"))
@@ -525,7 +552,7 @@ class AutomationExecutionsStorage:
             ),
             reverse=True,
         )
-        return rows[: max(1, int(limit or 50))]
+        return rows
 
     def search_executions(
         self,
@@ -581,27 +608,19 @@ class AutomationExecutionsStorage:
                 results.append(execution)
             return results
         except Exception:
-            fallback = self.list_executions(automation_id=automation_id, status=status, limit=max(1, int(limit or 50)))
-            query_norm = (query or "").strip().lower()
-            if not query_norm:
-                return fallback
-            out: List[Dict[str, Any]] = []
-            for execution in fallback:
-                artifacts = _json_dict_list(execution.get("artifacts"))
-                haystack = "\n".join(
-                    [
-                        str(execution.get("id") or ""),
-                        str(execution.get("automation_id") or ""),
-                        str(execution.get("automation_title") or ""),
-                        str(execution.get("summary") or ""),
-                        str(execution.get("error") or ""),
-                        str(execution.get("log_excerpt") or ""),
-                        json.dumps(artifacts),
-                        json.dumps(execution.get("metadata") or {}),
-                    ]
-                ).lower()
-                if query_norm in haystack:
-                    out.append(execution)
+            logger.warning(
+                "[automation-search] execution index unavailable for user %r; answering "
+                "query %r from the execution records (same matches, no score, newest first)",
+                self.user_id, query, exc_info=True,
+            )
+            query_terms = _fts_terms(query)
+            # Match over every record, then apply the limit: limiting first
+            # dropped older matches the index would have returned.
+            candidates = self._executions_newest_first(automation_id=automation_id, status=status)
+            out = [
+                execution for execution in candidates
+                if _query_matches("\n".join(_execution_fts_columns(execution)), query_terms)
+            ]
             return out[: max(1, int(limit or 50))]
 
     def update_execution(
