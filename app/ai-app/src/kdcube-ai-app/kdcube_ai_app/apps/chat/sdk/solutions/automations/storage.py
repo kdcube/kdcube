@@ -671,7 +671,12 @@ class AutomationStorage:
             if reciprocal:
                 target_rel["depends_on_automation_ids"] = _dedupe(target_rel["depends_on_automation_ids"] + [automation_id])
 
-        for item in (asset, target):
+        # With reciprocal=False the target is not edited, so it is neither
+        # re-stamped nor rewritten: listings order by updated_at / mtime, and a
+        # one-way link must not move the target to the top. One list decides
+        # both what is stamped and what is written.
+        written_sides = [(asset, body)] + ([(target, target_body)] if reciprocal else [])
+        for item, _item_body in written_sides:
             all_related = []
             relations = item.get("relations") or {}
             for key in ("child_automation_ids", "depends_on_automation_ids", "blocks_automation_ids", "related_automation_ids"):
@@ -683,9 +688,8 @@ class AutomationStorage:
             item["metadata"] = metadata
             item["updated_at"] = _utc_now()
 
-        updated = self._write_asset(asset, body)
-        self._write_asset(target, target_body)
-        return updated
+        written = [self._write_asset(item, item_body) for item, item_body in written_sides]
+        return written[0]
 
     def update_automation(
         self,
