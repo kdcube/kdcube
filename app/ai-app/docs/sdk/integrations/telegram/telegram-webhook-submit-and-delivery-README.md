@@ -86,7 +86,9 @@ processor later claims queued chat turn
 There is no webhook-side agent-execution fallback. If shared chat ingress is
 unavailable, the webhook sends a short retry response and does not run the app
 in the webhook process. An unlinked user receives the Connection Hub linking
-prompt directly; that prompt is a transport response, not an agent turn.
+prompt directly; that prompt is a transport response, not an agent turn. An
+open bot sets `allow_unconnected: true` to submit those turns as `external`
+users instead; see the Telegram SDK Integration access properties.
 
 The submit and delivery paths do not use process-local conversation locks. Such
 a lock cannot order requests across processors or replicas. Shared chat ingress,

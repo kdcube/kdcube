@@ -597,6 +597,32 @@ def _telegram_definition_prop(entrypoint: Any, key: str, default: Any = None, *,
     )
 
 
+def _telegram_definition_flag(entrypoint: Any, key: str, default: bool = False, *, integration_id: str = "") -> bool:
+    """Read a boolean definition prop strictly: only a real true value enables it."""
+    value = _telegram_definition_prop(entrypoint, key, default, integration_id=integration_id)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    return bool(default)
+
+
+def _telegram_allows_unconnected(entrypoint: Any, *, integration_id: str = "") -> bool:
+    """Whether Telegram users without a linked platform account may chat.
+
+    Default ``False``: a turn from an unlinked Telegram account is answered with
+    the connect prompt. With ``allow_unconnected: true`` the turn runs as an
+    ``external`` user with no platform roles or permissions.
+    """
+    return _telegram_definition_flag(entrypoint, "allow_unconnected", False, integration_id=integration_id)
+
+
 def _telegram_target_agent_id(entrypoint: Any) -> str:
     bundle_prop = getattr(entrypoint, "bundle_prop", None)
     configured = ""
@@ -668,7 +694,10 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
         local_role=role,
         source="telegram.webhook",
     )
-    if not str(identity_authority.get("platform_user_id") or "").strip():
+    if not str(identity_authority.get("platform_user_id") or "").strip() and not _telegram_allows_unconnected(
+        entrypoint,
+        integration_id=str(summary.get("integration_id") or "").strip(),
+    ):
         return {
             "mode": "connection_required",
             "accepted": True,

@@ -370,7 +370,8 @@ Before calling the bundle done, prove:
   not `/widgets/<widget_alias>/`
 - the webhook rejects missing or wrong `X-Telegram-Bot-Api-Secret-Token`
 - `setWebhook` points at the active public URL
-- an unlinked Telegram user sees the Connection Hub connect prompt
+- an unlinked Telegram user sees the Connection Hub connect prompt (or, with
+  `allow_unconnected: true`, gets an answer as an `external` user)
 - a linked Telegram user can be bound to a conversation and run the intended workflow
 - a chat update submits through the shared chat ingress and receives a final
   Telegram delivery
@@ -832,6 +833,28 @@ across turn execution, so two Telegram turns for one conversation do not stream
 or finalize concurrently. The webhook submit path does not take this lock; a
 message that arrives while a turn is running is submitted to chat ingress, which
 admits it as a followup/steer continuation into the running turn.
+
+## Access And Identity Properties
+
+A Telegram bot is either a linked-accounts bot, where every chatter first
+connects a platform account, or an open bot that anyone can talk to. The
+integration definition selects the mode per deployment:
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `integrations.telegram.allow_unconnected` | `false` | When `false`, a Telegram user without a linked platform account receives the Connection Hub connect prompt and no turn is submitted. When `true`, that user's turn is submitted as an `external` user with no platform roles or permissions; linked users are unaffected. Only a real true value (`true`, `"true"`, `"yes"`, `"on"`, `1`) enables it. |
+
+```yaml
+integrations:
+  telegram.default:
+    provider: telegram
+    enabled: true
+    definition:
+      allow_unconnected: true
+```
+
+The property may also sit inside the `webhook` block, like the streaming
+properties.
 
 ## Mini App Auth
 
