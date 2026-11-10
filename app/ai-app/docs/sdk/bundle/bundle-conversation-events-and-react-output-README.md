@@ -132,6 +132,12 @@ result = await entrypoint.chat_submitter.submit(
 )
 ```
 
+Inside the chat processor, `entrypoint.chat_submitter` and
+`entrypoint.conversation_browser` are bound on every call path that reaches the
+app: bundle REST operations, local peer operations, and local named-service
+calls. A named service can therefore submit a turn the same way an operation
+does. A service the workflow already holds is kept.
+
 The submitter calls the platform ingress path. The result's `turn_id` /
 `queued_turn_id` is the processing turn id accepted for the batch. It does not
 mean the UI must create a visible new turn immediately; if there is a live owner

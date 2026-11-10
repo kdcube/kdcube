@@ -163,6 +163,40 @@ def _bundle_enabled(props: Mapping[str, Any] | None) -> bool:
     return _is_truthy_enabled(section.get("bundle"))
 
 
+# Process-level runtime services of the chat processor. The proc lifespan
+# registers what it puts on app.state (chat_submitter, conversation_browser), so
+# the local named-service and operation call paths -- which have no FastAPI
+# request to read app.state from -- bind them onto the workflow the way the
+# bundle REST path does (proc/rest/integrations/integrations.py::
+# _bind_proc_runtime_services_to_workflow). Empty, and therefore inert, in any
+# process that never registers.
+_PROC_RUNTIME_SERVICE_NAMES = ("chat_submitter", "conversation_browser")
+_PROC_RUNTIME_SERVICES: dict[str, Any] = {}
+
+
+def register_proc_runtime_services(**services: Any) -> None:
+    """Record (or, with None, forget) process-level runtime services by name."""
+    for name, value in services.items():
+        if name not in _PROC_RUNTIME_SERVICE_NAMES:
+            raise ValueError(f"unknown proc runtime service {name!r}")
+        if value is None:
+            _PROC_RUNTIME_SERVICES.pop(name, None)
+        else:
+            _PROC_RUNTIME_SERVICES[name] = value
+
+
+def _bind_registered_proc_runtime_services(workflow: Any) -> None:
+    """Set each registered service on ``workflow`` unless it already has one."""
+    for name in _PROC_RUNTIME_SERVICE_NAMES:
+        value = _PROC_RUNTIME_SERVICES.get(name)
+        if value is None or getattr(workflow, name, None) is not None:
+            continue
+        try:
+            setattr(workflow, name, value)
+        except Exception:
+            LOGGER.debug("Failed to bind %s to workflow", name, exc_info=True)
+
+
 def _api_enabled(props: Mapping[str, Any] | None, spec: Any) -> bool:
     sub = _enabled_section(props, "api")
     if sub is None:
@@ -570,6 +604,7 @@ async def _invoke_local_bundle_operation_raw(
     await _apply_bundle_props_to_workflow(workflow=workflow, props=props or {})
     if not _bundle_enabled(props):
         raise RuntimeError(f"Bundle {spec_resolved.id} is disabled")
+    _bind_registered_proc_runtime_services(workflow)
     if not _api_enabled(props, endpoint_spec):
         raise RuntimeError(f"Bundle operation {operation} is not available")
     # W372: the immediate caller is the bundle whose platform-built context made this call.
@@ -800,6 +835,7 @@ async def invoke_local_bundle_named_service(
     await _apply_bundle_props_to_workflow(workflow=workflow, props=props or {})
     if not _bundle_enabled(props):
         raise RuntimeError(f"Bundle {spec_resolved.id} is disabled")
+    _bind_registered_proc_runtime_services(workflow)
 
     method_name = str(call.registry_method or "named_services").strip() or "named_services"
     registry_factory = getattr(workflow, method_name, None)
@@ -1130,4 +1166,5 @@ __all__ = [
     "make_local_bundle_named_service_caller",
     "make_local_bundle_operation_caller",
     "make_local_bundle_operation_stream_caller",
+    "register_proc_runtime_services",
 ]
