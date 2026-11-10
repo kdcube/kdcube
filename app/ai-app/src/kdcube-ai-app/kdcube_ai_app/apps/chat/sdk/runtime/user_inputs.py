@@ -12,7 +12,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.infra.service_hub.multimodality import MODALITY_IMAGE_MIME, MODALITY_DOC_MIME, \
-    MODALITY_MAX_DOC_BYTES, MODALITY_MAX_IMAGE_BYTES
+    max_doc_bytes, max_image_bytes
 from kdcube_ai_app.tools.file_text_extractor import DocumentTextExtractor, ExtractInfo
 
 from kdcube_ai_app.tools.content_type import is_text_mime_type
@@ -60,12 +60,14 @@ async def ingest_user_attachments(
         size = a.get("size") or a.get("size_bytes") or len(data)
         base["size"] = size
         base["size_bytes"] = size
-        if mime in MODALITY_IMAGE_MIME and size > MODALITY_MAX_IMAGE_BYTES:
-            base["error"] = f"size_limit: {size} > {MODALITY_MAX_IMAGE_BYTES}"
+        image_cap = max_image_bytes()
+        doc_cap = max_doc_bytes()
+        if mime in MODALITY_IMAGE_MIME and size > image_cap:
+            base["error"] = f"size_limit: {size} > {image_cap}"
             out.append(base)
             continue
-        if mime in MODALITY_DOC_MIME and size > MODALITY_MAX_DOC_BYTES:
-            base["error"] = f"size_limit: {size} > {MODALITY_MAX_DOC_BYTES}"
+        if mime in MODALITY_DOC_MIME and size > doc_cap:
+            base["error"] = f"size_limit: {size} > {doc_cap}"
             out.append(base)
             continue
 
@@ -83,7 +85,7 @@ async def ingest_user_attachments(
 
         base64_data = None
         if mime in MODALITY_IMAGE_MIME or mime in MODALITY_DOC_MIME:
-            limit = MODALITY_MAX_IMAGE_BYTES if mime in MODALITY_IMAGE_MIME else MODALITY_MAX_DOC_BYTES
+            limit = image_cap if mime in MODALITY_IMAGE_MIME else doc_cap
             if size <= limit:
                 base64_data = base64.b64encode(data).decode("ascii")
             else:

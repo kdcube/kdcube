@@ -692,6 +692,14 @@ task cancellation all attempt per-turn browser cleanup. The idle janitor TTL,
 janitor interval, and max session count are backend constants today; they are
 not assembly-backed operator settings yet.
 
+### `platform.attachments`
+
+Byte caps for chat attachments, shared by ingress and the processor:
+`max_image_bytes` (default 5 MB), `max_doc_bytes` (default 10 MB) and
+`max_message_bytes` (default 25 MB, text plus attachments). See
+[Attachments System §2.4](../hosting/attachments-system.md) for the
+enforcement points and limits that sit above them.
+
 ### `platform.services.proc.service`
 
 `platform.services.proc.service` owns proc service runtime controls, including

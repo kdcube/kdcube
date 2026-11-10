@@ -14,8 +14,8 @@ from kdcube_ai_app.apps.chat.sdk.util import estimate_b64_size
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_IMAGE_MIME,
     MODALITY_DOC_MIME,
-    MODALITY_MAX_IMAGE_BYTES,
-    MODALITY_MAX_DOC_BYTES,
+    max_image_bytes,
+    max_doc_bytes,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifact_analysis import prepare_summary_artifact
 from kdcube_ai_app.apps.chat.sdk.runtime.harness.workspace.references import (
@@ -312,7 +312,7 @@ def collect_multimodal_artifacts_from_tool_output(
             size_bytes = estimate_b64_size(data_b64)
         if size_bytes is None:
             continue
-        limit = MODALITY_MAX_IMAGE_BYTES if mime in MODALITY_IMAGE_MIME else MODALITY_MAX_DOC_BYTES
+        limit = max_image_bytes() if mime in MODALITY_IMAGE_MIME else max_doc_bytes()
         if size_bytes > limit:
             continue
         filename = (row.get("filename") or "").strip()
@@ -426,7 +426,7 @@ def collect_modal_attachments_from_artifact_obj(
         size = size_bytes if isinstance(size_bytes, int) else estimate_b64_size(data_b64)
         if size is None:
             return
-        limit = MODALITY_MAX_IMAGE_BYTES if mime_norm in MODALITY_IMAGE_MIME else MODALITY_MAX_DOC_BYTES
+        limit = max_image_bytes() if mime_norm in MODALITY_IMAGE_MIME else max_doc_bytes()
         if size > limit:
             return
         attachments.append({

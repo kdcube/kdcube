@@ -52,7 +52,7 @@ from kdcube_ai_app.apps.chat.ingress.socketio.delegated_data_bus_auth import (
     admit_delegated_data_bus_bearer,
 )
 from kdcube_ai_app.apps.chat.sdk.protocol import external_event_attachment_payloads, external_events_text
-from kdcube_ai_app.infra.service_hub.multimodality import MESSAGE_MAX_BYTES
+from kdcube_ai_app.infra.service_hub.multimodality import max_message_bytes
 from kdcube_ai_app.apps.middleware.token_extract import resolve_socket_auth_tokens
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ class SocketIOChatHandler:
     def _create_socketio_server(self):
         try:
             mgr = socketio.AsyncRedisManager(self.redis_url)
-            max_bytes = MESSAGE_MAX_BYTES + (1024 * 1024)
+            max_bytes = max_message_bytes() + (1024 * 1024)
 
             sio = socketio.AsyncServer(
                 cors_allowed_origins=self.allowed_origins,
