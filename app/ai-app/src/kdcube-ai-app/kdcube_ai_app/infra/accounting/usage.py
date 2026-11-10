@@ -29,6 +29,10 @@ anthropic = "anthropic"
 # `price_tables:` section overlays this per-section at runtime; see price_table().
 DEFAULT_PRICE_TABLE = {
         "llm": [
+            # Anthropic cache convention, shared by every anthropic row:
+            # 5-minute write = 1.25x input, 1-hour write = 2x input,
+            # read = 0.1x input. The flat cache_write_tokens_1M (used when a
+            # usage carries no TTL split) follows the 5-minute rate.
             {
                 "model": sonnet_46,
                 "provider": "anthropic",
@@ -186,15 +190,15 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 15.00,
                 "cache_pricing": {
                     "5m": {
-                        "write_tokens_1M": 3.00,
-                        "read_tokens_1M": 0.30,
-                    },
-                    "1h": {
                         "write_tokens_1M": 3.75,
                         "read_tokens_1M": 0.30,
                     },
+                    "1h": {
+                        "write_tokens_1M": 6.00,
+                        "read_tokens_1M": 0.30,
+                    },
                 },
-                "cache_write_tokens_1M": 3.00,
+                "cache_write_tokens_1M": 3.75,
                 "cache_read_tokens_1M": 0.30,
 
                 "vision": {
@@ -229,7 +233,7 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 5,
                 "cache_pricing": {
                     "5m": {
-                        "write_tokens_1M": 1,
+                        "write_tokens_1M": 1.25,
                         "read_tokens_1M": 0.1,
                     },
                     "1h": {
@@ -237,7 +241,7 @@ DEFAULT_PRICE_TABLE = {
                         "read_tokens_1M": 0.1,
                     },
                 },
-                "cache_write_tokens_1M": 2,
+                "cache_write_tokens_1M": 1.25,
                 "cache_read_tokens_1M": 0.1,
             },
             {
@@ -247,15 +251,15 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 4.00,
                 "cache_pricing": {
                     "5m": {
-                        "write_tokens_1M": 0.80,
-                        "read_tokens_1M": 0.08,
-                    },
-                    "1h": {
                         "write_tokens_1M": 1.00,
                         "read_tokens_1M": 0.08,
                     },
+                    "1h": {
+                        "write_tokens_1M": 1.60,
+                        "read_tokens_1M": 0.08,
+                    },
                 },
-                "cache_write_tokens_1M": 0.80,
+                "cache_write_tokens_1M": 1.00,
                 "cache_read_tokens_1M": 0.08,
             },
             {
@@ -265,15 +269,15 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 1.25,
                 "cache_pricing": {
                     "5m": {
-                        "write_tokens_1M": 0.25,
-                        "read_tokens_1M": 0.03,
-                    },
-                    "1h": {
                         "write_tokens_1M": 0.30,
                         "read_tokens_1M": 0.03,
                     },
+                    "1h": {
+                        "write_tokens_1M": 0.50,
+                        "read_tokens_1M": 0.03,
+                    },
                 },
-                "cache_write_tokens_1M": 0.25,
+                "cache_write_tokens_1M": 0.30,
                 "cache_read_tokens_1M": 0.03,
             },
             {
