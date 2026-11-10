@@ -47,9 +47,12 @@ def _custom_model_endpoint(value: Any) -> str | None:
     if endpoint is None:
         return None
     parsed = urlparse(endpoint)
+    if parsed.scheme == "bus" and (parsed.netloc or parsed.path.strip("/")):
+        return endpoint
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(
-            "services.llm.custom.endpoint must be an absolute HTTP(S) URL"
+            "services.llm.custom.endpoint must be an absolute HTTP(S) URL "
+            "or a bus:// Data Bus address"
         )
     return endpoint
 

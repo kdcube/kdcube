@@ -293,6 +293,41 @@ Alternative to the composer pick: pin a role —
 Activation: reload the app (kdcube CLI bundle reload), like any descriptor
 config change.
 
+### 6.1 Data Bus transport (`bus://`)
+
+A runtime with no inbound path to the model host — an edge device with no
+GPU, a site that can reach Redis but not the model server's HTTP port — sends
+model calls over the KDCube Data Bus instead of HTTP. Set the endpoint to a
+`bus://` address:
+
+```yaml
+services:
+  llm:
+    custom:
+      endpoint: bus://llm-gateway            # this runtime's tenant/project
+      # endpoint: bus://<tenant>/<project>/llm-gateway
+```
+
+`ModelRouter._mk_custom` then builds `BusModelClient`, a `CustomModelClient`
+subclass, so streaming, accounting and `provider: custom` handling are
+unchanged. Any endpoint without the `bus://` scheme keeps the HTTP client.
+
+Wire protocol, for writing a provider:
+
+| Step | Who | What |
+|---|---|---|
+| 1 | runtime | publishes a Data Bus message, subject `llm.generate`, to `kdcube:data-bus:{tenant}:{project}:{id}:messages`; `payload` is the HTTP gateway body (`model`, `inputs`, `parameters`) plus `delta_stream` |
+| 2 | provider | claims the message through the Data Bus consumer group and calls its model |
+| 3 | provider | `XADD`s events to `payload.delta_stream`, each a field `json` holding `{"delta": "..."}`, then one `{"final": true, "usage": {...}}` or `{"error": "..."}` |
+| 4 | provider | writes the standard Data Bus result record and sets a TTL on the delta stream |
+| 5 | runtime | reads the delta stream, deletes it after the final or error event |
+
+The runtime waits 120 s for the first event (no provider claimed the call:
+`TimeoutError("... no provider ...")`) and 600 s for the whole reply, the
+same overall bound the HTTP client uses. `{id}` names a Data Bus address,
+not an installed app: a bundle registered under the same id with a Data Bus
+handler for `llm.generate` would also claim these messages.
+
 ## 7. Verify
 
 ```text

@@ -197,8 +197,9 @@ services:
 `build_model_service()` additionally projects it into a role-bound
 `ModelServiceBase`. An unknown model ID without an explicit provider fails
 instead of falling back to a different registered model. `provider: custom`
-requires an absolute HTTP(S) endpoint and accepts one positive shared
-`num_ctx`; the model ID is sent unchanged on every request. A protected custom
+requires an absolute HTTP(S) endpoint or a `bus://` Data Bus address (see
+[Ollama Integration §6.1](../recipes/connections/integrations/olama-README.md))
+and accepts one positive shared `num_ctx`; the model ID is sent unchanged on every request. A protected custom
 gateway reads `platform.services.llm.custom.api_key` from `secrets.yaml`.
 
 Native ReAct and LangGraph use this model-service route in the runnable agent
