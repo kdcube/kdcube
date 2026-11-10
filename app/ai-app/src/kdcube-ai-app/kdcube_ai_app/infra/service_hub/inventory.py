@@ -1039,32 +1039,53 @@ class ModelRouter:
 # =========================
 # Usage metadata helpers
 # =========================
-def ms_provider_extractor(model_service, client, *args, **kw) -> str:
+# These extractors are called by AccountingTracker as
+#   extractor(result, *call_args, **call_kwargs)
+# and the tracked calls are ModelService methods, so call_args starts with the
+# ModelService itself: (result, model_service, client, ...). Each signature
+# below spells that order out. A signature without the leading `result` shifts
+# every parameter one place right: the ModelService lands in `client`, the
+# result in `model_service`, `describe_client` fails on the result object,
+# and a real, billable call is booked as provider/model "unknown" at $0.00.
+
+def _ms_client_cfg(model_service, client, kw) -> Optional[ClientConfigHint]:
+    """The call's ClientConfigHint: an explicit `client_cfg=` wins, then the
+    `role=` mapping, then a best-effort description of the client object.
+    Never raises into the call being measured."""
     cfg = kw.get("client_cfg")
-    if not cfg and model_service and client:
-        try:
-            cfg = model_service.describe_client(client, role=kw.get("role"))
-        except TypeError:
-            cfg = model_service.describe_client(client)
-        except Exception:
-            cfg = None
-    return getattr(cfg, "provider", "unknown") if cfg else "unknown"
+    if cfg:
+        return cfg
+    if model_service is None or not hasattr(model_service, "describe_client"):
+        return None
+    try:
+        role = kw.get("role")
+        if role:
+            return model_service.describe_client(client, role=role)
+        if client is None:
+            return None
+        return model_service.describe_client(client)
+    except Exception:  # accounting never breaks the call it measures
+        logging.getLogger("accounting").debug("could not describe the model client", exc_info=True)
+        return None
 
 
-def ms_model_extractor(model_service, client, *args, **kw) -> str:
-    cfg = kw.get("client_cfg")
-    if not cfg and model_service and client:
-        try:
-            cfg = model_service.describe_client(client, role=kw.get("role"))
-        except TypeError:
-            cfg = model_service.describe_client(client)
-        except Exception:
-            cfg = None
-    return getattr(cfg, "model_name", "unknown") if cfg else "unknown"
+def ms_provider_extractor(result=None, model_service=None, client=None, *args, **kw) -> str:
+    cfg = _ms_client_cfg(model_service, client, kw)
+    return getattr(cfg, "provider", None) or "unknown"
 
 
-def ms_structured_meta_extractor(model_service, _client, system_prompt: str, user_message: str, response_format, **kw):
-    client_cfg = kw.get("client_cfg")
+def ms_model_extractor(result=None, model_service=None, client=None, *args, **kw) -> str:
+    cfg = _ms_client_cfg(model_service, client, kw)
+    return getattr(cfg, "model_name", None) or "unknown"
+
+
+def ms_structured_meta_extractor(result=None, model_service=None, _client=None,
+                                 system_prompt=None, user_message=None, response_format=None,
+                                 *args, **kw):
+    system_prompt = system_prompt if system_prompt is not None else kw.get("system_prompt")
+    user_message = user_message if user_message is not None else kw.get("user_message")
+    response_format = response_format if response_format is not None else kw.get("response_format")
+    client_cfg = _ms_client_cfg(model_service, _client, kw)
     return {
         "model": (client_cfg.model_name if client_cfg else None),
         "provider": (client_cfg.provider if client_cfg else None),
@@ -1076,7 +1097,7 @@ def ms_structured_meta_extractor(model_service, _client, system_prompt: str, use
     }
 
 
-def ms_freeform_meta_extractor(model_service, _client=None, messages=None, *a, **kw):
+def ms_freeform_meta_extractor(result=None, model_service=None, _client=None, messages=None, *a, **kw):
     try:
         if not messages:
             messages = kw.get("messages") or []
@@ -1084,7 +1105,7 @@ def ms_freeform_meta_extractor(model_service, _client=None, messages=None, *a, *
     except Exception:
         prompt_chars = 0
 
-    client_cfg = kw.get("client_cfg")
+    client_cfg = _ms_client_cfg(model_service, _client, kw)
 
     return {
         "selected_model": (client_cfg.model_name if client_cfg else None),
