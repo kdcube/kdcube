@@ -50,6 +50,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     register_config,
     resolve_config,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.identity import telegram_actor_user_id
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_bundle_id,
     get_current_request_context,
@@ -686,7 +687,11 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
             "topic_bound": bool(conversation_resolution.get("topic_bound")),
         }
     turn_id = new_turn_id()
-    actor_user_id = f"telegram_{telegram_user_id}"
+    actor_user_id = telegram_actor_user_id(
+        entrypoint,
+        telegram_user_id,
+        integration_id=str(summary.get("integration_id") or "").strip(),
+    )
     identity_authority = await _telegram_platform_authority(
         entrypoint,
         actor_user_id=actor_user_id,

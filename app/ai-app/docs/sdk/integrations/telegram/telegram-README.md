@@ -391,6 +391,8 @@ kdcube_ai_app.apps.chat.sdk.integrations.telegram
                       and progress-card finalization
   router.py           framework-neutral turn-result rendering and delivery
   webapp_auth.py      Telegram Mini App initData extraction and signature validation
+  identity.py         Telegram actor user id construction from the configured
+                      actor_id_template
   chat_submit.py      helpers for /steer, /followup, RawAttachment, UserSession,
                       RequestContext, and IngressConfig
   signed_downloads.py short-lived signed link helpers re-exported for Telegram clients
@@ -843,6 +845,7 @@ integration definition selects the mode per deployment:
 | Property | Default | Meaning |
 | --- | --- | --- |
 | `integrations.telegram.allow_unconnected` | `false` | When `false`, a Telegram user without a linked platform account receives the Connection Hub connect prompt and no turn is submitted. When `true`, that user's turn is submitted as an `external` user with no platform roles or permissions; linked users are unaffected. Only a real true value (`true`, `"true"`, `"yes"`, `"on"`, `1`) enables it. |
+| `integrations.telegram.actor_id_template` | `telegram_{telegram_user_id}` | Namespace of the actor user id a Telegram chatter is stored, accounted, and addressed under. It must contain the `{telegram_user_id}` placeholder and no other field; an unusable template raises instead of silently re-keying users. The webhook submit path, Mini App identity, Connection Hub request authentication, report delivery, and automation delivery all build or match the id through `integrations.telegram.identity`. |
 
 ```yaml
 integrations:
@@ -851,9 +854,15 @@ integrations:
     enabled: true
     definition:
       allow_unconnected: true
+      actor_id_template: "internal:telegram:{telegram_user_id}"
 ```
 
-The property may also sit inside the `webhook` block, like the streaming
+Choose `actor_id_template` once, before the first user chats: changing it later
+starts every existing Telegram user on a new, empty storage scope. A
+deployment that federates identities across surfaces uses it to keep Telegram
+actors in the same canonical namespace as its other providers.
+
+Both properties may also sit inside the `webhook` block, like the streaming
 properties.
 
 ## Mini App Auth

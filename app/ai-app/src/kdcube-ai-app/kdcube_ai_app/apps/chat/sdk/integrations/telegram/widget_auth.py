@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Iterable
 from fastapi import HTTPException
 from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import integration_definition_value
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import register_config, resolve_config
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.identity import telegram_actor_user_id
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     INIT_DATA_HEADER,
     extract_telegram_init_data_from_request,
@@ -196,7 +197,8 @@ async def resolve_identity(
 
     kdcube_user_id = str(mapping.get("kdcube_user_id") or "").strip()
     return TelegramWidgetIdentity(
-        user_id=kdcube_user_id or f"telegram_{telegram_user_id}",
+        user_id=kdcube_user_id
+        or telegram_actor_user_id(entrypoint, telegram_user_id, integration_id=integration_id),
         fingerprint=f"telegram:{telegram_user_id}",
         role=role,
         telegram_user_id=telegram_user_id,

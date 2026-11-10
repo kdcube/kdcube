@@ -32,6 +32,10 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     render_telegram_messages_from_timeline,
     send_telegram_messages,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.identity import (
+    format_telegram_actor_user_id,
+    telegram_actor_id_template,
+)
 from kdcube_ai_app.apps.chat.sdk.identity_authority import (
     apply_authority_to_comm_context,
     authority_from_source,
@@ -998,18 +1002,19 @@ def _bundle_prop(entrypoint: Any, path: str, default: Any = None) -> Any:
     return default
 
 
-def _telegram_recipient_for_user(entrypoint: Any, *, user_id: str) -> Dict[str, Any] | None:
+def _telegram_recipient_for_user(entrypoint: Any, *, user_id: str, integration_id: str = "") -> Dict[str, Any] | None:
     target = str(user_id or "").strip()
     if not target:
         return None
     registry = TelegramUserAdminStorage(_storage_root(entrypoint))
+    actor_id_template = telegram_actor_id_template(entrypoint, integration_id=integration_id)
     for row in registry.list_users():
         role = str(row.get("role") or "").strip().lower()
         if role not in {"registered", "admin"}:
             continue
         telegram_user_id = str(row.get("telegram_user_id") or "").strip()
         kdcube_user_id = str(row.get("kdcube_user_id") or "").strip()
-        bundle_user_scope = kdcube_user_id or (f"telegram_{telegram_user_id}" if telegram_user_id else "")
+        bundle_user_scope = kdcube_user_id or format_telegram_actor_user_id(telegram_user_id, actor_id_template)
         if bundle_user_scope != target:
             continue
         chat_id = str(row.get("telegram_chat_id") or telegram_user_id or "").strip()
@@ -1087,7 +1092,7 @@ async def _deliver_execution_to_telegram(
         return None
     if not _telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id):
         return None
-    recipient = _telegram_recipient_for_user(entrypoint, user_id=user_id)
+    recipient = _telegram_recipient_for_user(entrypoint, user_id=user_id, integration_id=integration_id)
     if not recipient:
         return None
 
