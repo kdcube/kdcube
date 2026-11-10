@@ -854,7 +854,19 @@ def _queued_telegram_meta(entrypoint: Any) -> Dict[str, Any]:
     return telegram
 
 
-async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> Dict[str, Any]:
+async def run_with_queued_telegram_delivery(
+    entrypoint: Any,
+    *,
+    runner: Any,
+    progress_message_id: str | int | None = None,
+) -> Dict[str, Any]:
+    """Run a queued Telegram turn, stream its progress, and deliver the result.
+
+    ``progress_message_id`` is an existing Telegram message the app already
+    posted for this turn (for example an acknowledgement sent at webhook
+    time). When live streaming is on, progress edits that message, so the
+    acknowledgement, the progress, and the final answer share one card.
+    """
     telegram_meta = _queued_telegram_meta(entrypoint)
     if not telegram_meta:
         return await runner()
@@ -881,6 +893,11 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
     stream_show_progress = bool(
         _telegram_definition_prop(entrypoint, "stream_activity_display", True, integration_id=integration_id)
     )
+    status_labels = _telegram_definition_prop(entrypoint, "progress_status_labels", None, integration_id=integration_id)
+    status_format = _telegram_definition_prop(entrypoint, "progress_status_format", "", integration_id=integration_id)
+    start_text = str(
+        _telegram_definition_prop(entrypoint, "progress_start_text", "", integration_id=integration_id) or ""
+    ).strip()
     async with TelegramActivityStreamer(
         comm=getattr(entrypoint, "comm", None),
         bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
@@ -890,7 +907,12 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         enabled=stream_enabled or collect_files,
         show_progress=stream_show_progress,
         collect_files=collect_files,
+        initial_message_id=progress_message_id if stream_enabled else None,
+        status_labels=status_labels,
+        status_format=str(status_format or ""),
     ) as telegram_streamer:
+        if stream_enabled and start_text:
+            await telegram_streamer.send_start_text(start_text)
         result = await runner()
     if not isinstance(result, dict):
         result = {}

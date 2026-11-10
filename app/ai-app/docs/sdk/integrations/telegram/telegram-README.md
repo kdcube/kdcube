@@ -773,6 +773,47 @@ when turn completes:
 `TelegramActivityStreamer.progress_summary()`. File messages that were already
 streamed are excluded by passing `delivered_file_keys`.
 
+### One Card From Acknowledgement To Answer
+
+An app that acknowledges a Telegram message immediately (for example a short
+"received" reply sent from the webhook) can make that acknowledgement the
+progress card, so the user sees one message move from acknowledgement through
+progress to the answer instead of two cards:
+
+```python
+res = await telegram_user_admin.run_with_queued_telegram_delivery(
+    self,
+    runner=run_turn,
+    progress_message_id=ack_message_id,  # the app's own stored id, or None
+)
+```
+
+With live streaming on, the streamer adopts that message
+(`TelegramActivityStreamer(initial_message_id=...)`) and edits it instead of
+creating a card on the first activity. Without an id the card is created
+lazily, as before. Final-only delivery (`stream_activity=false`) does not adopt
+the message.
+
+Three optional definition properties shape the card text:
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `integrations.telegram.progress_start_text` | empty | Text written into an adopted card when the turn starts. Ignored when no message was adopted, so it never creates a card by itself. |
+| `integrations.telegram.progress_status_labels` | empty | Map of step name to label for `chat.step` / `chat.service` status lines. Keys and event step/title are compared case-insensitively with `_`/`-` treated as spaces; an exact step or title match wins, otherwise the first key that prefixes the step or title. Unmapped steps use the event title or step. |
+| `integrations.telegram.progress_status_format` | `{label}: {status}` | Format of a status line. Fields: `{label}`, `{status}`, `{step}`, `{title}`. An unusable format falls back to the default. |
+
+```yaml
+integrations:
+  telegram.default:
+    provider: telegram
+    definition:
+      progress_start_text: "Seen, working on it"
+      progress_status_format: "Working: {label}"
+      progress_status_labels:
+        web_search: "searching the web"
+        get_route: "planning the route"
+```
+
 ## Activity Streaming
 
 ```python
