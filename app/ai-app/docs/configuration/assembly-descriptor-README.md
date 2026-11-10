@@ -704,8 +704,10 @@ enforcement points and limits that sit above them.
 ### `platform.rendering.browser`
 
 Where the processor's Chromium runs: `ws_endpoint` (a remote Playwright
-server; empty launches Chromium locally) and `idle_disconnect_s` (close an
-unused browser; `0` keeps it open). See
+server; empty launches Chromium locally), `idle_disconnect_s` (close an
+unused browser; `0` keeps it open) and `local_chromium` (`false` builds the
+processor and executor images without Chromium and never launches one
+locally). See
 [Playwright Integration](../sdk/integrations/browser/playwright-README.md#remote-browser-and-idle-disconnect).
 
 ### `platform.services.proc.service`

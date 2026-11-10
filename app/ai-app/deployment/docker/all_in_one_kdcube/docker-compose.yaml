@@ -317,6 +317,9 @@ services:
     build:
       context: ../../..
       dockerfile: deployment/docker/all_in_one_kdcube/Dockerfile_Chatproc
+      args:
+        # Rendered by the CLI from assembly.yaml platform.rendering.browser.local_chromium.
+        - INSTALL_CHROMIUM=${KDCUBE_INSTALL_CHROMIUM:-1}
     env_file:
       - path: ${KDCUBE_CONFIG_DIR:-./config}/.env.proc
         required: false

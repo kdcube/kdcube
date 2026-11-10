@@ -120,11 +120,17 @@ RUN npm install -g @anthropic-ai/claude-code \
 # Chromium and its OS libraries BEFORE the venv, from a throwaway venv, so a
 # venv change (a dependency bump, a maintainer-selected source) never repeats
 # the browser download. The app venv's own playwright reconciles below.
-RUN python -m venv /opt/playwright-bootstrap \
-    && /opt/playwright-bootstrap/bin/pip install --no-cache-dir playwright \
-    && /opt/playwright-bootstrap/bin/python -m playwright install --with-deps chromium \
-    && rm -rf /opt/playwright-bootstrap \
-    && chmod -R a+rX /opt/ms-playwright
+# INSTALL_CHROMIUM=0 leaves Chromium out of the image (assembly.yaml
+# platform.rendering.browser.local_chromium: false); rendering then uses a
+# remote Playwright server or reports that no browser is available.
+ARG INSTALL_CHROMIUM=1
+RUN if [ "$INSTALL_CHROMIUM" = "1" ]; then \
+      python -m venv /opt/playwright-bootstrap \
+      && /opt/playwright-bootstrap/bin/pip install --no-cache-dir playwright \
+      && /opt/playwright-bootstrap/bin/python -m playwright install --with-deps chromium \
+      && rm -rf /opt/playwright-bootstrap \
+      && chmod -R a+rX /opt/ms-playwright; \
+    else echo "INSTALL_CHROMIUM=$INSTALL_CHROMIUM: Chromium is not installed in this image"; fi
 
 # Create non-root user
 RUN groupadd --gid 1000 appuser && \
@@ -138,9 +144,12 @@ COPY --from=builder /opt/venv /opt/venv
 
 # The venv's playwright decides the browser build. When it matches the
 # bootstrap above this is a no-op; when it does not, only then is a build
-# downloaded.
-RUN python -m playwright install chromium && \
-    chmod -R a+rX /opt/ms-playwright
+# downloaded. Skipped with the bootstrap, or it would download the browser
+# INSTALL_CHROMIUM=0 leaves out.
+RUN if [ "$INSTALL_CHROMIUM" = "1" ]; then \
+      python -m playwright install chromium \
+      && chmod -R a+rX /opt/ms-playwright; \
+    else echo "INSTALL_CHROMIUM=$INSTALL_CHROMIUM: Chromium is not installed in this image"; fi
 
 # The platform source is the most volatile input, so it is the last layer.
 # --chown sets ownership at copy time; a chown -R afterwards would duplicate

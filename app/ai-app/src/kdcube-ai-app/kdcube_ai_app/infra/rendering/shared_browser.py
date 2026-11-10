@@ -13,7 +13,7 @@ from pathlib import Path
 
 import logging
 
-from kdcube_ai_app.infra.rendering.browser_settings import browser_settings
+from kdcube_ai_app.infra.rendering.browser_settings import browser_settings, no_local_browser_error
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +144,9 @@ class SharedBrowserService:
             )
             self._browser = None
 
+        settings = browser_settings()
         if self._browser is None:
-            ws_endpoint = browser_settings().ws_endpoint
+            ws_endpoint = settings.ws_endpoint
             if ws_endpoint:
                 try:
                     self._browser = await self._playwright.chromium.connect(ws_endpoint)
@@ -156,10 +157,15 @@ class SharedBrowserService:
                 except Exception as e:
                     logger.warning(
                         "SharedBrowserService: failed to connect to remote Playwright "
-                        "server at %s (%s); falling back to a local launch",
+                        "server at %s (%s)%s",
                         ws_endpoint, e,
+                        "; falling back to a local launch" if settings.local_chromium else "",
                     )
                     self._browser = None
+
+        if self._browser is None and not settings.local_chromium:
+            # This deployment leaves Chromium out: never launch or download it.
+            raise no_local_browser_error(settings.ws_endpoint)
 
         if self._browser is None:
             launch_args = []

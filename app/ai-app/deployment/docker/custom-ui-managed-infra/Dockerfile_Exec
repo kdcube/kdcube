@@ -45,8 +45,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Browser and its OS libraries right after the ordinary requirements: the
 # venv's playwright is fixed here, before any maintainer-selected source.
-RUN python -m playwright install --with-deps chromium && \
-    chmod -R a+rX /opt/ms-playwright
+# INSTALL_CHROMIUM=0 leaves Chromium out of the image (assembly.yaml
+# platform.rendering.browser.local_chromium: false); rendering then uses a
+# remote Playwright server or reports that no browser is available.
+ARG INSTALL_CHROMIUM=1
+RUN if [ "$INSTALL_CHROMIUM" = "1" ]; then \
+      python -m playwright install --with-deps chromium \
+      && chmod -R a+rX /opt/ms-playwright; \
+    else echo "INSTALL_CHROMIUM=$INSTALL_CHROMIUM: Chromium is not installed in this image"; fi
 
 # Create unprivileged user for executor (but entrypoint runs as root)
 RUN groupadd --gid 1001 executor && \

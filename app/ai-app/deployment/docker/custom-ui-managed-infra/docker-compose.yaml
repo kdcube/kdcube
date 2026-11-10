@@ -157,6 +157,9 @@ services:
     build:
       context: ../../..
       dockerfile: deployment/docker/custom-ui-managed-infra/Dockerfile_Chatproc
+      args:
+        # Rendered by the CLI from assembly.yaml platform.rendering.browser.local_chromium.
+        - INSTALL_CHROMIUM=${KDCUBE_INSTALL_CHROMIUM:-1}
     env_file:
       - path: ${KDCUBE_CONFIG_DIR:-.}/.env.proc
         required: false

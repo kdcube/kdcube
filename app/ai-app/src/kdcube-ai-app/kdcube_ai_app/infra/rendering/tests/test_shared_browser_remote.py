@@ -97,13 +97,24 @@ def _descriptor(monkeypatch, values: dict):
 def test_settings_default_to_local_launch_without_idle_disconnect(monkeypatch):
     _descriptor(monkeypatch, {})
 
-    assert settings_mod.browser_settings() == BrowserSettings(ws_endpoint=None, idle_disconnect_s=None)
+    assert settings_mod.browser_settings() == BrowserSettings(
+        ws_endpoint=None, idle_disconnect_s=None, local_chromium=True,
+    )
 
 
 def test_settings_read_the_descriptor(monkeypatch):
-    _descriptor(monkeypatch, {"ws_endpoint": f"  {WS} ", "idle_disconnect_s": "30"})
+    _descriptor(monkeypatch, {"ws_endpoint": f"  {WS} ", "idle_disconnect_s": "30", "local_chromium": False})
 
-    assert settings_mod.browser_settings() == BrowserSettings(ws_endpoint=WS, idle_disconnect_s=30.0)
+    assert settings_mod.browser_settings() == BrowserSettings(
+        ws_endpoint=WS, idle_disconnect_s=30.0, local_chromium=False,
+    )
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("false", False), ("0", False), ("off", False), ("yes", True), ("junk", True)])
+def test_local_chromium_parsing(monkeypatch, raw, expected):
+    _descriptor(monkeypatch, {"local_chromium": raw})
+
+    assert settings_mod.browser_settings().local_chromium is expected
 
 
 @pytest.mark.parametrize("bad", ["http://renderer:3000", "renderer:3000"])
@@ -171,6 +182,46 @@ def test_get_browser_replaces_a_disconnected_browser(monkeypatch):
 
     assert browser is fresh
     assert chromium.connect_calls == [WS]
+
+
+# --- local_chromium: false ----------------------------------------------
+
+def test_without_local_chromium_and_endpoint_nothing_is_launched_or_installed(monkeypatch):
+    _settings(monkeypatch, local_chromium=False)
+    chromium = _FakeChromium()
+    svc = _service(monkeypatch, chromium)
+    svc.auto_install_browser = True
+    installs: list = []
+    monkeypatch.setattr(shared_browser.asyncio, "create_subprocess_exec", lambda *a, **k: installs.append(a))
+
+    with pytest.raises(RuntimeError, match="local_chromium is false and no remote Playwright server"):
+        asyncio.run(svc.start())
+
+    assert chromium.launch_calls == []
+    assert installs == []
+
+
+def test_without_local_chromium_a_failed_connect_does_not_fall_back(monkeypatch):
+    _settings(monkeypatch, ws_endpoint=WS, local_chromium=False)
+    chromium = _FakeChromium(connect_exc=RuntimeError("connection refused"))
+    svc = _service(monkeypatch, chromium)
+
+    with pytest.raises(RuntimeError, match="remote Playwright server at ws://renderer:3000/playwright is unreachable"):
+        asyncio.run(svc.start())
+
+    assert chromium.connect_calls == [WS]
+    assert chromium.launch_calls == []
+
+
+def test_without_local_chromium_the_remote_server_is_used(monkeypatch):
+    _settings(monkeypatch, ws_endpoint=WS, local_chromium=False)
+    remote = _FakeBrowser()
+    chromium = _FakeChromium(connect_result=remote)
+    svc = _service(monkeypatch, chromium)
+
+    asyncio.run(svc.start())
+
+    assert svc._browser is remote
 
 
 # --- idle disconnect -----------------------------------------------------

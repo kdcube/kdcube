@@ -11,8 +11,11 @@
         browser:
           ws_endpoint: ""          # remote Playwright server; empty = launch locally
           idle_disconnect_s: 0     # > 0: drop an idle browser after this many seconds
+          local_chromium: true     # false: never launch or install Chromium here
 
 Every field is optional; an absent section keeps the local-launch behaviour.
+``local_chromium: false`` also builds the processor and executor images
+without Chromium (the CLI passes ``INSTALL_CHROMIUM=0``).
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ BROWSER_SETTINGS_PATH = "platform.rendering.browser"
 class BrowserSettings:
     ws_endpoint: Optional[str] = None
     idle_disconnect_s: Optional[float] = None
+    local_chromium: bool = True
 
 
 def _read(field: str) -> Any:
@@ -65,9 +69,34 @@ def _idle_disconnect_s(raw: Any) -> Optional[float]:
     return seconds if seconds > 0 else None
 
 
+def _local_chromium(raw: Any) -> bool:
+    if raw is None or raw == "":
+        return True
+    if isinstance(raw, bool):
+        return raw
+    text = str(raw).strip().lower()
+    if text in {"0", "false", "no", "off"}:
+        return False
+    if text not in {"1", "true", "yes", "on"}:
+        logger.warning("assembly %s.local_chromium=%r is not a boolean; keeping true", BROWSER_SETTINGS_PATH, raw)
+    return True
+
+
 def browser_settings() -> BrowserSettings:
     """Current browser settings; re-read on each call so a descriptor edit applies."""
     return BrowserSettings(
         ws_endpoint=_ws_endpoint(_read("ws_endpoint")),
         idle_disconnect_s=_idle_disconnect_s(_read("idle_disconnect_s")),
+        local_chromium=_local_chromium(_read("local_chromium")),
+    )
+
+
+def no_local_browser_error(ws_endpoint: Optional[str]) -> RuntimeError:
+    """The error for a render that needs a browser this process may not launch."""
+    where = f"the remote Playwright server at {ws_endpoint} is unreachable" if ws_endpoint else (
+        f"no remote Playwright server is configured ({BROWSER_SETTINGS_PATH}.ws_endpoint)"
+    )
+    return RuntimeError(
+        f"No browser available for rendering: {BROWSER_SETTINGS_PATH}.local_chromium is false "
+        f"and {where}."
     )

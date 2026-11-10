@@ -49,12 +49,14 @@ platform:
     browser:
       ws_endpoint: ws://renderer:3000/playwright   # remote Playwright server
       idle_disconnect_s: 300                       # close an unused browser
+      local_chromium: false                        # no Chromium in the images
 ```
 
 | Field | Default | Effect |
 |---|---|---|
 | `ws_endpoint` | empty | `ws://` or `wss://` URL of a Playwright server (`playwright run-server`). `SharedBrowserService.start()` and the TSX transpiler connect to it instead of launching Chromium. A failed connect logs a warning and falls back to the local launch. |
 | `idle_disconnect_s` | `0` (off) | After this many seconds with no `get_browser()` call and no open BrowserContext, the shared service closes its browser and Playwright driver. The next `get_browser()` reconnects or relaunches. |
+| `local_chromium` | `true` | `false` builds the processor and executor images without Chromium (the CLI passes `INSTALL_CHROMIUM=0` to both builds) and makes every launch site refuse to launch or auto-install a local browser. A render then uses `ws_endpoint`, or fails with an error naming this setting. |
 
 A browser whose connection dropped (the server stopped or crashed) is replaced
 on the next `get_browser()`. Renderers that keep a browser handle (PDF
@@ -232,6 +234,13 @@ configuration block and pass them through the same runtime config path used for 
 
 The auto-install path now has a bounded timeout. If Chromium cannot be installed quickly, startup fails with a
 managed error instead of hanging indefinitely.
+
+Chromium and its OS libraries are the largest layer of the processor and
+executor images. `platform.rendering.browser.local_chromium: false` leaves them
+out (see [Remote Browser And Idle Disconnect](#remote-browser-and-idle-disconnect));
+images built outside the CLI take the same switch as
+`--build-arg INSTALL_CHROMIUM=0`. The descriptor change applies to images on
+their next build.
 
 Recommended production behavior:
 
