@@ -349,6 +349,16 @@ Terminal expiry or revocation remains `invalid_grant`. The host logs a fixed
 reason without disclosing a bearer or exception detail, and performs no
 additional old-generation lookup to classify this refusal.
 
+A Card identity refusal from the Hub is permanent, and the host does not
+report it as `503 temporarily_unavailable` with a retry hint. The refusals
+are `card_identity_entry_resource_missing` (a connector Card without its entry
+door), `card_identity_incomplete`, `card_identity_kind_mismatch`,
+`card_identity_collision` and `card_identity_mismatch`, and the host answers
+each with HTTP 400 `invalid_grant`. The description names the reason and says
+to authorize again. On a refresh, the 4xx leaves the rotation consumed, as for
+every other authority refusal. Other Card conflicts keep the retryable 503
+(W35).
+
 Card-bound refresh also requires the portable package's named refusal type.
 A package without it is refused before rotation; unbound refresh retains its
 existing behavior. Qualification requires Connection Hub commit

@@ -55,6 +55,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentia
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.cards.service import (
     CardCommitFailed,
+    CardConflict,
 )
 
 VERIFIER = "code-verifier-" + "z" * 60
@@ -464,6 +465,45 @@ async def test_refresh_card_failure_restores_held_token_and_retry_succeeds(
     assert await store.validate_refresh_token(
         retried.json()["refresh_token"]
     ) is not None
+
+
+@pytest.mark.asyncio
+async def test_refresh_refused_for_a_card_without_its_entry_door_is_not_a_retryable_503(
+    ctx,
+    monkeypatch,
+):
+    """W35 live (yaroslav-linux, 2026-11-10 16:54Z): an editor Save emptied a connector Card's
+    entry_resource, the Hub refused the next refresh with card_identity_entry_resource_missing, and
+    the client was told 503 "the presented refresh token remains valid, retry with it" for good."""
+
+    client, store = ctx
+    code = await _seed_code(store)
+    first = client.post("/oauth/token", data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": "http://127.0.0.1:9000/callback",
+        "client_id": "claude",
+        "code_verifier": VERIFIER,
+    }).json()
+    refresh_token = first["refresh_token"]
+    _seed_live_card(store, await store.validate_refresh_token(refresh_token))
+
+    async def identity_refused(self, *args, **kwargs):
+        raise CardConflict("card_identity_entry_resource_missing")
+
+    monkeypatch.setattr(DurableCardPersistence, "persist", identity_refused)
+    response = client.post("/oauth/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": "claude",
+    })
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_grant"
+    assert "card_identity_entry_resource_missing" in body["error_description"]
+    assert "remains valid" not in body["error_description"]
+    assert "refresh_token_restored" not in body
 
 
 @pytest.mark.asyncio

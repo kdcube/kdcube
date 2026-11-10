@@ -121,6 +121,25 @@ async def test_one_cleanup_failure_does_not_prevent_the_other_or_expose_credenti
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reason", sorted(routes._PERMANENT_CARD_IDENTITY_REFUSALS))
+async def test_a_permanent_card_identity_refusal_is_not_reported_as_temporary(grant_store, monkeypatch, reason):
+    """W35: a connector Card whose entry door was emptied is refused for good; no retry clears it.
+
+    It used to be 503 temporarily_unavailable with "retry the request", and on a refresh the SDK added
+    "the presented refresh token remains valid", so the client retried a refresh that could never pass.
+    """
+    response, observed = await _refused_issuance(grant_store, monkeypatch, reason=reason)
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"] == "invalid_grant"
+    assert reason in body["error_description"] and "authorize again" in body["error_description"]
+    assert "retry the request" not in body["error_description"]
+    assert "access_token" not in body and "refresh_token" not in body
+    assert await grant_store.get_access_grant_record(ACCESS) is None
+    assert await grant_store.validate_refresh_token(observed["refresh_token"]) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome_confirmed", [None, False, True])
 async def test_caller_write_refusal_revokes_withheld_credentials(grant_store, monkeypatch, outcome_confirmed):
     response, observed = await _refused_issuance(
