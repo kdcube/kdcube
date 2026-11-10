@@ -599,6 +599,36 @@ async def resolve_config_request_secrets(
         return config_request
     return config_request.model_copy(update=updates)
 
+_DEFAULT_LLM_FALLBACK_ID = "o3-mini"
+
+
+def resolve_default_llm_model(model_id: Optional[str], provider: Optional[str] = None) -> Dict[str, Any]:
+    """Resolve `models.default_llm_model_id` to a registry-shaped model entry.
+
+    A `MODEL_CONFIGS` key resolves to its entry. An id outside the registry
+    resolves to itself when assembly `models.default_llm_provider` names its
+    provider (the same pair the direct agent host uses). Otherwise the id
+    falls back to `o3-mini`; that moves every role without an explicit spec
+    to another model and possibly another provider, so it is logged as a
+    warning naming the configured id.
+    """
+    entry = MODEL_CONFIGS.get(model_id) if model_id else None
+    if entry is not None:
+        return entry
+    explicit_provider = str(provider or "").strip().lower()
+    if model_id and explicit_provider:
+        return {"model_name": model_id, "provider": explicit_provider}
+    logging.getLogger(__name__).warning(
+        "models.default_llm_model_id %r is not a MODEL_CONFIGS key and "
+        "models.default_llm_provider is not set; roles without an explicit role "
+        "model fall back to %r. Known ids: %s",
+        model_id,
+        _DEFAULT_LLM_FALLBACK_ID,
+        ", ".join(sorted(MODEL_CONFIGS)),
+    )
+    return MODEL_CONFIGS[_DEFAULT_LLM_FALLBACK_ID]
+
+
 class Config:
     """
     Central config: keys, embedding, and ROLE → {provider, model} mapping.
@@ -638,7 +668,10 @@ class Config:
         self.format_fixer_model = "claude-3-haiku-20240307"
         self.format_fix_enabled = True
 
-        self.default_llm_model = MODEL_CONFIGS.get(default_llm_model) or  MODEL_CONFIGS.get("o3-mini")
+        self.default_llm_model = resolve_default_llm_model(
+            default_llm_model,
+            get_plain("a:models.default_llm_provider", None),
+        )
         # role map (filled later; defaults below)
         self.role_models: Dict[str, Dict[str, str]] = role_models or self.default_role_map()
 

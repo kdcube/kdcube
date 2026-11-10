@@ -76,6 +76,46 @@ MODEL_CONFIGS = {
         "provider": "anthropic",
         "has_classifier": False,
         "description": "Claude 3.7 Sonnett"
+    },
+    # Current models. Request parameters come from model_caps(): the 4.x
+    # Claude models take the default caps; Opus/Sonnet 5.x and gpt-5* match
+    # the seeded presets below.
+    "claude-haiku-4-5": {
+        "model_name": "claude-haiku-4-5",
+        "provider": "anthropic",
+        "has_classifier": True,
+        "description": "Claude Haiku 4.5"
+    },
+    "claude-sonnet-4-6": {
+        "model_name": "claude-sonnet-4-6",
+        "provider": "anthropic",
+        "has_classifier": True,
+        "description": "Claude Sonnet 4.6"
+    },
+    "claude-opus-4-6": {
+        "model_name": "claude-opus-4-6",
+        "provider": "anthropic",
+        "has_classifier": True,
+        "description": "Claude Opus 4.6"
+    },
+    "claude-sonnet-5-5": {
+        "model_name": "claude-sonnet-5-5",
+        "provider": "anthropic",
+        "has_classifier": True,
+        "description": "Claude Sonnet 5.5"
+    },
+    "claude-opus-5-5": {
+        "model_name": "claude-opus-5-5",
+        "provider": "anthropic",
+        "has_classifier": True,
+        "description": "Claude Opus 5.5"
+    },
+    "gpt-5.4-nano": {
+        "model_name": "gpt-5.4-nano",
+        "provider": "openai",
+        "has_classifier": True,
+        "temperature": False,
+        "description": "GPT-5.4 Nano"
     }
 }
 EMBEDDERS = {
