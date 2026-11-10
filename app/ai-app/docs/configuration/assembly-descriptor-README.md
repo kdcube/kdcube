@@ -485,6 +485,26 @@ frontend:
       animateStreaming: true
 ```
 
+Two optional browser features of the chat web app read this section; both are
+off when absent:
+
+```yaml
+frontend:
+  config:
+    analytics:                     # web analytics
+      provider: google
+      measurementId: G-XXXXXXXXXX
+    attachments:
+      compressImages: true         # shrink large images before upload
+```
+
+With `analytics` set, the app loads the provider's tag once, reports a page
+view, and reports each chat send as a `chat_send` event whose parameters
+describe the request shape (app id, attachment and event counts, follow-up
+flag), never message text or file names. No measurement ID ships in the build.
+`attachments.compressImages` is described in
+[Attachments System §2.4](../hosting/attachments-system.md).
+
 Use this section for browser-only deployment differences, for example a local
 development auth proxy path or a custom SPA route prefix. `auth.turnstile_development_token`
 is still read from the `auth` section and is published as

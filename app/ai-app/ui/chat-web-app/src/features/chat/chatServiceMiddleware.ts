@@ -4,6 +4,7 @@ import {AppDispatch, AppStore, RootState} from "../../app/store.ts";
 import SocketIOChat from "../chatController/socketIOChat.ts";
 import {createClientTurnId} from "../../utils/clientIds.ts";
 import {compressImageForUpload} from "../../utils/imageCompress.ts";
+import {trackAnalyticsEvent} from "../../utils/analytics.ts";
 import {imageCompressionTarget, resolveAttachmentLimits} from "./attachmentLimits.ts";
 import {
     chatCompleted,
@@ -496,6 +497,15 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                             ts: new Date().toISOString(),
                         }
                     )
+
+                    trackAnalyticsEvent("chat_send", {
+                        bundle_id: chatRequest.bundle_id,
+                        has_message: Boolean(message),
+                        attachments_count: attachments.length,
+                        external_events_count: request.externalEvents?.length ?? 0,
+                        is_followup: targetsOpenTurn,
+                        reactive_event_type: reactiveEventType,
+                    })
 
                     transport.sendChatMessage(chatRequest, files, conversationId).then((ack) => {
 

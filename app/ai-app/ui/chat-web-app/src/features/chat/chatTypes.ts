@@ -43,7 +43,12 @@ export interface ChatAttachmentSettings {
     };
 }
 
-export interface ChatSettings extends ChatScope, ChatAuthSettings, ChatRoutingSettings, ChatTransportSettings, ChatEventReportingSettings, ChatVersionSettings, ChatAttachmentSettings {
+export interface ChatAnalyticsSettings {
+    /** Opt-in web analytics; see utils/analytics.ts. Absent = off. */
+    analytics?: Record<string, unknown>;
+}
+
+export interface ChatSettings extends ChatScope, ChatAuthSettings, ChatRoutingSettings, ChatTransportSettings, ChatEventReportingSettings, ChatVersionSettings, ChatAttachmentSettings, ChatAnalyticsSettings {
 }
 
 export interface ChatSettingsState {
