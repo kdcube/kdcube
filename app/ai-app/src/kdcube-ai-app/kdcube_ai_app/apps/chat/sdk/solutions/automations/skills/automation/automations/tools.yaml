@@ -1,7 +1,7 @@
 tools:
   - id: automations.create_automation
     role: create executable automation assets
-    why: Persist actionable or scheduled work for the current user.
+    why: Persist work the assistant runs on demand or on a schedule for the current user.
     required: true
   - id: automations.list_automations
     role: list and search automation assets

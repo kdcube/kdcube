@@ -13,7 +13,7 @@ when_to_use:
   - The user asks to create, list, disable, delete, restore, or search automations.
   - The user asks to schedule recurring work.
   - The user asks for a recurring news/search/report generation automation.
-  - A chat, webhook, Telegram, or other channel message asks the assistant to track actionable work.
+  - A chat, webhook, Telegram, or other channel message asks the assistant to run or schedule work.
   - The user describes an email-processing automation that should run later.
 author: kdcube
 created: 2026-05-02
@@ -27,7 +27,8 @@ Automations are executable assets. They are not user memory.
 Use `automations.list_automations` before creating a automation when the request may duplicate an existing automation.
 Use `automations.search_automations` when the user asks to edit, delete, connect, or find a specific existing automation.
 Use `automations.get_automation` to inspect the full automation definition and recent execution history before changing or explaining it.
-Use `automations.create_automation` for actionable work the assistant may later execute or schedule.
+Use `automations.create_automation` for work the assistant will execute on demand or on a schedule.
+A request to record a problem or a to-do for people ("save that as a task to fix", "file this as a bug") is a defect report: use an issue or bug-report tool when the app provides one, otherwise tell the user it was not filed. When a request could mean either, ask which one is meant.
 Use `automations.update_automation` for automation definition changes after identifying the exact automation.
 Use `automations.delete_automation` for removal requests; it soft-deletes by default.
 Use `automations.set_automation_status` for disable, archive, delete, restore, and enable requests.

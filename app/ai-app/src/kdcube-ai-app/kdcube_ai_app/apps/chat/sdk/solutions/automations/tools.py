@@ -98,8 +98,13 @@ class AutomationTools:
     @kernel_function(
         name="create_automation",
         description=(
-            "Create a durable executable automation asset for the current user. Use for user requests to create, track, "
-            "schedule, or manage actionable work. This is not user memory."
+            "Create a durable executable automation asset for the current user: work the assistant runs on a "
+            "schedule or on demand, e.g. 'send me a summary of new orders every morning at 08:00', 'check the "
+            "status page every hour', 'run the weekly usage report'. A request to record a problem or a to-do for "
+            "people ('save that as a task to fix', 'file this as a bug', 'note that this is broken') is a defect "
+            "report, not work to run: use an issue or bug-report tool when one is available, otherwise tell the "
+            "user plainly that it was not filed. When a request could mean either running work or recording an "
+            "item, ask which one is meant. Automations are separate from user memory."
         ),
     )
     async def create_automation(
