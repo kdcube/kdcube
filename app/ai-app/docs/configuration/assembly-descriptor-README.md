@@ -701,6 +701,13 @@ Byte caps for chat attachments, shared by ingress and the processor:
 [Attachments System §2.4](../hosting/attachments-system.md) for the
 enforcement points and limits that sit above them.
 
+### `platform.rendering.browser`
+
+Where the processor's Chromium runs: `ws_endpoint` (a remote Playwright
+server; empty launches Chromium locally) and `idle_disconnect_s` (close an
+unused browser; `0` keeps it open). See
+[Playwright Integration](../sdk/integrations/browser/playwright-README.md#remote-browser-and-idle-disconnect).
+
 ### `platform.services.proc.service`
 
 `platform.services.proc.service` owns proc service runtime controls, including

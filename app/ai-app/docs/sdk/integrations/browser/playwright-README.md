@@ -36,6 +36,32 @@ The shared browser service is responsible for:
 
 It is not responsible for per-user or per-turn isolation. That isolation happens at the BrowserContext layer.
 
+## Remote Browser And Idle Disconnect
+
+Chromium is the largest process a small deployment runs, and most of the time
+nothing is rendering. A deployment can run it in a separate Playwright server
+(another container or host, started on demand) and let the processor hold a
+connection only while it is in use. Both are `assembly.yaml` settings:
+
+```yaml
+platform:
+  rendering:
+    browser:
+      ws_endpoint: ws://renderer:3000/playwright   # remote Playwright server
+      idle_disconnect_s: 300                       # close an unused browser
+```
+
+| Field | Default | Effect |
+|---|---|---|
+| `ws_endpoint` | empty | `ws://` or `wss://` URL of a Playwright server (`playwright run-server`). `SharedBrowserService.start()` and the TSX transpiler connect to it instead of launching Chromium. A failed connect logs a warning and falls back to the local launch. |
+| `idle_disconnect_s` | `0` (off) | After this many seconds with no `get_browser()` call and no open BrowserContext, the shared service closes its browser and Playwright driver. The next `get_browser()` reconnects or relaunches. |
+
+A browser whose connection dropped (the server stopped or crashed) is replaced
+on the next `get_browser()`. Renderers that keep a browser handle (PDF
+rendering, link previews) re-acquire it on every render, so they never use a
+browser the service replaced. The settings are read on each start, so a
+descriptor edit applies to the next connection.
+
 ## BrowserContext Scope
 
 Playwright `Browser` is process-wide. Playwright `BrowserContext` is the isolation boundary.
