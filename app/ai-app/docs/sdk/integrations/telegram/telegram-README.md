@@ -823,7 +823,7 @@ Two bundle properties control this behavior:
 
 | Property | Meaning |
 | --- | --- |
-| `integrations.telegram.stream_activity` | Enables the Telegram activity streamer. When this is `false`, no live progress or live file delivery is sent by the streamer. Final delivery can still run after the turn according to `send_responses`. |
+| `integrations.telegram.stream_activity` | Enables the Telegram activity streamer. When this is `false`, nothing is sent while the turn runs. With `send_responses=true`, the streamer still collects the files the turn announces through `chat.files` (`collect_files=True`), and final delivery appends them after the answer, de-duplicated against the files in the result's turn log or timeline. A runner result therefore does not need to carry hosted files for final-only delivery to send them. |
 | `integrations.telegram.stream_activity_display` | Controls the progress display inside the streamer. When this is `false`, the streamer suppresses progress/status/thinking/source messages but still delivers `chat.files` events and `chat.error` messages. Use this when Telegram should stay quiet during long turns but files produced during the turn must still be delivered immediately and de-duplicated from final delivery. |
 
 When `turn_id` is provided, the streamer ignores activity whose

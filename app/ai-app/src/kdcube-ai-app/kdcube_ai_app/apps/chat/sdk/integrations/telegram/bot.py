@@ -284,8 +284,15 @@ def render_telegram_messages_from_timeline(
     react_turn: Mapping[str, Any] | None = None,
     exclude_file_keys: set[str] | None = None,
     prefer_react_turn_answer: bool = False,
+    extra_file_items: list[Mapping[str, Any]] | None = None,
 ) -> list[TelegramMessage]:
-    """Render a Telegram-safe response from timeline-like turn output."""
+    """Render a Telegram-safe response from timeline-like turn output.
+
+    ``extra_file_items`` are files the turn announced outside its timeline
+    (for example ``chat.files`` events observed while the turn ran). They are
+    delivered after the timeline's own files unless the timeline already
+    carries the same file or its key is in ``exclude_file_keys``.
+    """
     timeline_payload = _timeline_payload(timeline or {})
     texts: list[str] = []
     if prefer_react_turn_answer and isinstance(react_turn, Mapping):
@@ -310,7 +317,19 @@ def render_telegram_messages_from_timeline(
         messages.append(TelegramMessage(kind="text", text=_markdown_to_telegram_html(sources_text), parse_mode="HTML"))
 
     skipped_file_keys = set(str(item or "").strip() for item in (exclude_file_keys or set()) if str(item or "").strip())
-    for file_item in _artifact_files_from_timeline(timeline_payload):
+    file_items = _artifact_files_from_timeline(timeline_payload)
+    timeline_keys = {_file_delivery_key(item) for item in file_items}
+    timeline_paths = {_file_delivery_path(item) for item in file_items}
+    for extra in extra_file_items or []:
+        if not isinstance(extra, Mapping) or not extra:
+            continue
+        extra_item = dict(extra)
+        key = _file_delivery_key(extra_item)
+        if not key or key in timeline_keys or _file_delivery_path(extra_item) in timeline_paths:
+            continue
+        timeline_keys.add(key)
+        file_items.append(extra_item)
+    for file_item in file_items:
         if _file_delivery_key(file_item) in skipped_file_keys:
             continue
         messages.append(

@@ -870,10 +870,14 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         or getattr(getattr(comm_context, "routing", None), "turn_id", "")
         or ""
     ).strip()
-    stream_enabled = bool(
-        _telegram_definition_prop(entrypoint, "stream_activity", True, integration_id=integration_id)
-        and _telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)
-    )
+    stream_activity = bool(_telegram_definition_prop(entrypoint, "stream_activity", True, integration_id=integration_id))
+    send_responses = bool(_telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id))
+    stream_enabled = stream_activity and send_responses
+    # Final-only delivery (stream_activity=false) still owes the user the files
+    # the turn announced through chat.files: those files need not be in the
+    # runner's result or timeline, so the streamer observes them silently and
+    # final delivery appends them after the answer.
+    collect_files = send_responses and not stream_activity
     stream_show_progress = bool(
         _telegram_definition_prop(entrypoint, "stream_activity_display", True, integration_id=integration_id)
     )
@@ -883,8 +887,9 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         chat_id=chat_id,
         message_thread_id=message_thread_id,
         turn_id=turn_id,
-        enabled=stream_enabled,
+        enabled=stream_enabled or collect_files,
         show_progress=stream_show_progress,
+        collect_files=collect_files,
     ) as telegram_streamer:
         result = await runner()
     if not isinstance(result, dict):
@@ -899,7 +904,8 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         delivered_file_keys=telegram_streamer.delivered_file_keys() if telegram_streamer else set(),
         progress_message_id=telegram_streamer.progress_message_id() if telegram_streamer else None,
         progress_summary=telegram_streamer.progress_summary() if telegram_streamer else "",
-        send_responses=bool(_telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)),
+        send_responses=send_responses,
+        extra_file_items=telegram_streamer.collected_file_items() if telegram_streamer else [],
     )
     result["telegram"] = {
         "queued_delivery": True,

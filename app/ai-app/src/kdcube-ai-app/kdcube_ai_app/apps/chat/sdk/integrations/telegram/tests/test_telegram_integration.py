@@ -545,6 +545,9 @@ async def test_queued_telegram_delivery_uses_processor_payload_telegram(monkeypa
         def progress_summary(self):
             return ""
 
+        def collected_file_items(self):
+            return []
+
     monkeypatch.setattr(user_admin, "deliver_turn_to_telegram", _deliver)
     monkeypatch.setattr(user_admin, "TelegramActivityStreamer", _FakeStreamer)
     monkeypatch.setattr(user_admin, "bot_token", lambda entrypoint=None: "telegram-token")

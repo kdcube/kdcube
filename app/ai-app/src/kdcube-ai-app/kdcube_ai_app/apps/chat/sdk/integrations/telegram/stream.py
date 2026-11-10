@@ -61,6 +61,7 @@ class TelegramActivityStreamer:
         turn_id: str | None = None,
         enabled: bool = True,
         show_progress: bool = True,
+        collect_files: bool = False,
         quiet_seconds: float = 1.5,
         min_send_interval_seconds: float = 3.0,
         max_message_chars: int = 1400,
@@ -77,6 +78,10 @@ class TelegramActivityStreamer:
         # (chat.delta / chat.step / chat.service / chat.compaction / chat.citations)
         # but KEEP file delivery (chat.files) and error surfacing (chat.error).
         self.show_progress = bool(show_progress)
+        # When True, observe ONLY chat.files and record the files instead of
+        # sending them: final-only delivery appends them after the answer.
+        # Nothing is sent to Telegram while the turn runs.
+        self.collect_files = bool(collect_files)
         self.quiet_seconds = max(0.3, float(quiet_seconds or 1.5))
         self.min_send_interval_seconds = max(0.5, float(min_send_interval_seconds or 3.0))
         self.max_message_chars = max(300, int(max_message_chars or 1400))
@@ -89,6 +94,8 @@ class TelegramActivityStreamer:
         self._seen_progress_texts: set[str] = set()
         self._seen_activity_signatures: dict[str, float] = {}
         self._delivered_file_keys: set[str] = set()
+        self._collected_files: list[dict[str, Any]] = []
+        self._collected_file_keys: set[str] = set()
         self._progress_message_id: str | int | None = None
         self._progress_chunks: list[str] = []
         self._last_send_at = 0.0
@@ -101,6 +108,10 @@ class TelegramActivityStreamer:
 
     def delivered_file_keys(self) -> set[str]:
         return set(self._delivered_file_keys)
+
+    def collected_file_items(self) -> list[dict[str, Any]]:
+        """Files announced by chat.files this turn and held for final delivery."""
+        return [dict(item) for item in self._collected_files]
 
     def progress_message_id(self) -> str | int | None:
         return self._progress_message_id
@@ -181,6 +192,8 @@ class TelegramActivityStreamer:
         return str(conv.get("turn_id") or "").strip()
 
     def _should_accept_activity(self, activity: Mapping[str, Any]) -> bool:
+        if self.collect_files:
+            return self._activity_type(activity) == "chat.files"
         if self.show_progress:
             return True
         return self._activity_type(activity) in {"chat.files", "chat.error"}
@@ -332,6 +345,10 @@ class TelegramActivityStreamer:
         if not isinstance(env, Mapping):
             return
         typ = str(env.get("type") or "")
+        if self.collect_files:
+            if typ == "chat.files":
+                self._collect_files_event(env)
+            return
         # When progress display is suppressed, process ONLY file delivery
         # (chat.files) and errors (chat.error); skip thinking/step/progress.
         if not self.show_progress and typ not in {"chat.files", "chat.error"}:
@@ -418,6 +435,19 @@ class TelegramActivityStreamer:
         result = await self._send_file_messages(messages, reason="chat.files")
         if result.get("ok"):
             self._delivered_file_keys.update(pending_keys)
+
+    def _collect_files_event(self, env: Mapping[str, Any]) -> None:
+        data = env.get("data") if isinstance(env.get("data"), Mapping) else {}
+        items = data.get("items") if isinstance(data, Mapping) else None
+        if not isinstance(items, list):
+            return
+        for item in items:
+            file_item = self._file_item_from_event_item(item)
+            key = _file_delivery_key(file_item)
+            if not file_item or not key or key in self._collected_file_keys:
+                continue
+            self._collected_file_keys.add(key)
+            self._collected_files.append(file_item)
 
     async def _handle_citations_event(self, env: Mapping[str, Any]) -> None:
         data = env.get("data") if isinstance(env.get("data"), Mapping) else {}
