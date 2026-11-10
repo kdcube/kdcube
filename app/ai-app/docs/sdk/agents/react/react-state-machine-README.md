@@ -99,6 +99,15 @@ Two invariants follow:
   `_keep_and_stop_if_answer_streamed` finalizes with that exact emitted text.
   It does not ask the model to repeat the answer. Progress without a final
   answer remains progress and follows the normal notice/retry path.
+- **An answer written outside every channel is delivered and stated.** When
+  validation fails with no retry left and the model wrote user-facing prose
+  outside every channel (typically after closing its thinking channel on the
+  last round), that prose becomes the final answer. The runtime logs it,
+  records `final_answer_salvaged` in the session log, and adds a
+  `protocol_violation.final_answer_outside_channels` notice to the timeline so
+  the model sees what the user received. Text inside an unclosed channel,
+  JSON- or fence-shaped text, and fragments under 24 characters are never
+  salvaged; with nothing to salvage the round exits with the fallback answer.
 
 ### Completion rounds
 A `complete`/`exit` round carries the user-facing `final_answer` and exactly

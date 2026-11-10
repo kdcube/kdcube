@@ -2385,3 +2385,154 @@ async def test_decision_node_prefers_per_iteration_answer_started_at(monkeypatch
 
     assert solver.scratchpad.assistant_completion_attempts[0]["ts"] == "2026-04-27T01:44:59.250000Z"
     assert note_calls == []
+
+
+UNTAGGED_FINAL_ANSWER_RAW = (
+    "<channel:thinking>The release notes are already in context; I can answer.</channel:thinking>\n"
+    "\n"
+    "**Release 1.1.0** adds web login and single-session admin access, "
+    "expanding access options beyond the prior release.\n"
+)
+
+
+def _final_round_solver(monkeypatch, *, raw: str):
+    """Decision node on the last iteration whose model output parses to an empty decision."""
+    solver = _solver_stub()
+    notices = []
+
+    class _Timeline:
+        last_external_event_seq = 0
+        blocks = []
+
+    class _Browser:
+        def __init__(self):
+            self.timeline = _Timeline()
+            self.runtime_ctx = SimpleNamespace(
+                bundle_id="bundle.test",
+                workspace_implementation="custom",
+                turn_id="turn-1",
+            )
+            self.sources_pool = []
+
+        async def wait_and_drain_external_events(self, **kwargs):
+            return 0
+
+        async def drain_external_events(self, **kwargs):
+            return 0
+
+        def announce(self, **kwargs):
+            return None
+
+        def contribute_notice(self, **kwargs):
+            notices.append(kwargs)
+
+        def contribute(self, *args, **kwargs):
+            return None
+
+        feedback_updates = []
+        feedback_updates_integrated = False
+        timeline_visible_paths = []
+
+    class _TimelineStreamer:
+        def has_started(self, name):
+            return False
+
+        def started_at(self, name):
+            return None
+
+        def next_index(self, name):
+            return 0
+
+    solver.ctx_browser = _Browser()
+    solver.comm = SimpleNamespace(delta=_noop_async, service_event=_noop_async)
+    solver._drain_external_events = _noop_async
+    solver._update_announce = _noop_async
+    solver._mk_mainstream = lambda phase: _noop_async
+    solver._mk_exec_code_streamer = lambda phase, idx, execution_id=None: (_noop_async, None)
+    solver._mk_content_streamers = lambda phase, sources_list=None, artifact_name=None: ([], [])
+    solver._mk_timeline_streamer = lambda *args, **kwargs: (_noop_async, _TimelineStreamer())
+    solver._append_react_timing = lambda **kwargs: None
+    solver._adapters_index = lambda adapters: {a["id"]: a for a in adapters}
+    solver._short_json = lambda obj, max_len=800: str(obj)
+    solver._protocol_violation_message = lambda **kwargs: "protocol"
+    solver.scratchpad = SimpleNamespace(
+        turn_id="turn-1",
+        register_agentic_response=lambda *args, **kwargs: None,
+    )
+
+    async def _validate_tool_params(*, tool_id, params):
+        return {"status": "green", "issues": [], "params": params}
+
+    solver.tools_subsystem = SimpleNamespace(validate_tool_params=_validate_tool_params)
+
+    async def _fake_retry_with_compaction(**kwargs):
+        return await kwargs["agent_fn"](blocks=[])
+
+    async def _fake_react_decision_stream_v2(**kwargs):
+        return {
+            "agent_response": {},
+            "agent_response_bundle": [],
+            "log": {"error": None},
+            "channels": {},
+            "raw": raw,
+        }
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.chatbot.agent_retry.retry_with_compaction",
+        _fake_retry_with_compaction,
+    )
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v3.runtime.emit_event",
+        _noop_async,
+    )
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v3.runtime.react_decision_stream_v2",
+        _fake_react_decision_stream_v2,
+    )
+    state = {
+        "iteration": 14,
+        "max_iterations": 15,
+        "adapters": [],
+        "outdir": "/tmp/out",
+        "workdir": "/tmp/work",
+        "turn_id": "turn-1",
+        "decision_retries": 0,
+        "max_decision_retries": 2,
+        "session_log": [],
+        "round_timings": [],
+    }
+    return solver, state, notices
+
+
+@pytest.mark.asyncio
+async def test_last_round_untagged_answer_is_delivered_and_stated(monkeypatch):
+    solver, state, notices = _final_round_solver(monkeypatch, raw=UNTAGGED_FINAL_ANSWER_RAW)
+
+    out = await solver._decision_node_impl(state, 14)
+
+    final_answer = out["last_decision"]["final_answer"]
+    assert final_answer.startswith("**Release 1.1.0** adds web login")
+    assert final_answer != ReactSolverV2.DECISION_VALIDATION_FAILED_ANSWER
+    assert "channel:" not in final_answer
+    # Harness transparency: the substitution is recorded in-band and in the session log.
+    salvage_notices = [
+        n for n in notices if n.get("code") == "protocol_violation.final_answer_outside_channels"
+    ]
+    assert len(salvage_notices) == 1
+    assert "verbatim" in salvage_notices[0]["message"]
+    assert any(entry.get("type") == "final_answer_salvaged" for entry in state["session_log"])
+
+
+@pytest.mark.asyncio
+async def test_last_round_without_salvageable_text_keeps_the_fallback_answer(monkeypatch):
+    solver, state, notices = _final_round_solver(
+        monkeypatch,
+        raw="<channel:thinking>nothing useful</channel:thinking>\n{\"action\": ",
+    )
+
+    out = await solver._decision_node_impl(state, 14)
+
+    assert out["last_decision"]["final_answer"] == ReactSolverV2.DECISION_VALIDATION_FAILED_ANSWER
+    assert not [
+        n for n in notices if n.get("code") == "protocol_violation.final_answer_outside_channels"
+    ]

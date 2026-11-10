@@ -31,6 +31,9 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     bind_current_bundle_call_context_patch,
     get_current_bundle_call_context,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.final_answer_salvage import (
+    salvage_untagged_final_answer,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.agents.decision import (
     ReactDecisionPrefixGuard,
     parse_single_react_decision_from_channel_text,
@@ -3207,6 +3210,75 @@ class ReactSolverV2:
             except Exception:
                 self.log.log(traceback.format_exc())
 
+    DECISION_VALIDATION_FAILED_ANSWER = "Decision validation failed."
+
+    def _last_resort_exit_decision(
+        self,
+        *,
+        decision_packet: Any,
+        code: str,
+        state: Dict[str, Any],
+        iteration: int,
+        tool_call_id: str = "",
+    ) -> Dict[str, Any]:
+        """Exit decision once decision validation has no retry left.
+
+        When the model wrote its answer as untagged prose outside every
+        channel, that prose is the turn's final answer. The substitution is
+        stated, not silent: it is logged with evidence, recorded in the
+        session log, and contributed to the timeline as a ``react.notice`` so
+        the model later sees exactly what the user received. With nothing to
+        salvage the runtime exits with its fallback answer, as before.
+        """
+        raw = ""
+        if isinstance(decision_packet, dict):
+            raw = str(decision_packet.get("raw") or "")
+        salvaged = salvage_untagged_final_answer(raw)
+        if not salvaged:
+            self.log.log(
+                f"[react.v3] last-resort exit: no untagged answer to salvage "
+                f"code={code or 'n/a'} raw_chars={len(raw)}",
+                level="WARNING",
+            )
+            return {"action": "exit", "final_answer": self.DECISION_VALIDATION_FAILED_ANSWER}
+        self.log.log(
+            f"[react.v3] last-resort exit: delivering the untagged answer the model "
+            f"wrote outside its channels code={code or 'n/a'} raw_chars={len(raw)} "
+            f"answer_chars={len(salvaged)}",
+            level="WARNING",
+        )
+        try:
+            state.setdefault("session_log", []).append({
+                "type": "final_answer_salvaged",
+                "iteration": iteration,
+                "timestamp": time.time(),
+                "error": code,
+                "answer_chars": len(salvaged),
+            })
+        except Exception:
+            pass
+        if self.ctx_browser is not None:
+            try:
+                self.ctx_browser.contribute_notice(
+                    code="protocol_violation.final_answer_outside_channels",
+                    message=(
+                        "Your final answer was written outside every channel, so the "
+                        "decision could not be parsed and no retry was left. The runtime "
+                        "delivered that untagged text to the user verbatim as the final "
+                        "answer of this turn."
+                    ),
+                    extra={"validation_error": code, "answer_chars": len(salvaged)},
+                    call_id=tool_call_id or None,
+                    meta={
+                        "rel": "call",
+                        "iteration": iteration,
+                        "reason": code,
+                    },
+                )
+            except Exception:
+                pass
+        return {"action": "exit", "final_answer": salvaged}
+
     @staticmethod
     def _decision_retry_available(
         state: Dict[str, Any],
@@ -3911,7 +3983,13 @@ class ReactSolverV2:
                 })
                 state["last_decision"] = decision
                 return state
-            decision = {"action": "exit", "final_answer": "Decision validation failed."}
+            decision = self._last_resort_exit_decision(
+                decision_packet=decision if isinstance(decision, dict) else {},
+                code=code,
+                state=state,
+                iteration=iteration,
+                tool_call_id=pending_tool_call_id,
+            )
         try:
             for instance_state in decision_stream_instances.values():
                 instance_timeline_streamer = instance_state.get("timeline_streamer")
@@ -4133,7 +4211,13 @@ class ReactSolverV2:
                     })
                     state["last_decision"] = decision
                     return state
-                decision = {"action": "exit", "final_answer": "Decision validation failed."}
+                decision = self._last_resort_exit_decision(
+                    decision_packet=decision_packet,
+                    code=packet_validation_error,
+                    state=state,
+                    iteration=iteration,
+                    tool_call_id=pending_tool_call_id,
+                )
 
             if decision_parse_error_items and decision_bundle:
                 await self._record_dropped_action_parse_items(
@@ -4213,7 +4297,13 @@ class ReactSolverV2:
                         })
                         state["last_decision"] = decision
                         return state
-                    decision = {"action": "exit", "final_answer": "Decision validation failed."}
+                    decision = self._last_resort_exit_decision(
+                        decision_packet=decision_packet,
+                        code=bundle_error,
+                        state=state,
+                        iteration=iteration,
+                        tool_call_id=pending_tool_call_id,
+                    )
                 else:
                     bundle_mode = True
                     state["invalid_action_retries"] = 0
@@ -4253,7 +4343,13 @@ class ReactSolverV2:
                         decision = final_decision
                         bundle_mode = False
                     else:
-                        decision = {"action": "exit", "final_answer": "Decision validation failed."}
+                        decision = self._last_resort_exit_decision(
+                            decision_packet=decision_packet,
+                            code="no_accepted_action",
+                            state=state,
+                            iteration=iteration,
+                            tool_call_id=pending_tool_call_id,
+                        )
                     pending_tool_bundle: List[Dict[str, Any]] = []
                     for accepted_position, item in enumerate(accepted_bundle):
                         source_action_index = (
@@ -4382,7 +4478,13 @@ class ReactSolverV2:
                         state["last_decision"] = decision
                         return state
                     else:
-                        decision = {"action": "exit", "final_answer": "Decision validation failed."}
+                        decision = self._last_resort_exit_decision(
+                            decision_packet=decision_packet,
+                            code=validation_error,
+                            state=state,
+                            iteration=iteration,
+                            tool_call_id=pending_tool_call_id,
+                        )
                 else:
                     state["invalid_action_retries"] = 0
                     state["force_compaction_next_decision"] = False
