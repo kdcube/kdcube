@@ -255,3 +255,41 @@ def compute_cost_estimate(rollup: List[dict], *, services_config: Optional[dict]
         "breakdown": breakdown,
     }
 
+
+
+
+def apply_priced_cost(
+        total: Optional[Dict[str, Any]],
+        rollup: Optional[List[dict]],
+        cost_estimate: Optional[dict],
+) -> tuple:
+    """`(total, rollup)` copies carrying the priced cost.
+
+    Accounting events carry token counts, not dollars, so an aggregated
+    `total.cost_usd` and each `rollup[i].spent.cost_usd` hold only the
+    provider-REPORTED cost: zero for every call the price table prices. The
+    copies carry `cost_estimate`'s figures instead (its breakdown is one item
+    per rollup line, in order). The inputs are not modified, so a cached
+    aggregate is never rewritten. A breakdown/rollup length mismatch is
+    logged and leaves the per-line figures as they were rather than pairing a
+    line with another line's price."""
+    total_out = dict(total or {})
+    rollup_out = [
+        dict(row, spent=dict(row.get("spent") or {})) if isinstance(row, dict) else row
+        for row in (rollup or [])
+    ]
+    if not cost_estimate:
+        return total_out, rollup_out
+    total_out["cost_usd"] = float(cost_estimate.get("total_cost_usd", 0.0) or 0.0)
+    breakdown = cost_estimate.get("breakdown") or []
+    if len(breakdown) != len(rollup_out):
+        logger.warning(
+            "[pricing] rollup/breakdown length mismatch (%d vs %d); "
+            "rollup[].spent.cost_usd left unpriced",
+            len(rollup_out), len(breakdown),
+        )
+        return total_out, rollup_out
+    for row, priced in zip(rollup_out, breakdown):
+        if isinstance(row, dict):
+            row["spent"]["cost_usd"] = float(priced.get("cost_usd", 0.0) or 0.0)
+    return total_out, rollup_out

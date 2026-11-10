@@ -308,6 +308,9 @@ Spend-report surfaces on top of this data:
   sorted/filtered page (`sort_by`, `order`, `offset`, `q`); `source` in the
   response says whether the page came from the DB index (`rollup`) or the
   file aggregates (`aggregates`).
+- `GET /api/opex/total` / `/conversation` — window or conversation usage
+  with its `cost_estimate`; `total.cost_usd` and each
+  `rollup[].spent.cost_usd` carry the same priced figures.
 - `GET /api/economics/me/cost-breakdown` — the authenticated user's actual
   per-model spend (aggregates-only; `coverage` flags un-aggregated windows).
 - Economics admin dashboard **Cost Report** tab
