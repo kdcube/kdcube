@@ -374,7 +374,7 @@ Key tables:
 - `user_plan_period_budget` — per period subscription balance
 - `user_plan_period_reservations` — subscription holds
 - `user_plan_period_ledger` — subscription ledger
-- `external_economics_events` — idempotency and audit for external/internal economic operations
+- `external_economics_events` — idempotency and audit for external/internal economic operations; written only through `ExternalEconomicsLedger` ([external_events.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/external_events.py))
 
 ## Accounting and Costing
 

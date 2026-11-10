@@ -152,6 +152,15 @@ If metadata is missing, the webhook handler attempts fallback lookups via the DB
 
 All events are idempotent via `external_economics_events` table (keyed by Stripe event ID).
 
+Every rail claims and marks its row through one module,
+[`external_events.py`](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/external_events.py)
+(`ExternalEconomicsLedger`). A row is identified by `(source, kind, external_id)`;
+`source` is `stripe` for provider events and `internal` for admin/subscription
+operations. `ExternalEconomicsLedger.apply_once` claims the row, runs the
+caller's effect and marks it applied on the caller's connection, so the credit
+and the ledger mark commit or roll back together. A new payment rail uses a new
+`source` value with the same ledger.
+
 **Event ordering matters in the reconcile job.** Events are replayed in ascending
 `created` timestamp order to guarantee causal consistency:
 - `invoice.paid` must be applied before `customer.subscription.updated` for the same period.
