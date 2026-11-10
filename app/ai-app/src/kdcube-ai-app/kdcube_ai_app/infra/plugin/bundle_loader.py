@@ -45,6 +45,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
 from kdcube_ai_app.infra.plugin.app_readiness import application_readiness_registry
 from kdcube_ai_app.infra.plugin.bundle_registry import ADMIN_BUNDLE_ID, BundleSpec
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+from kdcube_ai_app.infra.service_hub.model_credentials import without_user_credentials
 _log = logging.getLogger("kdcube.plugin.loader")
 
 # --------------------------------------------------------------------------------------
@@ -3078,6 +3079,18 @@ def get_workflow_instance(
         )
 
     chosen_kind, meta, symbol = chosen
+
+    # A process-wide instance serves every later caller with the config it was
+    # built from, so it is never built from one caller's own model key.
+    if spec.singleton or (chosen_kind == "factory" and meta.get("singleton")):
+        shared_config = without_user_credentials(config)
+        if shared_config is not config:
+            _log.warning(
+                "Singleton app %s is built with app/platform model keys; "
+                "model_credentials.user_keys applies only to per-turn instances",
+                getattr(spec, "id", None),
+            )
+        config = shared_config
 
     # instantiate
     extra_kwargs = {

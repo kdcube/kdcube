@@ -16,7 +16,7 @@ import requests
 import time
 from typing import Optional, Any, Dict, List, AsyncIterator, Callable, Awaitable, TypedDict, Union, Literal, Mapping
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 from langchain_core.embeddings import Embeddings
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage, AIMessageChunk, ToolMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -34,6 +34,7 @@ from kdcube_ai_app.infra.llm.llm_data_model import ModelRecord, AIProvider, AIPr
 from kdcube_ai_app.infra.embedding.embedding import get_embedding
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 import kdcube_ai_app.infra.service_hub.errors as service_errors
+import kdcube_ai_app.infra.service_hub.model_credentials as model_credentials
 import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain, get_secret
 from kdcube_ai_app.apps.chat.sdk.streaming.stream_policy import StreamPolicyViolation
@@ -566,38 +567,77 @@ class ConfigRequest(BaseModel):
     project: Optional[str] = None
     assistant_signal_spec: Optional[str] = None
 
+    # Where each credential came from ({field: "request"|"user"|"bundle"|"platform"})
+    # and, for user-sourced fields, the shared (bundle/platform) fallback. Private:
+    # set only by resolve_config_request_secrets, never from request input.
+    _credential_sources: Dict[str, str] = PrivateAttr(default_factory=dict)
+    _shared_credentials: Dict[str, tuple] = PrivateAttr(default_factory=dict)
+
 
 async def resolve_config_request_secrets(
         config_request: ConfigRequest,
         *,
         bundle_id: str | None = None,
+        user_id: str | None = None,
 ) -> ConfigRequest:
-    """Resolve provider-backed model credentials before sync client factories run."""
-    updates: dict[str, str] = {}
+    """Resolve provider-backed model credentials before sync client factories run.
 
-    async def _resolve(field: str, canonical_key: str) -> None:
-        if getattr(config_request, field, None):
-            return
-        value = None
+    Precedence per field: a value already on the request > the caller's own key
+    (only when the app enables ``model_credentials.user_keys``) > the app key >
+    the platform key. ``user_id`` names the caller explicitly; when omitted, the
+    request-bound signed-in user is used. Anonymous callers have no user rung.
+    The outcome is recorded on the returned request so the built ``Config`` knows
+    which fields run on the caller's own key.
+    """
+    updates: dict[str, str] = {}
+    sources: dict[str, str] = {}
+    shared: dict[str, tuple] = {}
+
+    caller_id = str(user_id or "").strip() or model_credentials.current_signed_in_user_id()
+    user_policy = model_credentials.USER_KEYS_DISABLED
+    if caller_id and bundle_id:
+        user_policy = await model_credentials.load_user_key_policy(bundle_id)
+
+    async def _shared_value(credential: model_credentials.ModelCredential) -> tuple[str | None, str | None]:
         if bundle_id:
-            bundle_key = canonical_key.removeprefix("platform.")
-            value = await get_secret(f"b:{bundle_key}", bundle_id=bundle_id)
-        value = value or await get_secret(canonical_key)
+            value = await get_secret(f"b:{credential.scoped_key}", bundle_id=bundle_id)
+            if value:
+                return value, model_credentials.SOURCE_BUNDLE
+        value = await get_secret(credential.platform_key)
+        return (value, model_credentials.SOURCE_PLATFORM) if value else (None, None)
+
+    async def _resolve(credential: model_credentials.ModelCredential) -> None:
+        field = credential.field
+        if getattr(config_request, field, None):
+            sources[field] = model_credentials.SOURCE_REQUEST
+            return
+        if user_policy.allows(credential):
+            # The user's own key lives under the SAME tail as the app key
+            # (services.<provider>.api_key), never under the platform id.
+            user_value = await get_secret(
+                f"u:{credential.scoped_key}", user_id=caller_id, bundle_id=bundle_id,
+            )
+            model_credentials.logger.info(
+                "Model credential user rung: user=%s app=%s provider=%s present=%s",
+                caller_id, bundle_id, credential.provider, bool(user_value),
+            )
+            if user_value:
+                updates[field] = user_value
+                sources[field] = model_credentials.SOURCE_USER
+                shared[field] = await _shared_value(credential)
+                return
+        value, source = await _shared_value(credential)
         if value:
             updates[field] = value
+            sources[field] = source
 
-    await _resolve("openai_api_key", "platform.services.openai.api_key")
-    await _resolve("claude_api_key", "platform.services.anthropic.api_key")
-    await _resolve("google_api_key", "platform.services.google.api_key")
-    await _resolve("huggingface_api_key", "platform.services.huggingface.api_key")
-    await _resolve("openrouter_api_key", "platform.services.openrouter.api_key")
-    # provider "custom" (locally served models / models gateway): same
-    # door-time, bundle-then-platform key resolution as hosted providers
-    await _resolve("custom_model_api_key", "platform.services.llm.custom.api_key")
+    for credential in model_credentials.MODEL_CREDENTIALS:
+        await _resolve(credential)
 
-    if not updates:
-        return config_request
-    return config_request.model_copy(update=updates)
+    resolved = config_request.model_copy(update=updates) if updates else config_request.model_copy()
+    resolved._credential_sources = sources
+    resolved._shared_credentials = shared
+    return resolved
 
 class Config:
     """
@@ -618,6 +658,10 @@ class Config:
         self.google_api_key = google_api_key or ""
         self.huggingface_api_key = huggingface_api_key or ""
         self.openrouter_api_key = openrouter_api_key or ""
+        # {field: source} and the shared fallback for user-sourced fields, as
+        # recorded by resolve_config_request_secrets (see model_credentials).
+        self.credential_sources: Dict[str, str] = {}
+        self.shared_credentials: Dict[str, tuple] = {}
 
         # Gemini cache options
         self.gemini_cache_enabled: bool = bool(get_plain("a:services.llm.gemini.gemini_cache_enabled", False))
@@ -849,6 +893,8 @@ def create_workflow_config(config_request: ConfigRequest) -> Config:
     # the door-resolved key must not be dropped on that path.
     if config_request.custom_model_api_key:
         cfg.custom_model_api_key = config_request.custom_model_api_key
+    cfg.credential_sources = dict(config_request._credential_sources or {})
+    cfg.shared_credentials = dict(config_request._shared_credentials or {})
 
     if config_request.kb_search_endpoint:
         cfg.set_kb_search_endpoint(config_request.kb_search_endpoint)

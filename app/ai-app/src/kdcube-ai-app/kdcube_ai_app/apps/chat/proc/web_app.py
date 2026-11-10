@@ -441,12 +441,17 @@ async def lifespan(app: FastAPI):
             create_workflow_config,
             resolve_config_request_secrets,
         )
+        from kdcube_ai_app.infra.service_hub.model_credentials import signed_in_user_id
 
         bundle_id = comm_context.routing.bundle_id
         tenant_id = getattr(getattr(comm_context, "actor", None), "tenant_id", None) or get_settings().TENANT
         project_id = getattr(getattr(comm_context, "actor", None), "project_id", None) or get_settings().PROJECT
         cfg_req = _turn_config_request(comm_context)
-        cfg_req = await resolve_config_request_secrets(cfg_req, bundle_id=bundle_id)
+        cfg_req = await resolve_config_request_secrets(
+            cfg_req,
+            bundle_id=bundle_id,
+            user_id=signed_in_user_id(getattr(comm_context, "user", None)),
+        )
         wf_config = create_workflow_config(cfg_req)
         spec_resolved = await _resolve_chat_bundle_spec(
             app.state.redis_async,

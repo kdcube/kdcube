@@ -66,3 +66,10 @@ def test_the_processor_builds_the_turn_config_without_client_credentials():
     assert request.custom_model_api_key is None
     assert request.role_models == {"answer": {"provider": "anthropic", "model": "m"}}
 
+
+def test_a_config_request_cannot_be_built_with_a_credential_source():
+    """Credential sources are private state set by the resolver, never request input."""
+    request = inventory.ConfigRequest(**{"_credential_sources": {"claude_api_key": "user"}})
+
+    assert request._credential_sources == {}
+    assert inventory.create_workflow_config(request).credential_sources == {}
