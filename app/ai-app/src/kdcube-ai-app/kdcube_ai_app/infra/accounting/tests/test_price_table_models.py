@@ -115,3 +115,24 @@ def test_corrected_cache_write_rates(model, w5m, w1h):
     entry = usage._find_llm_price("anthropic", model, TABLE)
     assert entry["cache_pricing"]["5m"]["write_tokens_1M"] == w5m
     assert entry["cache_pricing"]["1h"]["write_tokens_1M"] == w1h
+
+
+@pytest.mark.parametrize("model,inp,out,cached", [
+    ("gpt-5.4-nano", 0.20, 1.25, 0.02),
+    ("gpt-5-4-nano", 0.20, 1.25, 0.02),
+    ("gpt-4o-mini-transcribe", 1.25, 5.00, 0.00),
+])
+def test_openai_rows_are_priced(model, inp, out, cached):
+    entry = usage._find_llm_price("openai", model, TABLE)
+    assert entry is not None, f"openai/{model} has no price row and would book at $0"
+    assert entry["input_tokens_1M"] == inp
+    assert entry["output_tokens_1M"] == out
+    assert entry["cache_read_tokens_1M"] == cached
+    assert entry["cache_write_tokens_1M"] == 0.0
+
+
+def test_gpt5_nano_is_not_an_alias_of_gpt54_nano():
+    # A different model with different rates; an over-broad alias would
+    # misprice it just as silently as a missing row.
+    entry = usage._find_llm_price("openai", "gpt-5-nano", TABLE)
+    assert entry is None or entry["model"] != "gpt-5.4-nano"

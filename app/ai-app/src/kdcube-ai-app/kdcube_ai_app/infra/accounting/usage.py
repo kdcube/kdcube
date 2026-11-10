@@ -327,6 +327,34 @@ DEFAULT_PRICE_TABLE = {
                 "cache_read_tokens_1M": 0.55,
             },
             {
+                # OpenAI standard tier: input $0.20, cached input $0.02,
+                # output $1.25 per 1M. OpenAI bills no cache write.
+                # `gpt-5-nano` is a different model with different rates and is
+                # deliberately not an alias.
+                "model": "gpt-5.4-nano",
+                "provider": "openai",
+                "aliases": [
+                    "gpt-5-4-nano",
+                ],
+                "input_tokens_1M": 0.20,
+                "output_tokens_1M": 1.25,
+                "cache_write_tokens_1M": 0.00,
+                "cache_read_tokens_1M": 0.02,
+            },
+            {
+                # Speech-to-text. The response reports token usage, so a
+                # transcription books as an llm event priced per token: audio
+                # input $1.25, output $5.00 per 1M (about $0.003 per minute).
+                # No cached-input or cache-write billing. `whisper-1` reports a
+                # duration rather than tokens and cannot be priced by this table.
+                "model": "gpt-4o-mini-transcribe",
+                "provider": "openai",
+                "input_tokens_1M": 1.25,
+                "output_tokens_1M": 5.00,
+                "cache_write_tokens_1M": 0.00,
+                "cache_read_tokens_1M": 0.00,
+            },
+            {
                 "model": "gemini-2.5-pro",
                 "provider": "google",
                 # prompts <= 200k tokens
