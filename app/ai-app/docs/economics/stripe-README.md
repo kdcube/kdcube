@@ -120,6 +120,9 @@ throttled and Stripe will retry — causing duplicate processing attempts.
 - Configure webhook endpoint: `POST https://<your-domain>/api/economics/webhooks/stripe`
 - Select events to listen for (see "Webhook Events Handled" below).
 - Copy signing secret → `platform.services.stripe.webhook_secret` in `secrets.yaml`.
+- To charge tax, enable Stripe Tax on the account and set
+  `stripe.checkout.automatic_tax` in `economics.yaml`; see
+  [Economics Descriptor: `stripe`](../configuration/economics-descriptor-README.md#stripe-runtime-read).
 
 ---
 

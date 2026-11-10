@@ -124,6 +124,61 @@ def map_stripe_subscription_status_to_cp(status: str) -> str:
     return "suspended"
 
 
+#: Metadata key carrying a wallet top-up's pre-tax price, in cents. Stamped onto
+#: the Checkout Session and its PaymentIntent by `create_checkout_topup`
+#: (apps/chat/ingress/economics/checkout.py) and read back by
+#: `net_topup_cents` when the payment succeeds.
+TOPUP_NET_AMOUNT_METADATA_KEY = "kdcube_net_amount_cents"
+
+
+def net_topup_cents(meta: Dict[str, str], gross_cents: int, *, reference: str = "") -> int:
+    """The amount to credit for a wallet top-up whose PaymentIntent collected
+    `gross_cents`.
+
+    With Stripe Tax on and tax-exclusive prices, a PaymentIntent's
+    `amount_received` is subtotal + tax: a customer buying a 500-cent pack in a
+    19% VAT jurisdiction pays 595 cents. The 95 cents are tax owed to a revenue
+    authority and are not model budget. The credit therefore comes from our
+    record of what was sold -- the pre-tax price stamped into the metadata at
+    checkout -- not from what Stripe collected.
+
+    Never returns more than `gross_cents`. Falls back to `gross_cents` (and
+    logs) when the metadata carries no usable figure, which is the case for a
+    PaymentIntent created before the figure was stamped; for an untaxed payment
+    the two are equal.
+    """
+    raw = (meta or {}).get(TOPUP_NET_AMOUNT_METADATA_KEY)
+    ref = reference or "payment_intent"
+    if raw is None or str(raw).strip() == "":
+        logger.info(
+            "[topup-net] %s carries no %s; crediting the amount received (%d cents)",
+            ref, TOPUP_NET_AMOUNT_METADATA_KEY, gross_cents,
+        )
+        return gross_cents
+    try:
+        net = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning(
+            "[topup-net] %s has a non-numeric %s=%r; crediting the amount received (%d cents)",
+            ref, TOPUP_NET_AMOUNT_METADATA_KEY, raw, gross_cents,
+        )
+        return gross_cents
+    if net <= 0:
+        logger.warning(
+            "[topup-net] %s declares a net of %d cents; crediting the amount received (%d cents)",
+            ref, net, gross_cents,
+        )
+        return gross_cents
+    if net > gross_cents:
+        logger.warning(
+            "[topup-net] %s declares a net of %d cents but only %d cents were received; "
+            "crediting the amount received",
+            ref, net, gross_cents,
+        )
+        return gross_cents
+    return net
+
+
 @dataclass(frozen=True)
 class StripeHandleResult:
     status: str
@@ -685,6 +740,17 @@ class StripeEconomicsWebhookHandler:
         stripe_event_id = str(event.get("id") or "")
         if not payment_intent_id:
             return StripeHandleResult(status="ok", action="ignored", message="Missing payment_intent id")
+
+        # Credit the pre-tax price, never the tax Stripe collected on top of it.
+        # The credit, the token quote and the ledger row all read amount_cents.
+        gross_cents = amount_cents
+        amount_cents = net_topup_cents(meta, gross_cents, reference=payment_intent_id)
+        if amount_cents != gross_cents:
+            # The ledger row records the credited (net) amount; keep the gross
+            # and the tax beside it so a Stripe payout still reconciles.
+            meta = dict(meta)
+            meta["kdcube_gross_amount_cents"] = str(gross_cents)
+            meta["kdcube_tax_cents"] = str(gross_cents - amount_cents)
 
         usd_amount = amount_cents / 100.0
         tokens_added, _ = quote_tokens_for_usd(

@@ -121,3 +121,85 @@ async def test_invoice_paid_records_but_funds_nothing_for_an_entitlement_only_pl
     # a redelivery stays idempotent
     again = await _invoice_paid(handler, invoice)
     assert again.action == "duplicate" and budget.topups == []
+
+
+# ---------------------------------------------------------------------------
+# payment_intent.succeeded: wallet top-ups credit the pre-tax price
+# ---------------------------------------------------------------------------
+
+NET_CENTS = 500     # a 5 USD pack
+GROSS_CENTS = 595   # collected with 19% tax on top
+
+
+def _credits_manager(db):
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.user_budget import UserCreditsManager
+
+    return UserCreditsManager(pg_pool=db.pool)
+
+
+def _payment_intent(db, *, received=GROSS_CENTS, net=str(NET_CENTS), pi_id="pi_topup_1"):
+    meta = {"tenant": db.tenant, "project": db.project, "user_id": USER,
+            "kdcube_invoice_kind": "wallet_topup"}
+    if net is not None:
+        meta[stripe_mod.TOPUP_NET_AMOUNT_METADATA_KEY] = net
+    return {"id": pi_id, "object": "payment_intent", "currency": "usd",
+            "amount": received, "amount_received": received, "metadata": meta}
+
+
+async def _pi_succeeded(handler, pi):
+    event = {"id": "evt_pi", "type": "payment_intent.succeeded", "data": {"object": pi}}
+    return await handler.process_event(event)
+
+
+async def _purchased_cents(db):
+    return await db.pool.fetchval(
+        f"SELECT purchased_cents FROM {db.schema}.user_lifetime_credits WHERE user_id=$1", USER)
+
+
+async def test_taxed_topup_credits_the_pre_tax_price_and_books_the_tax_beside_it(econ_pg, monkeypatch):
+    db = econ_pg
+    handler, _ = _handler(db, monkeypatch, user_credits_mgr=_credits_manager(db))
+    res = await _pi_succeeded(handler, _payment_intent(db))
+    assert res.action == "applied"
+    assert await _purchased_cents(db) == NET_CENTS
+    row = await db.event_row("stripe", "user_credits", "pi_topup_1")
+    assert row["amount_cents"] == NET_CENTS
+    assert row["metadata"]["kdcube_gross_amount_cents"] == str(GROSS_CENTS)
+    assert row["metadata"]["kdcube_tax_cents"] == str(GROSS_CENTS - NET_CENTS)
+
+
+async def test_untaxed_topup_is_credited_as_received(econ_pg, monkeypatch):
+    db = econ_pg
+    handler, _ = _handler(db, monkeypatch, user_credits_mgr=_credits_manager(db))
+    await _pi_succeeded(handler, _payment_intent(db, received=NET_CENTS))
+    assert await _purchased_cents(db) == NET_CENTS
+    row = await db.event_row("stripe", "user_credits", "pi_topup_1")
+    assert "kdcube_tax_cents" not in row["metadata"]
+
+
+async def test_topup_without_a_net_figure_credits_the_amount_received(econ_pg, monkeypatch):
+    """A PaymentIntent created before checkout stamped the net figure."""
+    db = econ_pg
+    handler, _ = _handler(db, monkeypatch, user_credits_mgr=_credits_manager(db))
+    await _pi_succeeded(handler, _payment_intent(db, net=None))
+    assert await _purchased_cents(db) == GROSS_CENTS
+
+
+async def test_net_larger_than_the_amount_received_credits_the_amount_received(econ_pg, monkeypatch):
+    db = econ_pg
+    handler, _ = _handler(db, monkeypatch, user_credits_mgr=_credits_manager(db))
+    await _pi_succeeded(handler, _payment_intent(db, received=400, net="500"))
+    assert await _purchased_cents(db) == 400
+
+
+@pytest.mark.parametrize("raw", ["", "  ", "abc", "0", "-5", None])
+def test_net_topup_cents_falls_back_to_the_amount_received(raw):
+    meta = {} if raw is None else {stripe_mod.TOPUP_NET_AMOUNT_METADATA_KEY: raw}
+    assert stripe_mod.net_topup_cents(meta, GROSS_CENTS) == GROSS_CENTS
+
+
+def test_net_topup_cents_honours_a_usable_net():
+    key = stripe_mod.TOPUP_NET_AMOUNT_METADATA_KEY
+    assert stripe_mod.net_topup_cents({key: "500"}, 595) == 500
+    assert stripe_mod.net_topup_cents({key: " 500 "}, 595) == 500
+    assert stripe_mod.net_topup_cents({key: "595"}, 595) == 595
