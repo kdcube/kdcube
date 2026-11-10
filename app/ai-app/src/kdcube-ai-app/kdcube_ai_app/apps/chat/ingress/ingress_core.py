@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Literal
 from fastapi import HTTPException, Request  # only if you put this in a place where FastAPI is available
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.infra.service_hub.model_credentials import strip_client_model_credentials
 from kdcube_ai_app.apps.chat.external_events import build_conversation_external_event_source
 from kdcube_ai_app.apps.chat.sdk.util import _iso
 from kdcube_ai_app.auth.sessions import RequestContext, UserType, UserSession, session_user_data
@@ -960,7 +961,11 @@ async def process_chat_message(
         metadata=metadata,
     ).to_dict()
 
-    ext_config = (message_data.get("config") or {}).copy()
+    ext_config = strip_client_model_credentials(
+        message_data.get("config") or {},
+        door="chat.ingress",
+        subject=session.session_id,
+    )
     if "tenant" not in ext_config:
         ext_config["tenant"] = tenant_id
     if "project" not in ext_config and project_id:
