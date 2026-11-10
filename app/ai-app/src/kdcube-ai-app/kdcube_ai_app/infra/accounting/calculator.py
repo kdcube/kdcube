@@ -182,10 +182,14 @@ def _accumulate_compact(spent: Dict[str, Any], ev_usage: Dict[str, Any], service
         spent["cache_read"] = int(spent.get("cache_read", 0)) + int(ev_usage.get("cache_read_tokens") or 0)
 
         cache_creation = ev_usage.get("cache_creation")
+        cache_5m = cache_1h = 0
         if isinstance(cache_creation, dict):
             cache_5m = int(cache_creation.get("ephemeral_5m_input_tokens") or 0)
             cache_1h = int(cache_creation.get("ephemeral_1h_input_tokens") or 0)
-
+        # A TTL split, when the provider reported one, prices each write at
+        # its TTL rate. An empty or zero split must not hide a flat
+        # cache_creation_tokens count: those writes are billed too.
+        if cache_5m or cache_1h:
             spent["cache_5m_write"] = int(spent.get("cache_5m_write", 0)) + cache_5m
             spent["cache_1h_write"] = int(spent.get("cache_1h_write", 0)) + cache_1h
             spent["cache_creation"] = int(spent.get("cache_creation", 0)) + cache_5m + cache_1h

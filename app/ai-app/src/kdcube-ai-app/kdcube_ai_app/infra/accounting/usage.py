@@ -678,6 +678,13 @@ class ClientConfigHint:
 
 @dataclass
 class ServiceUsage:
+    """Usage of one tracked call.
+
+    `input_tokens` is the UNCACHED prompt: prompt tokens read from cache go in
+    `cache_read_tokens` and tokens written to cache in `cache_creation_tokens`,
+    and each bucket is priced at its own rate. A provider report that counts
+    cached tokens inside its prompt total is converted with
+    `split_inclusive_prompt_usage` before it lands here."""
     input_tokens: int = 0
     output_tokens: int = 0
     thinking_tokens: int = 0
@@ -807,6 +814,64 @@ def _norm_usage_dict(u: Dict[str, Any], debug: bool = False) -> Dict[str, int]:
             logger.info("=== USAGE DEBUG === %s", out)
     return out
 
+def split_inclusive_prompt_usage(u: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Convert a usage report whose prompt count INCLUDES cached tokens into the
+    accounting convention, where `input_tokens` is the UNCACHED prompt only.
+
+    Accounting convention (ServiceUsage and every price consumer):
+      input_tokens        uncached prompt tokens, billed at the input rate
+      cache_read_tokens   prompt tokens served from cache, cache-read rate
+      cache_creation_tokens  prompt tokens written to cache, cache-write rate
+    Anthropic's native usage already follows it. These shapes do not, and
+    count cached tokens inside the prompt total:
+      LangChain UsageMetadata   input_tokens + input_token_details.{cache_read, cache_creation}
+      OpenAI Chat Completions   prompt_tokens + prompt_tokens_details.cached_tokens
+      OpenAI Responses          input_tokens + input_tokens_details.cached_tokens
+    Stored as-is, every cached token is billed twice: at the input rate inside
+    `input_tokens` and again at the cache rate.
+
+    Returns a copy of `u` with `input_tokens`/`prompt_tokens` set to the uncached
+    count and `cache_read_input_tokens` / `cache_creation_input_tokens` set.
+    A report whose total is smaller than its cached part is not an inclusive
+    total; it is returned with the cache fields set and the prompt untouched,
+    never clamped."""
+    u = dict(u or {})
+    details = (
+        u.get("input_token_details")
+        or u.get("prompt_tokens_details")
+        or u.get("input_tokens_details")
+        or {}
+    )
+    if not isinstance(details, dict):
+        details = {}
+    try:
+        cache_read = int(details.get("cache_read") or details.get("cached_tokens") or 0)
+        cache_creation = int(details.get("cache_creation") or 0)
+        total = int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
+    except (TypeError, ValueError):
+        return u
+    if cache_read <= 0 and cache_creation <= 0:
+        return u
+    u["cache_read_input_tokens"] = cache_read
+    if cache_creation:
+        u["cache_creation_input_tokens"] = cache_creation
+    cached = cache_read + cache_creation
+    if total < cached:
+        logger.warning(
+            "[accounting] prompt total %s is smaller than its cached part %s; "
+            "prompt count left as reported", total, cached,
+        )
+        return u
+    uncached = total - cached
+    if "input_tokens" in u:
+        u["input_tokens"] = uncached
+    if "prompt_tokens" in u:
+        u["prompt_tokens"] = uncached
+    if "input_tokens" not in u and "prompt_tokens" not in u:
+        u["input_tokens"] = uncached
+    return u
+
+
 def _approx_tokens_by_chars(text: str) -> Dict[str, int]:
     toks = max(1, len(text or "") // 4)
     return {"prompt_tokens": toks, "completion_tokens": 0, "total_tokens": toks}
@@ -864,6 +929,9 @@ def _structured_usage_extractor(result, *_a, **_kw) -> ServiceUsage:
             input_tokens=u.get("prompt_tokens", 0),
             output_tokens=u.get("completion_tokens", 0),
             thinking_tokens=u.get("thinking_tokens", 0),
+            cache_creation_tokens=int(u.get("cache_creation_input_tokens", 0) or 0),
+            cache_read_tokens=int(u.get("cache_read_input_tokens", 0) or 0),
+            cache_creation=u.get("cache_creation") or None,
             total_tokens=u.get("total_tokens", (u.get("prompt_tokens", 0) + u.get("completion_tokens", 0))),
             requests=1,
         )

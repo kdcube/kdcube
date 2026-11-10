@@ -9,6 +9,7 @@ from typing import Optional, Any, List, Dict, Literal, Union
 from pydantic import BaseModel, Field
 
 from kdcube_ai_app.infra.accounting import ServiceUsage
+from kdcube_ai_app.infra.accounting.usage import split_inclusive_prompt_usage
 
 class AIProviderName(str, Enum):
     open_ai = "openai"
@@ -324,12 +325,15 @@ class BatchResultWrapper:
                 # Extract usage
                 usage_data = body.get('usage', {})
                 if usage_data:
+                    # prompt_tokens includes the cached tokens; book only the
+                    # uncached part as input so cached tokens are billed once.
+                    split = split_inclusive_prompt_usage(usage_data)
                     wrapper.usage = TokenUsage(
-                        input_tokens=usage_data.get('prompt_tokens', 0),
+                        input_tokens=split.get('prompt_tokens', 0),
                         output_tokens=usage_data.get('completion_tokens', 0),
                         total_tokens=usage_data.get('total_tokens', 0),
                         cache_creation_tokens=0,  # OpenAI doesn't provide this
-                        cache_read_tokens=usage_data.get('prompt_tokens_details', {}).get('cached_tokens', 0)
+                        cache_read_tokens=split.get('cache_read_input_tokens', 0)
                     )
 
             except Exception as e:

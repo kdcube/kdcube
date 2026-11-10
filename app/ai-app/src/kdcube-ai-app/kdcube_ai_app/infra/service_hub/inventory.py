@@ -24,6 +24,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS, model_caps, model_request_params
 from kdcube_ai_app.infra.accounting import track_embedding, track_llm
 from kdcube_ai_app.infra.accounting.usage import (
+    split_inclusive_prompt_usage,
     _structured_usage_extractor,
     _norm_usage_dict,
     _approx_tokens_by_chars,
@@ -1039,6 +1040,39 @@ class ModelRouter:
 # =========================
 # Usage metadata helpers
 # =========================
+def _stream_usage_from_report(report: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Usage dict for the accounting layer from an OpenAI-style or LangChain
+    usage report. Both count cached prompt tokens inside the prompt total;
+    they are split out (see `split_inclusive_prompt_usage`) so each token is
+    billed once, at its own rate."""
+    report = dict(report or {})
+    split = split_inclusive_prompt_usage(report)
+    prompt_total = int(report.get("input_tokens") or report.get("prompt_tokens") or 0)
+    out_tokens = int(report.get("output_tokens") or report.get("completion_tokens") or 0)
+    if "input_tokens" in split:
+        uncached = split.get("input_tokens")
+    else:
+        uncached = split.get("prompt_tokens")
+    usage: Dict[str, Any] = {
+        "input_tokens": int(uncached or 0),
+        "output_tokens": out_tokens,
+        "total_tokens": int(report.get("total_tokens") or (prompt_total + out_tokens)),
+    }
+    for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+        if split.get(key):
+            usage[key] = split[key]
+    input_details = report.get("input_token_details")
+    if input_details:
+        usage["input_tokens_details"] = input_details
+    output_details = report.get("output_token_details")
+    if output_details:
+        usage["output_tokens_details"] = output_details
+        reasoning = output_details.get("reasoning")
+        if reasoning:
+            usage["reasoning_tokens"] = reasoning
+    return usage
+
+
 # These extractors are called by AccountingTracker as
 #   extractor(result, *call_args, **call_kwargs)
 # and the tracked calls are ModelService methods, so call_args starts with the
@@ -1404,7 +1438,7 @@ class ModelServiceBase:
                     response_format={"type": "json_object"},
                 )
                 response_content = ai_msg.content
-                usage = (
+                usage = split_inclusive_prompt_usage(
                         getattr(ai_msg, "usage_metadata", None)
                         or (getattr(ai_msg, "response_metadata", {}) or {}).get("token_usage")
                         or (getattr(ai_msg, "additional_kwargs", {}) or {}).get("usage")
@@ -1589,9 +1623,10 @@ class ModelServiceBase:
             else:
                 ai_msg = await client.ainvoke(messages)
                 text = ai_msg.content
-                usage = (getattr(ai_msg, "usage_metadata", None)
-                         or (getattr(ai_msg, "response_metadata", {}) or {}).get("token_usage")
-                         or {})
+                usage = split_inclusive_prompt_usage(
+                    getattr(ai_msg, "usage_metadata", None)
+                    or (getattr(ai_msg, "response_metadata", {}) or {}).get("token_usage")
+                    or {})
                 provider_message_id = (getattr(ai_msg, "response_metadata", {}) or {}).get("id")
 
             if not usage:
@@ -1796,27 +1831,7 @@ class ModelServiceBase:
 
                 # Location 1: usage_metadata (Chat Completions API standard)
                 if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                    um = chunk.usage_metadata
-                    usage = {
-                        "input_tokens": um.get("input_tokens", 0) or 0,
-                        "output_tokens": um.get("output_tokens", 0) or 0,
-                        "total_tokens": (um.get("input_tokens", 0) or 0) + (um.get("output_tokens", 0) or 0),
-                    }
-
-                    # Extract detailed token info
-                    input_details = um.get("input_token_details")
-                    if input_details:
-                        cache_read = input_details.get("cache_read")
-                        if cache_read:
-                            usage["cache_read_input_tokens"] = cache_read
-                        usage["input_tokens_details"] = input_details
-
-                    output_details = um.get("output_token_details")
-                    if output_details:
-                        usage["output_tokens_details"] = output_details
-                        reasoning = output_details.get("reasoning")
-                        if reasoning:
-                            usage["reasoning_tokens"] = reasoning
+                    usage = _stream_usage_from_report(chunk.usage_metadata)
 
                     usage_found = True
 
@@ -1826,20 +1841,7 @@ class ModelServiceBase:
                     token_usage = rm.get("token_usage") or rm.get("usage")
 
                     if token_usage and isinstance(token_usage, dict):
-                        usage = {
-                            "input_tokens": (
-                                    token_usage.get("prompt_tokens") or
-                                    token_usage.get("input_tokens") or 0
-                            ),
-                            "output_tokens": (
-                                    token_usage.get("completion_tokens") or
-                                    token_usage.get("output_tokens") or 0
-                            ),
-                        }
-                        usage["total_tokens"] = (
-                                token_usage.get("total_tokens") or
-                                usage["input_tokens"] + usage["output_tokens"]
-                        )
+                        usage = _stream_usage_from_report(token_usage)
                         usage_found = True
 
                 # Location 3: additional_kwargs.usage (some providers)
@@ -1847,20 +1849,7 @@ class ModelServiceBase:
                     ak = chunk.additional_kwargs or {}
                     if "usage" in ak and isinstance(ak["usage"], dict):
                         token_usage = ak["usage"]
-                        usage = {
-                            "input_tokens": (
-                                    token_usage.get("prompt_tokens") or
-                                    token_usage.get("input_tokens") or 0
-                            ),
-                            "output_tokens": (
-                                    token_usage.get("completion_tokens") or
-                                    token_usage.get("output_tokens") or 0
-                            ),
-                        }
-                        usage["total_tokens"] = (
-                                token_usage.get("total_tokens") or
-                                usage["input_tokens"] + usage["output_tokens"]
-                        )
+                        usage = _stream_usage_from_report(token_usage)
                         usage_found = True
 
                 # ====================================================================
@@ -2384,26 +2373,7 @@ class ModelServiceBase:
                 usage_found = False
 
                 if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
-                    um = chunk.usage_metadata
-                    usage = {
-                        "input_tokens": um.get("input_tokens", 0) or 0,
-                        "output_tokens": um.get("output_tokens", 0) or 0,
-                        "total_tokens": (um.get("input_tokens", 0) or 0) + (um.get("output_tokens", 0) or 0),
-                    }
-
-                    input_details = um.get("input_token_details")
-                    if input_details:
-                        cache_read = input_details.get("cache_read")
-                        if cache_read:
-                            usage["cache_read_input_tokens"] = cache_read
-                        usage["input_tokens_details"] = input_details
-
-                    output_details = um.get("output_token_details")
-                    if output_details:
-                        usage["output_tokens_details"] = output_details
-                        reasoning = output_details.get("reasoning")
-                        if reasoning:
-                            usage["reasoning_tokens"] = reasoning
+                    usage = _stream_usage_from_report(chunk.usage_metadata)
 
                     usage_found = True
 
@@ -2412,40 +2382,14 @@ class ModelServiceBase:
                     token_usage = rm.get("token_usage") or rm.get("usage")
 
                     if token_usage and isinstance(token_usage, dict):
-                        usage = {
-                            "input_tokens": (
-                                    token_usage.get("prompt_tokens") or
-                                    token_usage.get("input_tokens") or 0
-                            ),
-                            "output_tokens": (
-                                    token_usage.get("completion_tokens") or
-                                    token_usage.get("output_tokens") or 0
-                            ),
-                        }
-                        usage["total_tokens"] = (
-                                token_usage.get("total_tokens") or
-                                usage["input_tokens"] + usage["output_tokens"]
-                        )
+                        usage = _stream_usage_from_report(token_usage)
                         usage_found = True
 
                 if not usage_found and hasattr(chunk, "additional_kwargs"):
                     ak = chunk.additional_kwargs or {}
                     if "usage" in ak and isinstance(ak["usage"], dict):
                         token_usage = ak["usage"]
-                        usage = {
-                            "input_tokens": (
-                                    token_usage.get("prompt_tokens") or
-                                    token_usage.get("input_tokens") or 0
-                            ),
-                            "output_tokens": (
-                                    token_usage.get("completion_tokens") or
-                                    token_usage.get("output_tokens") or 0
-                            ),
-                        }
-                        usage["total_tokens"] = (
-                                token_usage.get("total_tokens") or
-                                usage["input_tokens"] + usage["output_tokens"]
-                        )
+                        usage = _stream_usage_from_report(token_usage)
                         usage_found = True
 
                 # ====================================================================

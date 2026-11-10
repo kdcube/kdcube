@@ -52,6 +52,16 @@ These decorators wrap model/back‑end calls and emit an `AccountingEvent` with:
 - `success` and `error_message`
 - **context snapshot** taken from `AccountingContext`
 
+**LLM token buckets.** In a stored `usage`, `input_tokens` is the *uncached*
+prompt; `cache_read_tokens` and `cache_creation_tokens` hold the prompt tokens
+read from and written to the provider cache. Each bucket is priced at its own
+rate, so every prompt token is billed exactly once. Anthropic reports usage in
+this shape. OpenAI and LangChain `usage_metadata` count cached tokens inside
+the prompt total; the platform converts those reports with
+`split_inclusive_prompt_usage` (`infra/accounting/usage.py`) where it parses
+them. A custom `usage_extractor` that reads an OpenAI-style report should do
+the same.
+
 For semantic search, the economics feasibility check and the accounting event are
 separate steps. Searchable components should receive a model-service facade rather
 than separate guard/embed callbacks. The facade exposes `embed_texts(...)` for
