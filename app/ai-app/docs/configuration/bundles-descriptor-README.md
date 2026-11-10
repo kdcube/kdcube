@@ -195,6 +195,10 @@ Do not mirror every enabled API/widget/cron as `true` in deployment descriptors.
 That makes descriptors noisy and can leave stale explicit overrides after code
 defaults change.
 
+`config.model_credentials.user_keys` lets a signed-in user's own model provider
+key serve their turns in this app; it is off unless `enabled: true`. See
+[User Model Keys](user-model-keys-README.md).
+
 `config.surfaces.as_provider` is the platform-owned policy section for surfaces
 this bundle exposes. It is separate from `enabled`: `enabled` decides whether a
 surface exists; `surfaces.as_provider` decides who can see/call it and which

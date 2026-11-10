@@ -161,6 +161,7 @@ Curated index of platform, service, and SDK documentation.
 * Local Host Vault: [host-vault-README.md](service/secrets/host-vault-README.md)
 * Service Runtime Configuration Mapping: [service-runtime-configuration-mapping-README.md](configuration/service-runtime-configuration-mapping-README.md)
 * App Runtime Settings, Configuration, And Secrets: [bundle-runtime-configuration-and-secrets-README.md](configuration/bundle-runtime-configuration-and-secrets-README.md)
+* User Model Keys: [user-model-keys-README.md](configuration/user-model-keys-README.md)
 * App Properties And Secrets Lifecycle: [bundle-properties-and-secrets-lifecycle-README.md](sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md)
 * Reserved Platform Properties: [bundle-reserved-platform-properties-README.md](sdk/bundle/bundle-reserved-platform-properties-README.md)
 
