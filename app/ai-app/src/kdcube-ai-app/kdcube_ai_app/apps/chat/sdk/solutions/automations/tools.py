@@ -50,8 +50,29 @@ def _parse_iso(value: str) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_completed_after(completed_after_iso: str) -> datetime | None:
+    """Parse the ``completed_after_iso`` filter: ``None`` only when it is empty.
+
+    ``_parse_iso`` returns ``None`` both for an empty value ("no filter") and
+    for a value it cannot read. Treating the second as "no filter" returned
+    every output, including the older ones the caller asked to exclude. A
+    value that does not parse raises ``ValueError`` instead.
+    """
+    raw = str(completed_after_iso or "").strip()
+    if not raw:
+        return None
+    parsed = _parse_iso(raw)
+    if parsed is None:
+        raise ValueError(
+            "completed_after_iso must be an ISO-8601 timestamp, for example "
+            f"2026-09-01T14:30:00Z; got {completed_after_iso!r}. The requested "
+            "filter cannot be applied, so no outputs were searched."
+        )
+    return parsed
+
+
 def _filter_executions_after(executions: Iterable[Dict[str, Any]], completed_after_iso: str) -> list[Dict[str, Any]]:
-    after = _parse_iso(completed_after_iso)
+    after = _parse_completed_after(completed_after_iso)
     if after is None:
         return list(executions)
     out = []
@@ -402,6 +423,18 @@ class AutomationTools:
                 completed_after_iso=completed_after_iso,
                 limit=limit,
             )
+            # Refuse before reading anything, under a code of its own, so the
+            # caller can retry with a valid timestamp (or none).
+            try:
+                _parse_completed_after(completed_after_iso)
+            except ValueError as exc:
+                return _tool_failed(
+                    "automations.search_recent_outputs",
+                    "invalid_completed_after_iso",
+                    exc,
+                    sc,
+                    completed_after_iso=completed_after_iso,
+                )
             storage = AsyncAutomationStorage(sc["storage_root"], user_id=sc["user_id"])
             executions = await storage.search_executions(query=query, limit=max(limit * 3, limit))
             executions = _filter_executions_after(executions, completed_after_iso)
