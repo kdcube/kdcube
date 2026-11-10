@@ -18,6 +18,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.user_budget import UserCreditsM
 from kdcube_ai_app.apps.chat.sdk.infra.economics.external_events import (
     ExternalEconomicsLedger, LedgerKey,
 )
+from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import plan_is_entitlement_only
 from kdcube_ai_app.infra.accounting.usage import quote_tokens_for_usd
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
@@ -893,13 +894,23 @@ class StripeEconomicsWebhookHandler:
                             conn=conn,
                         )
 
-                    # APPLY via SubscriptionBudgetLimiter inside SAME transaction (+ledger)
-                    await budget.topup_subscription_budget(
-                        usd_amount=float(usd_amount),
-                        notes=notes,
-                        request_id=request_id,
-                        conn=conn,
-                    )
+                    # APPLY via SubscriptionBudgetLimiter inside SAME transaction (+ledger).
+                    # An entitlement-only plan sells access, not model budget: the
+                    # payment is recorded on the ledger row (amount_cents) and the
+                    # subscription snapshot is updated, but no plan budget is funded.
+                    entitlement_only = plan_is_entitlement_only(plan)
+                    if entitlement_only:
+                        logger.info(
+                            "[invoice.paid] plan %s is entitlement-only; invoice %s funds no plan budget",
+                            plan_id, invoice_id,
+                        )
+                    else:
+                        await budget.topup_subscription_budget(
+                            usd_amount=float(usd_amount),
+                            notes=notes,
+                            request_id=request_id,
+                            conn=conn,
+                        )
 
                     # Update subscription snapshot
                     now = datetime.now(timezone.utc)
@@ -942,7 +953,11 @@ class StripeEconomicsWebhookHandler:
         return StripeHandleResult(
             status="ok",
             action="applied",
-            message=f"Subscription invoice credited subscription balance: +${usd_amount:.2f}",
+            message=(
+                f"Subscription invoice recorded for entitlement-only plan {plan_id}: no plan budget funded"
+                if entitlement_only
+                else f"Subscription invoice credited subscription balance: +${usd_amount:.2f}"
+            ),
             kind="subscription_topup",
             external_id=topup_external_id,
             tenant=tenant,

@@ -126,6 +126,14 @@ class SubscriptionPlan:
     created_by: Optional[str]
     notes: Optional[str]
 
+    @property
+    def entitlement_only(self) -> bool:
+        """The plan grants entitlement without funding a plan budget
+        (`metadata.entitlement_only`)."""
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import plan_is_entitlement_only
+
+        return plan_is_entitlement_only(self)
+
 
 class RLMonthAnchorStore:
     """

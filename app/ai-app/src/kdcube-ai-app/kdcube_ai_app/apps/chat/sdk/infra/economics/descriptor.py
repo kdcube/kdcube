@@ -37,6 +37,11 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 import yaml
 
 from kdcube_ai_app.apps.chat.sdk.config_scopes import _descriptor_path
+from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
+    ENTITLEMENT_ONLY_KEY,
+    plan_metadata,
+    plan_is_entitlement_only,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +121,12 @@ async def build_economics_descriptor(
         }
         if getattr(pl, "stripe_price_id", None):
             entry["stripe_price_id"] = pl.stripe_price_id
+        if plan_is_entitlement_only(pl):
+            entry["entitlement_only"] = True
+        metadata = plan_metadata(pl)
+        metadata.pop(ENTITLEMENT_ONLY_KEY, None)
+        if metadata:
+            entry["metadata"] = metadata
         plans[pl.plan_id] = entry
 
     # Overdraft limit lives in tenant_project_budget; the balance is intentionally

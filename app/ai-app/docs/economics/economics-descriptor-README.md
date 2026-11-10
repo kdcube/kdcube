@@ -189,8 +189,10 @@ sections that play complementary roles:
   windows) for users on that plan;
 - `plans.<plan_id>` defines the **catalog entry** — `provider` (`internal` or
   `stripe`), `monthly_price_cents`, `active` state, optional `stripe_price_id`
-  (required when `provider: stripe`), optional `metadata` — i.e. price and
-  subscribe/grant behaviour.
+  (required when `provider: stripe`), optional `entitlement_only` (the
+  subscription grants access and funds no plan budget; see
+  [Economics Descriptor configuration](../configuration/economics-descriptor-README.md#plans-seeded)),
+  optional `metadata` — i.e. price and subscribe/grant behaviour.
 
 Most plans are subscribable. `wallet` and `anonymous` are built-in,
 **non-subscribable** plans (they exist as catalog entities so users can be

@@ -30,6 +30,10 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import UserEconomicsRat
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
+from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
+    plan_metadata,
+    plan_metadata_with_entitlement_only,
+)
 from kdcube_ai_app.infra.accounting.usage import (
     llm_output_price_usd_per_token,
     quote_tokens_for_usd,
@@ -179,6 +183,13 @@ class UpsertSubscriptionPlanRequest(BaseModel):
     active: bool = Field(True)
     notes: Optional[str] = None
     metadata: Optional[dict] = None
+    entitlement_only: Optional[bool] = Field(
+        None,
+        description=(
+            "true: the subscription grants access/entitlement and funds no plan budget; "
+            "false: clear the property; omitted: leave it unchanged"
+        ),
+    )
 
 
 class InternalQuotaResetRequest(BaseModel):
@@ -840,6 +851,15 @@ async def upsert_subscription_plan(
 ):
     settings = get_settings()
     mgr = _get_control_plane_manager(router)
+    metadata = payload.metadata
+    if payload.entitlement_only is not None:
+        if metadata is None:
+            existing = await mgr.subscription_mgr.get_plan(
+                tenant=settings.TENANT, project=settings.PROJECT,
+                plan_id=payload.plan_id, include_inactive=True,
+            )
+            metadata = plan_metadata(existing)
+        metadata = plan_metadata_with_entitlement_only(metadata, payload.entitlement_only)
     plan = await mgr.subscription_mgr.upsert_plan(
         tenant=settings.TENANT,
         project=settings.PROJECT,
@@ -848,7 +868,7 @@ async def upsert_subscription_plan(
         stripe_price_id=payload.stripe_price_id,
         monthly_price_cents=int(payload.monthly_price_cents or 0),
         active=bool(payload.active),
-        metadata=payload.metadata,
+        metadata=metadata,
         created_by=session.username or session.user_id,
         notes=payload.notes,
     )

@@ -10,6 +10,8 @@ project-funded top-level happy path with fakes.
 
 from __future__ import annotations
 
+import types
+
 import pytest
 
 from kdcube_ai_app.infra import accounting as acct
@@ -82,11 +84,17 @@ class _Credits:
 
 
 class _SubMgr:
-    def __init__(self, sub=None):
+    def __init__(self, sub=None, plan=None):
         self.sub = sub
+        self.plan = plan
+        self.plan_reads = []
 
     async def get_subscription(self, **kw):
         return self.sub
+
+    async def get_plan(self, **kw):
+        self.plan_reads.append(kw)
+        return self.plan
 
 
 class _SubLimiter:
@@ -385,6 +393,28 @@ async def test_funding_summary_internal_subscription_is_project():
     assert r["has_active_subscription"] is True
     assert r["funds_from_subscription"] is False
     assert g._funding_summary(r)[0] == "project"
+
+
+async def test_funding_summary_entitlement_only_plan_is_project():
+    # An external subscription to an entitlement-only plan grants the plan (its
+    # quota) but funds no plan budget: the turn draws from the project budget.
+    ep = _ep(sub=_Sub(active=True, provider="stripe"))
+    ep.cp_manager.subscription_mgr.plan = types.SimpleNamespace(metadata={"entitlement_only": True})
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="s1", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
+    r = await g._resolve_plan_and_funding()
+    assert r["has_active_subscription"] is True
+    assert r["funds_from_subscription"] is False
+    assert g._funding_summary(r)[0] == "project"
+    assert [k["plan_id"] for k in ep.cp_manager.subscription_mgr.plan_reads] == ["beta-30"]
+
+
+async def test_funding_summary_internal_subscription_reads_no_plan():
+    ep = _ep(sub=_Sub(active=True, provider="internal"))
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="s1", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
+    await g._resolve_plan_and_funding()
+    assert ep.cp_manager.subscription_mgr.plan_reads == []
 
 
 async def test_funding_summary_project_for_registered():

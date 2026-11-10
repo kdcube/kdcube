@@ -37,6 +37,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.defaults import (
     DEFAULT_PLANS,
     MANDATORY_PLAN_IDS,
 )
+from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import plan_metadata_with_entitlement_only
 
 _QUOTA_FIELDS = (
     "max_concurrent",
@@ -212,7 +213,10 @@ def seed_economics(tenant: str, project: str, *, mgr=None, path: Optional[str] =
     plans = _effective_plans(descriptor)
     for plan_id, fields in plans.items():
         fields = fields or {}
-        metadata = fields.get("metadata")
+        metadata = plan_metadata_with_entitlement_only(
+            fields.get("metadata"),
+            bool(fields["entitlement_only"]) if fields.get("entitlement_only") is not None else None,
+        )
         row = {"tenant": tenant, "project": project, "plan_id": plan_id,
                "provider": fields.get("provider", "internal"),
                "stripe_price_id": fields.get("stripe_price_id"),

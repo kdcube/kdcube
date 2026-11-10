@@ -103,6 +103,7 @@ budget_policies:
 plans:
   free: { provider: internal, monthly_price_cents: 0, active: true }
   pro:  { provider: stripe, monthly_price_cents: 2000, active: true, stripe_price_id: price_xxx }
+  access: { provider: stripe, monthly_price_cents: 199, active: true, stripe_price_id: price_yyy, entitlement_only: true }
 
 price_tables:            # optional; whole-table replacement of the in-code baseline
   llm:                   # must include the reference model, else the baseline is used
@@ -225,7 +226,21 @@ providers listed here are seeded.
 
 `plan_id -> catalog entry`: `provider` (`internal` or `stripe`),
 `monthly_price_cents`, `active`, optional `stripe_price_id` (required when
-`provider: stripe`), optional `metadata`. Seeded into the `plans` table.
+`provider: stripe`), optional `entitlement_only`, optional `metadata`. Seeded
+into the `plans` table.
+
+`entitlement_only: true` declares a plan whose subscription buys **access** (a
+tier, a seat, a membership fee) rather than model spend. An active external
+(`stripe`) subscription normally funds its own per-period plan budget from the
+paid invoice amount and turns are charged against that budget. For an
+entitlement-only plan the paid invoice is recorded but funds no plan budget,
+and the subscriber's turns are funded the way an internal plan's are: from the
+project budget, bounded by the plan's `quota_policies` entry. Use it when the
+fee is not meant to become model budget, for example a low access fee that
+would otherwise cap the subscriber below the free tier, or a tax-exclusive
+price whose collected tax must not be credited. Default `false`. The property
+is stored as `plans.metadata.entitlement_only` and can also be set through the
+plan upsert API (`entitlement_only` field).
 
 `quota_policies.<plan_id>` defines the limits for a plan; `plans.<plan_id>`
 defines its catalog entry (price, provider, active state). Most plans are

@@ -30,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.defaults import DEFAULT_QUOTA_P
 from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
     resolve_plan_id,
     subscription_is_active,
+    subscription_needs_plan_lookup,
     subscription_provides_plan_budget,
 )
 from kdcube_ai_app.apps.chat.sdk.config_scopes import economics_reservation_default
@@ -779,8 +780,17 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         # Only external subscriptions fund a separate guaranteed plan budget. Internal
         # plans draw from the project budget bounded by quota, so they route through the
         # project funding branch even though they are an active subscription for plan
-        # resolution (their plan_id still sets the quota).
-        funds_from_subscription = subscription_provides_plan_budget(subscription, sub_now)
+        # resolution (their plan_id still sets the quota). An entitlement-only plan
+        # routes the same way: it grants access, not budget.
+        subscription_plan = None
+        if subscription_needs_plan_lookup(subscription, sub_now):
+            subscription_plan = await self.cp_manager.subscription_mgr.get_plan(
+                tenant=tenant, project=project,
+                plan_id=subscription.plan_id, include_inactive=True,
+            )
+        funds_from_subscription = subscription_provides_plan_budget(
+            subscription, sub_now, plan=subscription_plan
+        )
         has_wallet = bool(user_budget_tokens and int(user_budget_tokens) > 0)
 
         plan_id, plan_source = resolve_plan_id(
