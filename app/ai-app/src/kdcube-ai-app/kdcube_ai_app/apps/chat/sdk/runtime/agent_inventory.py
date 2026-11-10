@@ -39,6 +39,9 @@ from kdcube_ai_app.apps.chat.sdk.runtime.resident_resources.descriptor import (
     resource_family_catalog_from_bundle_props,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import AgentSkillConfig
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_reflection import (
+    reflected_tool_callables,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
     _NAMED_SERVICE_OPERATION_TO_TOOL,
     _agent_tool_connections,
@@ -884,7 +887,7 @@ def _module_tool_docs(module_name: str) -> dict[str, str]:
             reg = {}
     docs: dict[str, str] = {}
     names = list(reg.keys()) if isinstance(reg, Mapping) and reg else [
-        name for name in dir(owner) if not name.startswith("_")
+        name for name, _fn in reflected_tool_callables(mod)
     ]
     for fn_name in names:
         meta = reg.get(fn_name) if isinstance(reg, Mapping) else None
@@ -915,8 +918,7 @@ def _module_tool_names(module_name: str) -> list[str] | None:
                 return [str(k) for k in reg.keys()]
         except Exception:
             return None
-    owner = getattr(mod, "tools", mod)
-    names = [name for name in dir(owner) if not name.startswith("_") and callable(getattr(owner, name, None))]
+    names = [name for name, _fn in reflected_tool_callables(mod)]
     return names or None
 
 

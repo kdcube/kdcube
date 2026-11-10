@@ -23,6 +23,9 @@ from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import (
     load_dynamic_module_from_file,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_module_bindings import bind_module_target
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_reflection import (
+    reflected_tool_callables,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_traits import (
     configured_tool_traits,
     get_tool_traits,
@@ -1145,17 +1148,11 @@ class ToolSubsystem:
                 ))
             return entries
 
-        # Fallback: reflect on 'tools' or module
-        owner = getattr(mod, "tools", mod)
+        # Fallback: reflect on 'tools' or module (imports are not tools)
         import_stmt = (f"from {mod_name} import tools as {alias}"
                        if hasattr(mod, "tools") else f"import {mod_name} as {alias}")
         entries: List[Dict[str, Any]] = []
-        for name in dir(owner):
-            if name.startswith("_"):
-                continue
-            fn = getattr(owner, name, None)
-            if not callable(fn):
-                continue
+        for name, fn in reflected_tool_callables(mod):
             params = self._sig_to_params(fn)
             desc = getattr(fn, "description", "") or (getattr(fn, "__doc__", "") or "")
             call_template = self._make_call_template(alias, name, params)
