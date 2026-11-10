@@ -983,27 +983,29 @@ _BUCKETS = {
     "1d": 86400,
 }
 
+def _norm_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _row_matches(row: Dict[str, Any], provider: str, name_key: str, name: str) -> bool:
+    """Case-insensitive provider match plus name match against the row's
+    `name_key` value or any of its `aliases`. The single matching rule for
+    every price lookup, so settlement and reporting resolve the same row."""
+    if _norm_key(row.get("provider")) != _norm_key(provider):
+        return False
+    name_norm = _norm_key(name)
+    if _norm_key(row.get(name_key)) == name_norm:
+        return True
+    return name_norm in {_norm_key(a) for a in (row.get("aliases") or []) if _norm_key(a)}
+
+
 def _find_llm_price(provider: str,
                     model: str,
                     pricing_table = None) -> Optional[Dict[str, Any]]:
     if not pricing_table:
         pricing_table = price_table()
-    llm_pricelist = pricing_table.get("llm") or {}
-    provider_norm = str(provider or "").strip().lower()
-    model_norm = str(model or "").strip().lower()
-    for p in llm_pricelist:
-        aliases = [
-            str(alias).strip().lower()
-            for alias in list(p.get("aliases") or [])
-            if str(alias).strip()
-        ]
-        if (
-            str(p.get("provider") or "").strip().lower() == provider_norm
-            and (
-                str(p.get("model") or "").strip().lower() == model_norm
-                or model_norm in aliases
-            )
-        ):
+    for p in pricing_table.get("llm") or []:
+        if isinstance(p, dict) and _row_matches(p, provider, "model", model):
             return p
     return None
 
@@ -1012,9 +1014,8 @@ def _find_emb_price(provider: str,
                     pricing_table=None) -> Optional[Dict[str, Any]]:
     if not pricing_table:
         pricing_table = price_table()
-    emb_pricelist = pricing_table.get("embedding") or {}
-    for p in emb_pricelist:
-        if p.get("provider") == provider and p.get("model") == model:
+    for p in pricing_table.get("embedding") or []:
+        if isinstance(p, dict) and _row_matches(p, provider, "model", model):
             return p
     return None
 
@@ -1023,10 +1024,8 @@ def _find_web_search_price(provider: str,
                            pricing_table=None) -> Optional[Dict[str, Any]]:
     if not pricing_table:
         pricing_table = price_table()
-    web_search_pricelist = pricing_table.get("web_search") or {}
-
-    for p in web_search_pricelist:
-        if p.get("provider") == provider and p.get("tier") == tier:
+    for p in pricing_table.get("web_search") or []:
+        if isinstance(p, dict) and _row_matches(p, provider, "tier", tier):
             return p
     return None
 

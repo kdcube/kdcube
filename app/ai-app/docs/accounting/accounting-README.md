@@ -262,13 +262,31 @@ only when **all** its dimension files exist, so a range aggregated before a
 new dimension was introduced regenerates cleanly, and re-starting after a
 stalled job (heartbeat-flagged in the record) never repeats completed days.
 
-**Reported-cost rule** (shared with turn settlement): when pricing a rollup
-line, a price-table entry wins; a line without one is priced at the
-provider-reported cost accumulated in `spent.cost_usd` (e.g. runtimes that
-self-report spend). One implementation for every spend surface:
-[`infra/accounting/pricing.py`](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/pricing.py)
-(`compute_cost_estimate`), the same rule as
-`RateCalculator.calculate_turn_costs`.
+**One pricing operation.** Every surface that turns usage into dollars —
+turn settlement (`RateCalculator.calculate_turn_costs`), per-agent settlement
+(`_calculate_agent_costs`), the opex endpoints, the spend-rollup writer and
+the user's own budget view — prices each rollup line through
+`price_rollup_line` in
+[`infra/accounting/pricing.py`](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/pricing.py),
+so what a user is charged and what a report shows are the same number. For
+one line:
+
+1. a price-table row wins. Rows are matched case-insensitively on provider
+   and model (or web-search tier) and honour each row's `aliases`. LLM lines
+   price input, output (thinking tokens at `thinking_output_tokens_1M` when
+   the row sets it), cache reads, and cache writes (split 5m/1h when the row
+   has `cache_pricing`, else the flat `cache_write_tokens_1M`);
+2. otherwise the provider-reported cost accumulated in `spent.cost_usd` is
+   the ground truth (runtimes that self-report spend), for llm, embedding and
+   web-search lines alike;
+3. otherwise the line is unpriced: it costs $0.00, carries
+   `pricing_source: "missing_price"` in the breakdown, and the processor logs
+   one `[pricing] no price-table row for ...` warning per service/provider/
+   model. A model in use without a price row is a gap in the table, and this
+   is how it shows up.
+
+Each breakdown item carries `pricing_source` (`price_table`,
+`reported_usage_cost` or `missing_price`).
 
 **Derived spend-rollup index** (scale path): the aggregation routines also
 mirror each day's per-dimension totals and per-model lines into per-project

@@ -28,8 +28,8 @@ from datetime import datetime, date, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple, AsyncIterator
 
 from kdcube_ai_app.infra.accounting import get_turn_events
-from kdcube_ai_app.infra.accounting.usage import price_table, _USAGE_KEYS, _BUCKETS, _find_llm_price, _find_emb_price, \
-    _get_web_search_tier, _find_web_search_price, compute_llm_equivalent_tokens
+from kdcube_ai_app.infra.accounting.usage import price_table, _USAGE_KEYS, _BUCKETS, compute_llm_equivalent_tokens
+from kdcube_ai_app.infra.accounting.pricing import compute_cost_estimate, load_services_config, price_rollup_line
 from kdcube_ai_app.storage.storage import IStorageBackend, create_storage_backend
 
 logger = logging.getLogger("AccountingCalculator")
@@ -2566,143 +2566,26 @@ class RateCalculator(AccountingCalculator):
             accounting_services_config=accounting_services_config,
         )
 
-        # 6. Calculate overall cost breakdown
-        # Load ACCOUNTING_SERVICES config if not provided
+        # 6. Calculate overall cost breakdown with the shared pricing kernel
+        # (infra/accounting/pricing.py), the same one reporting uses.
         if accounting_services_config is None:
-            config_str = get_settings().PLATFORM.ACCOUNTING.ACCOUNTING_SERVICES or "{}"
-            try:
-                accounting_services_config = json.loads(config_str)
-            except json.JSONDecodeError:
-                accounting_services_config = {}
+            accounting_services_config = load_services_config()
 
-        # Cost calculation loop
         cost_total_usd = 0.0
         cost_breakdown = []
-
         for item in rollup:
-            service = item.get("service")
-            provider = item.get("provider")
-            model = item.get("model")
-            spent = item.get("spent", {}) or {}
-
-            cost_usd = 0.0
-            cost_details = {}
-            direct_cost_usd = float(spent.get("cost_usd", 0.0) or 0.0)
-
-            if service == "llm":
-                pr = _find_llm_price(provider, model)
-                if pr:
-                    input_cost = (float(spent.get("input", 0)) / 1_000_000.0) * float(pr.get("input_tokens_1M", 0.0))
-                    output_cost = (float(spent.get("output", 0)) / 1_000_000.0) * float(pr.get("output_tokens_1M", 0.0))
-                    cache_read_cost = (float(spent.get("cache_read", 0)) / 1_000_000.0) * float(pr.get("cache_read_tokens_1M", 0.0))
-
-                    cache_write_cost = 0.0
-                    cache_pricing = pr.get("cache_pricing")
-
-                    if cache_pricing and isinstance(cache_pricing, dict):
-                        cache_5m_tokens = float(spent.get("cache_5m_write", 0))
-                        cache_1h_tokens = float(spent.get("cache_1h_write", 0))
-
-                        if cache_5m_tokens > 0:
-                            price_5m = float(cache_pricing.get("5m", {}).get("write_tokens_1M", 0.0))
-                            cache_write_cost += (cache_5m_tokens / 1_000_000.0) * price_5m
-
-                        if cache_1h_tokens > 0:
-                            price_1h = float(cache_pricing.get("1h", {}).get("write_tokens_1M", 0.0))
-                            cache_write_cost += (cache_1h_tokens / 1_000_000.0) * price_1h
-
-                        cost_details = {
-                            "input_tokens": spent.get("input", 0),
-                            "output_tokens": spent.get("output", 0),
-                            "cache_5m_write_tokens": spent.get("cache_5m_write", 0),
-                            "cache_1h_write_tokens": spent.get("cache_1h_write", 0),
-                            "cache_read_tokens": spent.get("cache_read", 0),
-                            "total_input_tokens": (
-                                    spent.get("input", 0) +
-                                    spent.get("cache_5m_write", 0) +
-                                    spent.get("cache_1h_write", 0) +
-                                    spent.get("cache_read", 0)
-                            ),
-                            "input_cost_usd": input_cost,
-                            "output_cost_usd": output_cost,
-                            "cache_5m_write_cost_usd": (cache_5m_tokens / 1_000_000.0) * price_5m if cache_5m_tokens > 0 else 0.0,
-                            "cache_1h_write_cost_usd": (cache_1h_tokens / 1_000_000.0) * price_1h if cache_1h_tokens > 0 else 0.0,
-                            "cache_read_cost_usd": cache_read_cost,
-                        }
-                    else:
-                        cache_write_tokens = float(spent.get("cache_creation", 0))
-                        cache_write_price = float(pr.get("cache_write_tokens_1M", 0.0))
-                        cache_write_cost = (cache_write_tokens / 1_000_000.0) * cache_write_price
-
-                        cost_details = {
-                            "input_tokens": spent.get("input", 0),
-                            "output_tokens": spent.get("output", 0),
-                            "cache_creation_tokens": spent.get("cache_creation", 0),
-                            "cache_read_tokens": spent.get("cache_read", 0),
-                            "total_input_tokens": (
-                                    spent.get("input", 0) +
-                                    spent.get("cache_creation", 0) +
-                                    spent.get("cache_read", 0)
-                            ),
-                            "input_cost_usd": input_cost,
-                            "output_cost_usd": output_cost,
-                            "cache_write_cost_usd": cache_write_cost,
-                            "cache_read_cost_usd": cache_read_cost,
-                        }
-
-                    cost_usd = input_cost + output_cost + cache_write_cost + cache_read_cost
-                elif direct_cost_usd > 0:
-                    cost_usd = direct_cost_usd
-                    cost_details = {
-                        "direct_cost_usd": direct_cost_usd,
-                        "pricing_source": "reported_usage_cost",
-                    }
-
-            elif service == "embedding":
-                pr = _find_emb_price(provider, model, pricing_table=price_table())
-                if pr:
-                    cost_usd = (float(spent.get("tokens", 0)) / 1_000_000.0) * float(pr.get("tokens_1M", 0.0))
-                    cost_details = {
-                        "tokens": spent.get("tokens", 0),
-                    }
-                elif direct_cost_usd > 0:
-                    cost_usd = direct_cost_usd
-                    cost_details = {
-                        "direct_cost_usd": direct_cost_usd,
-                        "pricing_source": "reported_usage_cost",
-                    }
-
-            elif service == "web_search":
-                tier = _get_web_search_tier(provider)
-                pr = _find_web_search_price(provider, tier)
-
-                if pr:
-                    search_queries = float(spent.get("search_queries", 0))
-                    cost_per_1k = float(pr.get("cost_per_1k_requests", 0.0))
-                    cost_usd = (search_queries / 1000.0) * cost_per_1k
-
-                    cost_details = {
-                        "search_queries": spent.get("search_queries", 0),
-                        "search_results": spent.get("search_results", 0),
-                        "tier": tier,
-                    }
-                elif direct_cost_usd > 0:
-                    cost_usd = direct_cost_usd
-                    cost_details = {
-                        "search_queries": spent.get("search_queries", 0),
-                        "search_results": spent.get("search_results", 0),
-                        "tier": tier,
-                        "direct_cost_usd": direct_cost_usd,
-                        "pricing_source": "reported_usage_cost",
-                    }
-
-            cost_total_usd += cost_usd
+            priced = price_rollup_line(
+                item,
+                pricing_table=acct_cfg,
+                services_config=accounting_services_config,
+            )
+            cost_total_usd += priced["cost_usd"]
             cost_breakdown.append({
-                "service": service,
-                "provider": provider,
-                "model": model,
-                "cost_usd": cost_usd,
-                **cost_details
+                "service": item.get("service"),
+                "provider": item.get("provider"),
+                "model": item.get("model"),
+                "cost_usd": priced["cost_usd"],
+                **priced["details"],
             })
 
         equiv = compute_llm_equivalent_tokens(
@@ -2767,11 +2650,9 @@ def _calculate_agent_costs(
     """
 
     if accounting_services_config is None:
-        config_str = get_settings().PLATFORM.ACCOUNTING.ACCOUNTING_SERVICES or "{}"
-        try:
-            accounting_services_config = json.loads(config_str)
-        except json.JSONDecodeError:
-            accounting_services_config = {}
+        accounting_services_config = load_services_config()
+    if not pricing_table:
+        pricing_table = price_table()
 
     agent_costs: Dict[str, Dict[str, Any]] = {}
 
@@ -2792,116 +2673,33 @@ def _calculate_agent_costs(
 
         for item in items:
             service = item.get("service")
-            provider = item.get("provider")
-            model = item.get("model")
             spent = item.get("spent", {}) or {}
+            priced = price_rollup_line(
+                item,
+                pricing_table=pricing_table,
+                services_config=accounting_services_config,
+            )
 
-            cost_usd = 0.0
-            tier = None  # for web_search
-            direct_cost_usd = float(spent.get("cost_usd", 0.0) or 0.0)
-
-            if service == "llm":
-                pr = _find_llm_price(provider, model, pricing_table=pricing_table)
-                if pr:
-                    input_tokens = float(spent.get("input", 0))
-                    output_tokens = float(spent.get("output", 0))
-                    thinking_tokens = float(spent.get("thinking", 0))
-
-                    input_price = float(pr.get("input_tokens_1M", 0.0))
-                    base_out_price = float(pr.get("output_tokens_1M", 0.0))
-                    thinking_price = float(pr.get("thinking_output_tokens_1M", base_out_price))
-
-                    # Treat 'output' as total output; bill non-thinking at base, thinking at thinking_price
-                    non_thinking_out = max(output_tokens - thinking_tokens, 0.0)
-
-                    output_cost = (non_thinking_out / 1_000_000.0) * base_out_price
-                    thinking_cost = (thinking_tokens / 1_000_000.0) * thinking_price
-                    input_cost = (input_tokens / 1_000_000.0) * input_price
-
-                    # --- cache pricing ---
-                    cache_read_cost = (
-                            float(spent.get("cache_read", 0))
-                            / 1_000_000.0
-                            * float(pr.get("cache_read_tokens_1M", 0.0))
-                    )
-
-                    cache_write_cost = 0.0
-                    cache_pricing = pr.get("cache_pricing")
-
-                    if cache_pricing and isinstance(cache_pricing, dict):
-                        cache_5m_tokens = float(spent.get("cache_5m_write", 0))
-                        cache_1h_tokens = float(spent.get("cache_1h_write", 0))
-
-                        if cache_5m_tokens > 0:
-                            price_5m = float(
-                                cache_pricing.get("5m", {}).get("write_tokens_1M", 0.0)
-                            )
-                            cache_write_cost += (cache_5m_tokens / 1_000_000.0) * price_5m
-
-                        if cache_1h_tokens > 0:
-                            price_1h = float(
-                                cache_pricing.get("1h", {}).get("write_tokens_1M", 0.0)
-                            )
-                            cache_write_cost += (cache_1h_tokens / 1_000_000.0) * price_1h
-                    else:
-                        cache_write_tokens = float(spent.get("cache_creation", 0))
-                        cache_write_price = float(pr.get("cache_write_tokens_1M", 0.0))
-                        cache_write_cost = (cache_write_tokens / 1_000_000.0) * cache_write_price
-
-                    cost_usd = (
-                            input_cost
-                            + output_cost
-                            + thinking_cost
-                            + cache_write_cost
-                            + cache_read_cost
-                    )
-
-                    # Token summary for reporting
-                    token_summary["input"] += int(spent.get("input", 0) or 0)
-                    token_summary["output"] += int(spent.get("output", 0) or 0)
-                    token_summary["thinking"] += int(spent.get("thinking", 0) or 0)
-                    token_summary["cache_5m_write"] += int(spent.get("cache_5m_write", 0) or 0)
-                    token_summary["cache_1h_write"] += int(spent.get("cache_1h_write", 0) or 0)
-                    token_summary["cache_read"] += int(spent.get("cache_read", 0) or 0)
-                elif direct_cost_usd > 0:
-                    cost_usd = direct_cost_usd
-
-            elif service == "embedding":
-                pr = _find_emb_price(provider, model, pricing_table=pricing_table)
-                if pr:
-                    emb_tokens = float(spent.get("tokens", 0))
-                    cost_usd = (
-                            emb_tokens
-                            / 1_000_000.0
-                            * float(pr.get("tokens_1M", 0.0))
-                    )
+            # Token summary counts the tokens the price table priced.
+            if priced["pricing_source"] == "price_table":
+                if service == "llm":
+                    for key in ("input", "output", "thinking", "cache_5m_write", "cache_1h_write", "cache_read"):
+                        token_summary[key] += int(spent.get(key, 0) or 0)
+                elif service == "embedding":
                     token_summary["embedding"] += int(spent.get("tokens", 0) or 0)
-                elif direct_cost_usd > 0:
-                    cost_usd = direct_cost_usd
-
-            elif service == "web_search":
-                # web_search cost calculation
-                tier = _get_web_search_tier(provider, accounting_services_config)
-                pr = _find_web_search_price(provider, tier, pricing_table=pricing_table)
-
-                if pr:
-                    search_queries = float(spent.get("search_queries", 0))
-                    cost_per_1k = float(pr.get("cost_per_1k_requests", 0.0))
-                    cost_usd = (search_queries / 1000.0) * cost_per_1k
-
+                elif service == "web_search":
                     token_summary["search_queries"] += int(spent.get("search_queries", 0) or 0)
                     token_summary["search_results"] += int(spent.get("search_results", 0) or 0)
-                elif direct_cost_usd > 0:
-                    cost_usd = direct_cost_usd
 
-            total_cost += cost_usd
+            total_cost += priced["cost_usd"]
             breakdown.append(
                 {
                     "service": service,
-                    "provider": provider,
-                    "model": model,
-                    "tier": tier,
-                    "cost_usd": cost_usd,
+                    "provider": item.get("provider"),
+                    "model": item.get("model"),
+                    "tier": priced["tier"],
+                    "cost_usd": priced["cost_usd"],
+                    "pricing_source": priced["pricing_source"],
                 }
             )
 
@@ -3029,93 +2827,9 @@ async def example_grouped_calc(tenant, project, bundle_id):
     )
     weighted_tokens = int(llm_input_sum * 0.4 + llm_output_sum * 1.0)
 
-    configuration = price_table()
-    # Compute estimated spend (no cache accounting yet)
-    acct_cfg = (configuration or {}).get("accounting", {})
-
-    cost_total_usd = 0.0
-    cost_breakdown = []
-
-    for item in rollup:
-        service = item.get("service")
-        provider = item.get("provider")
-        model = item.get("model")
-        spent = item.get("spent", {}) or {}
-
-        cost_usd = 0.0
-        direct_cost_usd = float(spent.get("cost_usd", 0.0) or 0.0)
-
-        if service == "llm":
-            pr = _find_llm_price(provider, model)
-            if pr:
-                input_tokens = float(spent.get("input", 0))
-                output_tokens = float(spent.get("output", 0))
-                thinking_tokens = float(spent.get("thinking", 0))
-
-                input_price = float(pr.get("input_tokens_1M", 0.0))
-                base_out_price = float(pr.get("output_tokens_1M", 0.0))
-                thinking_price = float(pr.get("thinking_output_tokens_1M", base_out_price))
-
-                # Treat 'output' as total output; bill non-thinking at base, thinking at thinking_price
-                non_thinking_out = max(output_tokens - thinking_tokens, 0.0)
-
-                output_cost = (non_thinking_out / 1_000_000.0) * base_out_price
-                thinking_cost = (thinking_tokens / 1_000_000.0) * thinking_price
-                input_cost = (input_tokens / 1_000_000.0) * input_price
-
-                # --- cache pricing ---
-                cache_read_cost = (
-                        float(spent.get("cache_read", 0))
-                        / 1_000_000.0
-                        * float(pr.get("cache_read_tokens_1M", 0.0))
-                )
-
-                cache_write_cost = 0.0
-                cache_pricing = pr.get("cache_pricing")
-
-                if cache_pricing and isinstance(cache_pricing, dict):
-                    cache_5m_tokens = float(spent.get("cache_5m_write", 0))
-                    cache_1h_tokens = float(spent.get("cache_1h_write", 0))
-
-                    if cache_5m_tokens > 0:
-                        price_5m = float(
-                            cache_pricing.get("5m", {}).get("write_tokens_1M", 0.0)
-                        )
-                        cache_write_cost += (cache_5m_tokens / 1_000_000.0) * price_5m
-
-                    if cache_1h_tokens > 0:
-                        price_1h = float(
-                            cache_pricing.get("1h", {}).get("write_tokens_1M", 0.0)
-                        )
-                        cache_write_cost += (cache_1h_tokens / 1_000_000.0) * price_1h
-                else:
-                    cache_write_tokens = float(spent.get("cache_creation", 0))
-                    cache_write_price = float(pr.get("cache_write_tokens_1M", 0.0))
-                    cache_write_cost = (cache_write_tokens / 1_000_000.0) * cache_write_price
-
-                cost_usd = (
-                        input_cost
-                        + output_cost
-                        + thinking_cost
-                        + cache_write_cost
-                        + cache_read_cost
-                )
-            elif direct_cost_usd > 0:
-                cost_usd = direct_cost_usd
-        elif service == "embedding":
-            pr = _find_emb_price(provider, model, pricing_table=price_table())
-            if pr:
-                cost_usd = (float(spent.get("tokens", 0)) / 1_000_000.0) * float(pr.get("tokens_1M", 0.0))
-            elif direct_cost_usd > 0:
-                cost_usd = direct_cost_usd
-
-        cost_total_usd += cost_usd
-        cost_breakdown.append({
-            "service": service,
-            "provider": provider,
-            "model": model,
-            "cost_usd": cost_usd,
-        })
+    estimate = compute_cost_estimate(rollup)
+    cost_total_usd = estimate["total_cost_usd"]
+    cost_breakdown = estimate["breakdown"]
 
     # Log weighted tokens and cost estimate
     print(
