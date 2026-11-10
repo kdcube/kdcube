@@ -92,7 +92,7 @@ async def create_checkout_topup(
         "currency": "usd",
         "product_data": {
             "name": f"AI Tokens Top-up (${payload.amount_usd})",
-            "description": f"Lifetime credits for user {user_id}",
+            "description": "Lifetime credits",
         },
         "unit_amount": amount_cents,
     }

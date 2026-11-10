@@ -203,3 +203,111 @@ def test_net_topup_cents_honours_a_usable_net():
     assert stripe_mod.net_topup_cents({key: "500"}, 595) == 500
     assert stripe_mod.net_topup_cents({key: " 500 "}, 595) == 500
     assert stripe_mod.net_topup_cents({key: "595"}, 595) == 595
+
+
+# ---------------------------------------------------------------------------
+# Stripe Customers carry an opaque reference, not the platform user id
+# ---------------------------------------------------------------------------
+
+SECRET = "test-platform-secret"
+
+
+def _with_secret(monkeypatch, value):
+    async def _get_secret(key, default=None):
+        assert key == "platform.services.session_token.secret"
+        return value
+
+    monkeypatch.setattr(stripe_mod, "get_secret", _get_secret)
+
+
+async def test_customer_fields_carry_no_user_id(monkeypatch):
+    _with_secret(monkeypatch, SECRET)
+    user_id = "internal:idp:alice@example.com"
+    fields = await stripe_mod.stripe_customer_fields("t", "p", user_id)
+    ref = fields["metadata"][stripe_mod.CUSTOMER_REF_METADATA_KEY]
+    assert fields["metadata"] == {"tenant": "t", "project": "p", stripe_mod.CUSTOMER_REF_METADATA_KEY: ref}
+    assert user_id not in fields["description"] and "alice" not in repr(fields)
+    assert ref == stripe_mod.stripe_customer_ref(SECRET, user_id)
+    assert ref == (await stripe_mod.stripe_customer_fields("t", "p", user_id))["metadata"][
+        stripe_mod.CUSTOMER_REF_METADATA_KEY]
+    assert ref != stripe_mod.stripe_customer_ref(SECRET, "someone-else")
+    assert ref != stripe_mod.stripe_customer_ref("another-secret", user_id)
+
+
+async def test_customer_ref_without_the_secret_is_random(monkeypatch):
+    _with_secret(monkeypatch, None)
+    a = await stripe_mod.stripe_customer_fields("t", "p", USER)
+    b = await stripe_mod.stripe_customer_fields("t", "p", USER)
+    ref_a = a["metadata"][stripe_mod.CUSTOMER_REF_METADATA_KEY]
+    assert ref_a.startswith("cr_") and ref_a != b["metadata"][stripe_mod.CUSTOMER_REF_METADATA_KEY]
+    assert USER not in repr(a)
+
+
+async def test_checkout_customer_is_created_opaque_and_mapped_in_user_plans(econ_pg, monkeypatch):
+    import types
+
+    from kdcube_ai_app.apps.chat.ingress.economics import stripe_router
+
+    db = econ_pg
+    _with_secret(monkeypatch, SECRET)
+    created = []
+
+    class _Customer:
+        @staticmethod
+        def create(**kw):
+            created.append(kw)
+            return types.SimpleNamespace(id="cus_new")
+
+    monkeypatch.setattr(stripe_router.router, "state", types.SimpleNamespace(pg_pool=db.pool), raising=False)
+    mgr = types.SimpleNamespace(subscription_mgr=SubscriptionManager(db.pool))
+    customer_id = await stripe_router._resolve_stripe_customer(
+        mgr, types.SimpleNamespace(Customer=_Customer), db.tenant, db.project, USER)
+
+    assert customer_id == "cus_new"
+    assert "user_id" not in created[0]["metadata"] and USER not in created[0]["description"]
+    mapped = await db.pool.fetchval(
+        f"SELECT user_id FROM {db.schema}.user_plans WHERE stripe_customer_id='cus_new'")
+    assert mapped == USER
+
+
+def _invoice_without_user(db, *, plan_id="pro", invoice_id="in_opaque"):
+    invoice = _invoice(db, plan_id=plan_id, amount_paid=2000, invoice_id=invoice_id)
+    invoice["customer"] = "cus_opaque"
+    del invoice["metadata"]["user_id"]
+    return invoice
+
+
+async def test_invoice_paid_resolves_an_opaque_customer_through_user_plans(econ_pg, monkeypatch):
+    db = econ_pg
+    await _seed_plan(db, "pro", price_cents=2000)
+    await db.pool.execute(
+        f"INSERT INTO {db.schema}.user_plans (tenant, project, user_id, status, provider, stripe_customer_id)"
+        " VALUES ($1,$2,$3,'active','internal','cus_opaque')",
+        db.tenant, db.project, USER)
+    handler, budget = _handler(db, monkeypatch)
+    res = await _invoice_paid(handler, _invoice_without_user(db))
+    assert res.action == "applied" and res.user_id == USER
+    assert [t["usd_amount"] for t in budget.topups] == [20.0]
+
+
+async def test_invoice_paid_prefers_a_legacy_customers_metadata(econ_pg, monkeypatch):
+    """A customer created before opaque references still names its user in its
+    own metadata; that wins, and user_plans is not consulted."""
+    db = econ_pg
+    await _seed_plan(db, "pro", price_cents=2000)
+    handler, budget = _handler(db, monkeypatch)
+    handler._fetch_customer_meta = lambda customer_id: {"user_id": "legacy-user"}
+
+    async def _no_lookup(*a, **kw):
+        raise AssertionError("user_plans must not be consulted when metadata names the user")
+
+    handler._user_for_stripe_customer = _no_lookup
+    res = await _invoice_paid(handler, _invoice_without_user(db))
+    assert res.action == "applied" and res.user_id == "legacy-user"
+
+
+async def test_invoice_paid_for_an_unknown_customer_is_ignored(econ_pg, monkeypatch):
+    db = econ_pg
+    handler, budget = _handler(db, monkeypatch)
+    res = await _invoice_paid(handler, _invoice_without_user(db))
+    assert res.action == "ignored" and budget.topups == []

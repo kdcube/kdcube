@@ -151,3 +151,9 @@ async def test_descriptor_write_back_preserves_the_stripe_section():
     payload = await build_economics_descriptor(
         _CP(), tenant="t", project="p", existing={"stripe": stripe_section})
     assert payload["stripe"] == stripe_section
+
+
+async def test_topup_product_data_names_no_user(stripe_client, economics_yaml):
+    await _topup()
+    product = stripe_client.sessions[0]["line_items"][0]["price_data"]["product_data"]
+    assert _SESSION.user_id not in repr(product)

@@ -13,6 +13,7 @@ import stripe
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
+from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import stripe_customer_fields
 
 logger = logging.getLogger(__name__)
 
@@ -101,14 +102,10 @@ async def _resolve_stripe_customer(mgr, stripe_client, tenant: str, project: str
     stripe_customer_id = getattr(sub, "stripe_customer_id", None) if sub else None
 
     if not stripe_customer_id:
-        md = {
-            "tenant": tenant,
-            "project": project,
-            "user_id": user_id,
-        }
+        # The customer carries an opaque reference, not the user id; the
+        # user_plans row written below is the mapping.
         customer = stripe_client.Customer.create(
-            metadata=md,
-            description=f"User {user_id} from {tenant}/{project}"
+            **await stripe_customer_fields(tenant, project, user_id)
         )
         stripe_customer_id = customer.id
 

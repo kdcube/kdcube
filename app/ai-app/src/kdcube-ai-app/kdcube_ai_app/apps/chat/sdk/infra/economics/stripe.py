@@ -32,6 +32,59 @@ SubscriptionBudgetFactory = Callable[[str, str, str, str, datetime, datetime], S
 ProjectBudgetFactory = Callable[[str, str], ProjectBudgetLimiter]
 
 
+# ---------------- Stripe Customer identity ----------------
+#
+# A Stripe Customer the platform creates carries an opaque reference, never the
+# platform user id: Stripe needs to know which tenant/project a customer belongs
+# to, not who the user is. The mapping of record is ours -- the
+# `user_plans.stripe_customer_id` row written when the customer is created.
+# Customers created before this change keep `user_id` in their metadata and
+# keep resolving through it.
+
+#: Metadata key carrying the opaque customer reference.
+CUSTOMER_REF_METADATA_KEY = "kdcube_customer_ref"
+#: The reference is keyed by a sub-key derived from this platform secret, so an
+#: operator holding the secret can compute a user's reference, and the reference
+#: alone reveals nothing.
+_CUSTOMER_REF_SECRET = "platform.services.session_token.secret"
+_CUSTOMER_REF_LABEL = b"kdcube.stripe.customer_ref.v1"
+_CUSTOMER_REF_HEX_DIGITS = 16
+
+
+def stripe_customer_ref(secret: str, user_id: str) -> str:
+    """Deterministic opaque reference for `user_id` under `secret`."""
+    import hashlib
+    import hmac
+
+    sub_key = hmac.new(str(secret).encode("utf-8"), _CUSTOMER_REF_LABEL, hashlib.sha256).digest()
+    digest = hmac.new(sub_key, str(user_id).strip().encode("utf-8"), hashlib.sha256).hexdigest()
+    return "cu_" + digest[:_CUSTOMER_REF_HEX_DIGITS]
+
+
+async def _customer_ref_for(user_id: str) -> str:
+    try:
+        secret = await get_secret(_CUSTOMER_REF_SECRET, default=None)
+    except Exception:
+        secret = None
+    if str(secret or "").strip():
+        return stripe_customer_ref(str(secret).strip(), user_id)
+    # Without the secret the reference is random: still opaque, and the
+    # user_plans row still maps the customer to the user.
+    import secrets as _secrets
+
+    return "cr_" + _secrets.token_hex(_CUSTOMER_REF_HEX_DIGITS // 2)
+
+
+async def stripe_customer_fields(tenant: str, project: str, user_id: str) -> Dict[str, Any]:
+    """Keyword arguments for `stripe.Customer.create`: routing metadata and a
+    description, with no platform user id in either."""
+    ref = await _customer_ref_for(user_id)
+    return {
+        "metadata": {"tenant": tenant, "project": project, CUSTOMER_REF_METADATA_KEY: ref},
+        "description": f"Customer {ref} from {tenant}/{project}",
+    }
+
+
 def _configured_stripe_secret(key: str) -> str:
     settings = get_settings()
     if key == "stripe.secret_key":
@@ -355,7 +408,7 @@ class StripeSubscriptionService:
         # Ensure customer
         customer_id = stripe_customer_id
         if not customer_id:
-            customer = stripe.Customer.create(metadata=md)
+            customer = stripe.Customer.create(**await stripe_customer_fields(tenant, project, user_id))
             customer_id = str(customer["id"])
 
         # If you want invoice.paid to be resolvable without relying on invoice.metadata,
@@ -799,8 +852,29 @@ class StripeEconomicsWebhookHandler:
             user_id=user_id,
         )
 
+    async def _user_for_stripe_customer(self, tenant: str, project: str, customer_id: Any) -> Optional[str]:
+        """Our side of the customer mapping: the user whose `user_plans` row holds
+        this Stripe customer id. Customers carry no user id in their metadata."""
+        if not customer_id or self.pg_pool is None:
+            return None
+        try:
+            async with self.pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT user_id FROM {_project_schema(tenant, project)}.{SubscriptionManager.TABLE} "
+                    "WHERE tenant=$1 AND project=$2 AND stripe_customer_id=$3 LIMIT 1",
+                    tenant, project, str(customer_id),
+                )
+        except Exception:
+            logger.exception("user_plans lookup by Stripe customer failed: %s", customer_id)
+            return None
+        return str(row["user_id"]) if row and row["user_id"] else None
+
     async def _handle_invoice_paid(self, event: Dict[str, Any], invoice: Dict[str, Any]) -> StripeHandleResult:
         meta, tenant, project, user_id = self._resolve_invoice_context(invoice)
+        if not user_id:
+            user_id = await self._user_for_stripe_customer(tenant, project, invoice.get("customer"))
+            if user_id:
+                meta = {**meta, "user_id": user_id}
         if not user_id:
             return StripeHandleResult(status="ok", action="ignored", message="Missing user_id (invoice/lines/subscription/customer metadata)")
 

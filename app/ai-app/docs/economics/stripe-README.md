@@ -140,6 +140,17 @@ All Stripe objects created by KDCube carry metadata for routing webhook events:
 
 If metadata is missing, the webhook handler attempts fallback lookups via the DB.
 
+**Customers** are the exception: a Stripe Customer the platform creates carries
+`tenant`, `project` and an opaque `kdcube_customer_ref`, and its description reads
+`Customer <ref> from <tenant>/<project>`. It carries no platform user id. The
+mapping of record is `user_plans.stripe_customer_id`, written when the customer is
+created; `invoice.paid` resolves a user that no invoice, line, subscription or
+customer metadata names through that row. The reference is an HMAC of the user id
+under a sub-key derived from `platform.services.session_token.secret`, so an
+operator holding the secret can compute a user's reference (random when the
+secret is not configured). Customers created before this behaviour keep `user_id`
+in their metadata, and it still takes precedence.
+
 ---
 
 ## Webhook Events Handled
