@@ -586,3 +586,94 @@ async def test_post_run_hour_snapshot_not_double_counted(monkeypatch):
     warn = next(e for e in ep._comm.events if e.get("type") == "rate_limit.warning")
     # the hour snapshot is the post-commit read (16000), not 16000 + 16000 = 32000
     assert warn["data"]["snapshot"]["tok_hour"] == 16000
+
+
+# --------------------------------------------------------------------------
+# Caller-funded turns: every model call runs on the caller's own provider key
+# (app opt-in model_credentials.user_keys). Quota applies; no money moves.
+# --------------------------------------------------------------------------
+class _NoMoney:
+    """A money collaborator that fails the test, by name, on any call."""
+
+    def __init__(self, name: str):
+        self._name = name
+
+    def __getattr__(self, attr):
+        async def _forbidden(*_a, **_k):
+            raise AssertionError(f"caller-funded turn touched money: {self._name}.{attr}")
+        return _forbidden
+
+
+class _CallerKeyConfig:
+    ai_bundle_spec = _Spec()
+    credential_sources = {"claude_api_key": "user"}
+    role_models = {"answer_generator": {"provider": "anthropic", "model": "m"}}
+    default_llm_model = {"provider": "anthropic", "model_name": "m"}
+
+
+def _caller_funded(ep, *, forbid_wallet: bool = True):
+    ep.config = _CallerKeyConfig()
+    ep.budget_limiter = _NoMoney("project_budget")
+    if forbid_wallet:
+        credits = ep.cp_manager.user_credits_mgr
+        for name in ("reserve_lifetime_credits", "commit_reserved_lifetime_credits",
+                     "consume_lifetime_credits", "release_lifetime_token_reservation"):
+            setattr(credits, name, getattr(_NoMoney("wallet"), name))
+    return ep
+
+
+@pytest.mark.asyncio
+async def test_exhausted_project_and_no_wallet_denies_a_platform_funded_turn(monkeypatch):
+    # The baseline the caller-funded branch exists for: with no funds anywhere the
+    # primary cap is 0 and the wallet-aware admit denies the turn.
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitException
+
+    ep = _make_ep(role="registered", wallet=0, budget=_Budget(available_usd=0.0, overdraft=0.0),
+                  monkeypatch=monkeypatch)
+    with pytest.raises(EconomicsLimitException):
+        await ep.run()
+
+
+@pytest.mark.asyncio
+async def test_a_caller_funded_turn_runs_with_no_funds_and_moves_no_money(monkeypatch):
+    ep = _caller_funded(_make_ep(role="registered", wallet=0, cost_usd=0.03, ranked_tokens=1000,
+                                 monkeypatch=monkeypatch))
+    result = await ep.run()
+
+    assert result is not None
+    assert [int(k.get("tokens") or 0) for k in ep.rl.commits] == [1000]  # quota still consumed
+    admit = ep.rl.admit_calls[0]
+    assert admit["has_wallet"] is False and admit["wallet_available_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_caller_funded_turn_leaves_the_wallet_and_subscription_untouched(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.infra.economics import subscription_budget as sub_budget_mod
+    from kdcube_ai_app.apps.chat.sdk.infra.economics import subscription as sub_mod
+    _SubBudget.instances = []
+    monkeypatch.setattr(sub_budget_mod, "SubscriptionBudgetLimiter", _SubBudget)
+    monkeypatch.setattr(sub_mod, "build_subscription_period_descriptor",
+                        lambda **kw: {"period_key": "pk", "period_start": None, "period_end": None})
+    ep = _caller_funded(_make_ep(role="registered", wallet=200_000, sub=_Sub(active=True, provider="stripe"),
+                                 cost_usd=0.25, ranked_tokens=16_000, monkeypatch=monkeypatch))
+    await ep.run()
+
+    for sub_lim in _SubBudget.instances:
+        assert sub_lim.reserved == [] and sub_lim.committed == []
+    assert [int(k.get("tokens") or 0) for k in ep.rl.commits] == [16_000]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_reaching_a_shared_key_is_billed_as_before(monkeypatch):
+    # One role on another provider runs on the platform key: the turn is not
+    # caller-funded and settles exactly like the project-funded golden.
+    ep = _make_ep(role="registered", wallet=0, budget=_Budget(overdraft=None),
+                  cost_usd=0.03, ranked_tokens=1000, monkeypatch=monkeypatch)
+
+    class _Mixed(_CallerKeyConfig):
+        role_models = {**_CallerKeyConfig.role_models, "classifier": {"provider": "openai", "model": "m"}}
+
+    ep.config = _Mixed()
+    await ep.run()
+    assert _trace(ep)["budget_reserved_usd"] == [2.0]
+    assert _trace(ep)["budget_committed_usd"] == [0.03]

@@ -35,6 +35,14 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
 from kdcube_ai_app.apps.chat.sdk.config_scopes import economics_reservation_default
 from kdcube_ai_app.infra.plugin.bundle_loader import on_reactive_event
 from kdcube_ai_app.infra.service_hub.inventory import Config, _mid
+from kdcube_ai_app.infra.service_hub.model_credentials import (
+    iter_user_sourced_fields,
+    turn_is_caller_funded,
+)
+from kdcube_ai_app.apps.chat.sdk.infra.economics.funding_flow import (
+    CALLER_FUNDED_SOURCE,
+    is_caller_funded,
+)
 from kdcube_ai_app.apps.chat.sdk.infra.economics.events_resources import (
     msg_denied_quota_reset,
     msg_denied_quota_insufficient_for_request,
@@ -783,6 +791,17 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         funds_from_subscription = subscription_provides_plan_budget(subscription, sub_now)
         has_wallet = bool(user_budget_tokens and int(user_budget_tokens) > 0)
 
+        # Every model call this turn can make runs on the caller's own provider key
+        # (app opt-in: model_credentials.user_keys). Read from the config this
+        # instance's model clients were built from, never re-derived from an identity.
+        caller_funded = turn_is_caller_funded(self.config)
+        if caller_funded:
+            _log(
+                "funding.caller",
+                "Model calls run on the caller's own keys; quota applies, no budget is debited",
+                user_fields=sorted(iter_user_sourced_fields(self.config)),
+            )
+
         plan_id, plan_source = resolve_plan_id(
             role=role,
             has_active_subscription=has_active_subscription,
@@ -931,7 +950,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         project_budget = None
         project_available_usd = 0.0
         project_balance_usd = 0.0
-        if not budget_bypass and not funds_from_subscription and project_budget_allowed:
+        if not budget_bypass and not caller_funded and not funds_from_subscription and project_budget_allowed:
             project_budget = await self.budget_limiter.get_app_budget_balance()
             project_available_usd = float(project_budget.get("available_usd") or 0.0)
             project_balance_usd = float(project_budget.get("balance_usd") or 0.0)
@@ -944,7 +963,18 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 snapshot=project_budget,
             )
 
-        if budget_bypass:
+        if caller_funded and not budget_bypass:
+            # Above every money branch: a caller paying the provider directly is
+            # admitted on quota alone, whatever their wallet, subscription or the
+            # project budget holds. Falling through to "none" would cap the turn at
+            # 0 tokens and deny it while the caller's own key sits unused.
+            funding_source = CALLER_FUNDED_SOURCE
+            funding_label = "caller's own model key"
+            funding_limiter = None
+            funding_budget = None
+            funding_available_usd = float("inf")
+            funding_balance_usd = float("inf")
+        elif budget_bypass:
             funding_source = "project"
             funding_label = "project budget (bypass)"
             funding_limiter = self.budget_limiter
@@ -984,8 +1014,8 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         # remainder. P_tokens bounds want_resv = min(R, P_tokens) by funds, then the
         # wallet-aware admit clamps it further by the live quota (Q) inside the Lua.
         def _primary_tokens_cap() -> int:
-            if budget_bypass:
-                return int(est_turn_tokens)
+            if budget_bypass or is_caller_funded(funding_source):
+                return int(est_turn_tokens)  # bounded by quota in the admit, not by funds
             denom = usd_per_token * SAFETY_MARGIN
             if denom <= 0:
                 return 0
@@ -1013,8 +1043,9 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 reservation_ttl_sec=900,
                 now=plan_admit_now,
                 wallet_aware=True,
-                has_wallet=bool(has_wallet),
-                wallet_available_tokens=int(user_budget_tokens or 0),
+                # a caller-funded turn never draws on the wallet
+                has_wallet=bool(has_wallet and not caller_funded),
+                wallet_available_tokens=int(0 if caller_funded else (user_budget_tokens or 0)),
                 r_total=int(est_turn_tokens),
             )
 

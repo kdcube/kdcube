@@ -310,3 +310,22 @@ def test_a_singleton_app_is_built_without_the_callers_key(monkeypatch):
         loader._manifest_cache.pop(loader._cache_key(per_turn), None)
     assert built_with[1] is config
 
+
+# ---------------------------------------------------------------------------
+# Caller-funded: every routed provider runs on the caller's key
+# ---------------------------------------------------------------------------
+def test_a_turn_is_caller_funded_only_when_every_routed_provider_uses_the_callers_key():
+    anthropic_only = {"answer": {"provider": "anthropic", "model": "m"}}
+    user_claude = {"claude_api_key": mc.SOURCE_USER}
+
+    assert mc.turn_is_caller_funded(_config(user_claude, role_models=anthropic_only))
+    # a role (or the default model) on another provider still spends a shared key
+    assert not mc.turn_is_caller_funded(_config(
+        user_claude, role_models={**anthropic_only, "classifier": {"provider": "openai", "model": "m"}},
+    ))
+    assert not mc.turn_is_caller_funded(_config(
+        user_claude, role_models=anthropic_only, default_llm_model={"provider": "openai", "model_name": "m"},
+    ))
+    assert not mc.turn_is_caller_funded(_config({"claude_api_key": mc.SOURCE_PLATFORM}, role_models=anthropic_only))
+    assert not mc.turn_is_caller_funded(_config({}, role_models=anthropic_only))
+    assert not mc.turn_is_caller_funded(SimpleNamespace())

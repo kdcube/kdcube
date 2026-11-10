@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Elena Viter
 
 # infra/service_hub/model_credentials.py
-"""Model provider credentials: one table, three scopes, and the client-config rule.
+"""Model provider credentials: one table, three scopes, and who pays for a turn.
 
 Every model credential a turn uses is resolved server-side, at the door, by
 ``resolve_config_request_secrets``. This module owns the facts that resolution
@@ -18,6 +18,9 @@ and its neighbours must agree on:
 - ``UserKeyPolicy`` — the per-app descriptor switch that lets a signed-in user's
   own provider key (stored with ``set_user_secret``) serve their turns. Off
   unless the app's ``bundles.yaml`` entry turns it on.
+- ``turn_is_caller_funded`` — whether a turn's model calls all run on the
+  caller's own keys, which is what lets economics consume quota without
+  debiting any budget.
 
 Precedence for each field: a value already on the server-built
 ``ConfigRequest`` > the caller's own key (when the app enables it) > the app
@@ -29,7 +32,7 @@ from __future__ import annotations
 import copy
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 logger = logging.getLogger("kdcube.service_hub.model_credentials")
 
@@ -241,6 +244,41 @@ def credential_sources(config: Any) -> dict[str, str]:
     return dict(sources) if isinstance(sources, Mapping) else {}
 
 
+def routed_providers(config: Any) -> set[str]:
+    """Every provider the config can route a model call to.
+
+    The configured role map plus the default model, which serves every role the
+    map does not name.
+    """
+    providers: set[str] = set()
+    for spec in (getattr(config, "role_models", None) or {}).values():
+        if isinstance(spec, Mapping) and spec.get("provider"):
+            providers.add(normalize_provider(spec.get("provider")))
+    default = getattr(config, "default_llm_model", None)
+    if isinstance(default, Mapping) and default.get("provider"):
+        providers.add(normalize_provider(default.get("provider")))
+    return providers
+
+
+def turn_is_caller_funded(config: Any) -> bool:
+    """True when every provider the config routes to runs on the caller's own key.
+
+    Read from the config the running instance actually holds — the same object
+    its model clients were built from — never re-derived from an identity.
+    A turn that can reach any provider on an app or platform key is not
+    caller-funded and is billed as usual.
+    """
+    sources = credential_sources(config)
+    providers = routed_providers(config)
+    if not sources or not providers:
+        return False
+    for provider in providers:
+        credential = credential_for_provider(provider)
+        if credential is None or sources.get(credential.field) != SOURCE_USER:
+            return False
+    return True
+
+
 def without_user_credentials(config: Any) -> Any:
     """A shallow copy of ``config`` holding only shared (app/platform) credentials.
 
@@ -264,3 +302,7 @@ def without_user_credentials(config: Any) -> Any:
     clone.credential_sources = new_sources
     clone.shared_credentials = {}
     return clone
+
+
+def iter_user_sourced_fields(config: Any) -> Iterable[str]:
+    return (name for name, source in credential_sources(config).items() if source == SOURCE_USER)

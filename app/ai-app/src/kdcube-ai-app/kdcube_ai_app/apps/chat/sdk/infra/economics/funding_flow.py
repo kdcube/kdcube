@@ -45,6 +45,17 @@ SAFETY_MARGIN = 1.15
 # raises ValueError. Below this we treat the primary cover as exhausted.
 _MIN_RESERVE_USD = 1.0 / 100
 
+# The turn's model calls all run on the caller's own provider keys, so the
+# provider bills the caller directly. The turn still consumes QUOTA (rate limits
+# bound platform capacity, not the provider bill) and its cost is still recorded,
+# but no money hold is taken and nothing is debited: not the project budget, not
+# a subscription budget, not the caller's wallet.
+CALLER_FUNDED_SOURCE = "caller"
+
+
+def is_caller_funded(funding_source: str) -> bool:
+    return str(funding_source or "") == CALLER_FUNDED_SOURCE
+
 
 def _log_noop(stage: str, msg: str, level: str = "INFO", **kv) -> None:
     pass
@@ -74,7 +85,7 @@ class FundingContext:
 @dataclass
 class PlanFundingReservation:
     """Holds the pre-run reservation handles consumed by settlement."""
-    funding_source: str          # "project" | "subscription"
+    funding_source: str          # "project" | "subscription" | "caller" | "none"
     budget_bypass: bool
     est_turn_tokens: int
 
@@ -217,7 +228,7 @@ async def reserve_funding(
     res.plan_project_tokens_est = int(plan_part)
 
     # --- primary money hold for the plan part ----------------------------
-    if plan_part > 0 and not budget_bypass:
+    if plan_part > 0 and not budget_bypass and not is_caller_funded(funding_source):
         app_reserved_usd = float(plan_part) * usd_per_token * SAFETY_MARGIN
         if app_reserved_usd >= _MIN_RESERVE_USD:
             app_reservation_id = uuid4()
@@ -249,7 +260,7 @@ async def reserve_funding(
                 )
 
     # --- wallet hold for the over-quota/over-funds remainder -------------
-    if wallet_part > 0 and has_wallet:
+    if wallet_part > 0 and has_wallet and not is_caller_funded(funding_source):
         # Hold the USD value of the wallet_part at the live rate. The margin is
         # already baked into est_turn.
         wallet_hold_cents = int(round(float(wallet_part) * usd_per_token * 100))
@@ -316,6 +327,13 @@ async def settle_plan_funding(
             )
         await _commit_rl(ctx, res, tokens=ranked_tokens)
         out.primary_funding_usd = float(total_cost)
+        out.quota_commit_tokens = ranked_tokens
+        return out
+
+    if is_caller_funded(funding_source):
+        # The provider billed the caller. Commit quota so rate limits still bind;
+        # debit nothing. total_cost_usd stays on the result for reporting.
+        await _commit_rl(ctx, res, tokens=ranked_tokens)
         out.quota_commit_tokens = ranked_tokens
         return out
 
