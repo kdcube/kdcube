@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/automations/automations-sdk
 title: "Automations SDK Solution"
 summary: "Reusable scheduled/executable automation component for KDCube bundles: automation storage, execution journals, artifact recovery, ReAct tools, and skills."
 tags: ["sdk", "solutions", "automations", "scheduler", "executions", "artifacts", "react", "identity-authority"]
-updated_at: 2026-06-26
+updated_at: 2026-11-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-projection/authority-projection-README.md
@@ -27,6 +27,7 @@ kdcube_ai_app.apps.chat.sdk.solutions.automations
   storage.py              Markdown + YAML front matter automation storage and SQLite FTS automation index
   executions_storage.py   Execution journal JSON files and SQLite FTS execution index
   async_storage.py        Async wrappers for file/SQLite automation stores
+  owner_segments.py       Injective per-user directory names and legacy-store adoption
   execution_artifacts.py  Execution artifact indexing, download filtering, materialization
   operations.py           Configurable automation CRUD/search/run/download operations
                           for bundle routes and widgets
@@ -53,6 +54,26 @@ Execution records are separate from automation definitions:
 <storage_root>/automation_executions/<user_id>/<automation_id>/<execution_id>.json
 <storage_root>/indexes/automation_executions/<user_id>/executions.sqlite
 ```
+
+`<user_id>` is the directory segment `owner_segments.owner_segment(user_id)`
+assigns, and that directory is the only boundary between two users' automations.
+The segment is one-to-one and reversible, so two different user ids never share a
+store and the scheduler can turn a directory it finds back into the exact id that
+owns it:
+
+- an id made only of `A-Z a-z 0-9 _ . -` (not starting with `.` or `-`, not
+  ending with `-`) is its own segment, e.g. `user-42`;
+- any other id becomes `<readable prefix>~<base32 of the full id>`, e.g.
+  `tenant:user:42` → `tenant-user-42~orsw4ylooq5hk43foi5dimq`. `~` never occurs in
+  the first form, so the two forms cannot collide.
+
+Earlier releases used the readable prefix alone, which mapped `tenant:user:42`
+and `tenant-user-42` onto the same directory. A store written that way is moved
+to its new name the first time its owner's store is opened (or the due scan
+reaches it), when every record in it carries that owner's `owner_user_id`. A
+directory whose records name more than one owner was shared by colliding ids;
+it stays where it is, a warning names it, and an operator decides how to split
+it. Search indexes are caches and are rebuilt under the new name.
 
 The automation definition describes what should be done. The execution record
 describes what happened during one run: status, summary, logs, result JSON,

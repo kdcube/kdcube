@@ -8,6 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List
 
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.owner_segments import (
+    adopt_legacy_store,
+    owner_segment,
+)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -31,6 +36,9 @@ def _slug(text: str, *, fallback: str) -> str:
 
 def _safe_segment(raw: str, *, fallback: str = "default") -> str:
     value = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw or "").strip("-")
+    if value in {".", ".."}:
+        # A dot segment names the parent directory, not a child of it.
+        return fallback
     return value or fallback
 
 
@@ -152,8 +160,10 @@ class AutomationExecutionsStorage:
     ):
         self.root = Path(root).resolve()
         self.user_id = user_id or "anonymous"
-        self.safe_user_id = _safe_segment(self.user_id, fallback="anonymous")
         self.namespace = _safe_segment(namespace, fallback="automation_executions")
+        # One directory per user id, injectively (see owner_segments).
+        adopt_legacy_store(self.root, self.user_id, subtrees=(self.namespace,))
+        self.safe_user_id = owner_segment(self.user_id)
         self.executions_dir = self.root / self.namespace / self.safe_user_id
         self.index_dir = self.root / "indexes" / self.namespace / self.safe_user_id
         self.index_path = self.index_dir / "executions.sqlite"

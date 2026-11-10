@@ -12,6 +12,11 @@ from typing import Any, Dict, Iterable, List
 
 import yaml
 
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.owner_segments import (
+    adopt_legacy_store,
+    owner_segment,
+)
+
 try:
     from .executions_storage import AutomationExecutionsStorage
 except ImportError:
@@ -205,6 +210,9 @@ def _filter_markdown_assets(
 
 def _safe_segment(raw: str, *, fallback: str = "default") -> str:
     value = re.sub(r"[^a-zA-Z0-9_.-]+", "-", raw or "").strip("-")
+    if value in {".", ".."}:
+        # A dot segment names the parent directory, not a child of it.
+        return fallback
     return value or fallback
 
 
@@ -235,7 +243,10 @@ class AutomationStorage:
     def __init__(self, root: str | Path, *, user_id: str):
         self.root = Path(root).resolve()
         self.user_id = user_id or "anonymous"
-        self.safe_user_id = _safe_segment(self.user_id, fallback="anonymous")
+        # One directory per user id, injectively (see owner_segments). A store
+        # written under the legacy segment is moved before anything is created.
+        adopt_legacy_store(self.root, self.user_id)
+        self.safe_user_id = owner_segment(self.user_id)
         self.automations_dir = self.root / "automations" / self.safe_user_id
         self.index_dir = self.root / "indexes" / "automations" / self.safe_user_id
         self.index_path = self.index_dir / "automations.sqlite"

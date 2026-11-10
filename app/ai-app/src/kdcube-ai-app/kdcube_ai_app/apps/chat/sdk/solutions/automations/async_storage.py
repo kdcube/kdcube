@@ -4,6 +4,8 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.owner_segments import store_owner_ids
+
 try:
     from .storage import AutomationStorage
     from .executions_storage import AutomationExecutionsStorage
@@ -218,10 +220,10 @@ class AsyncAutomationStorage:
 
 
 async def list_automation_user_ids(root: str | Path) -> list[str]:
-    def _scan() -> list[str]:
-        automations_root = Path(root).resolve() / "automations"
-        if not automations_root.exists():
-            return []
-        return [path.name for path in sorted(automations_root.iterdir()) if path.is_dir()]
+    """The user id of every automation store under ``root``.
 
-    return await asyncio.to_thread(_scan)
+    These are owner ids, not directory names: opening
+    ``AsyncAutomationStorage(root, user_id=<id>)`` with any returned id opens
+    exactly the directory it was found in.
+    """
+    return await asyncio.to_thread(store_owner_ids, Path(root).resolve())
