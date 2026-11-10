@@ -8,7 +8,8 @@ A tool module that exposes neither a Semantic Kernel ``kernel`` nor
 that walk: the tool manager (``ToolSubsystem._introspect_module``), which
 builds the catalog rendered into the agent's system prompt, and the agent
 inventory (``agent_inventory``), which builds the pickable capability catalog.
-Both apply the rules in this module so the two catalogs name the same tools.
+Both apply the rules in this module so the two catalogs name the same tools
+with the same descriptions.
 """
 
 from __future__ import annotations
@@ -38,6 +39,23 @@ def tool_defined_in_module(fn: Any, mod: Any) -> bool:
     if origin is None:
         return True
     return origin == own
+
+
+def declared_tool_description(fn: Any) -> str:
+    """The description a tool declares, in resolution order.
+
+    ``@kernel_function(description=...)`` stores the text on
+    ``__kernel_function_description__`` and never sets ``.description``, so
+    the kernel attribute is read first, then a plain ``description``
+    attribute, then the docstring.
+    """
+    if fn is None:
+        return ""
+    return str(
+        getattr(fn, "__kernel_function_description__", "")
+        or getattr(fn, "description", "")
+        or (getattr(fn, "__doc__", "") or "")
+    )
 
 
 def reflected_tool_callables(mod: Any) -> Iterator[Tuple[str, Any]]:

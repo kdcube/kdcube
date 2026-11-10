@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_module_bindings import bind_module_target
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_reflection import (
+    declared_tool_description,
     reflected_tool_callables,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_traits import (
@@ -1132,7 +1133,7 @@ class ToolSubsystem:
             entries: List[Dict[str, Any]] = []
             for fn_name, meta in reg.items():
                 fn = meta.get("callable") or getattr(getattr(mod, "tools", mod), fn_name, None)
-                desc = meta.get("description") or getattr(fn, "description", "") or (getattr(fn, "__doc__", "") or "")
+                desc = meta.get("description") or declared_tool_description(fn)
                 params = self._sig_to_params(fn)
                 import_stmt = f"from {mod_name} import tools as {alias}"
                 call_template = self._make_call_template(alias, fn_name, params)
@@ -1154,7 +1155,7 @@ class ToolSubsystem:
         entries: List[Dict[str, Any]] = []
         for name, fn in reflected_tool_callables(mod):
             params = self._sig_to_params(fn)
-            desc = getattr(fn, "description", "") or (getattr(fn, "__doc__", "") or "")
+            desc = declared_tool_description(fn)
             call_template = self._make_call_template(alias, name, params)
             is_async = asyncio.iscoroutinefunction(fn)
             ret_annot = self._annot_from_sig_return(fn)

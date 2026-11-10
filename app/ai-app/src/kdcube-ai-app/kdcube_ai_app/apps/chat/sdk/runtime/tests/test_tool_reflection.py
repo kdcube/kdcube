@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""Reflected tool catalogs publish declared tools only.
+"""Reflected tool catalogs publish declared tools only, with their declared descriptions.
 
 A tool module without ``kernel`` or ``list_tools()`` is introspected by
 walking ``dir(module)``. Module-level imports are public and callable, and
@@ -19,6 +19,7 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime import agent_inventory
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_reflection import (
+    declared_tool_description,
     reflected_tool_callables,
     tool_defined_in_module,
 )
@@ -126,12 +127,19 @@ def test_explicit_tools_object_is_taken_as_declared():
     assert [name for name, _fn in reflected_tool_callables(mod)] == ["imported_looking"]
 
 
-def test_tool_subsystem_catalog_has_only_declared_tools(tool_module):
+def test_description_reads_kernel_metadata_before_docstring(tool_module):
+    assert declared_tool_description(tool_module.search_notes) == "Search the operator notes by keyword."
+    assert declared_tool_description(tool_module.plain_tool) == "Plain tool documented by its docstring."
+    assert declared_tool_description(None) == ""
+
+
+def test_tool_subsystem_catalog_has_declared_tools_with_purposes(tool_module):
     subsystem = object.__new__(ToolSubsystem)
     entries = subsystem._introspect_module(tool_module, MODULE_NAME, "notes", use_sk=False)
     by_name = {entry["id"].rsplit(".", 1)[-1]: entry for entry in entries}
 
     assert set(by_name) == DECLARED_TOOLS
+    assert "Search the operator notes by keyword." in str(by_name["search_notes"])
 
 
 def test_agent_inventory_matches_the_tool_manager(tool_module):
@@ -140,3 +148,4 @@ def test_agent_inventory_matches_the_tool_manager(tool_module):
 
     assert set(docs) == DECLARED_TOOLS
     assert set(names) == DECLARED_TOOLS
+    assert docs["search_notes"] == "Search the operator notes by keyword."

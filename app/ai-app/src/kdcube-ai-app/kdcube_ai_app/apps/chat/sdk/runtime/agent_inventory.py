@@ -40,6 +40,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.resident_resources.descriptor import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import AgentSkillConfig
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_reflection import (
+    declared_tool_description,
     reflected_tool_callables,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
@@ -894,11 +895,7 @@ def _module_tool_docs(module_name: str) -> dict[str, str]:
         fn = (meta.get("callable") if isinstance(meta, Mapping) else None) or getattr(owner, fn_name, None)
         desc = _norm(meta.get("description")) if isinstance(meta, Mapping) else ""
         if not desc and fn is not None:
-            desc = (
-                getattr(fn, "__kernel_function_description__", "")
-                or getattr(fn, "description", "")
-                or (getattr(fn, "__doc__", "") or "")
-            )
+            desc = declared_tool_description(fn)
         desc = _first_para(str(desc or ""))
         if callable(fn) or (isinstance(meta, Mapping) and meta):
             docs[fn_name] = desc

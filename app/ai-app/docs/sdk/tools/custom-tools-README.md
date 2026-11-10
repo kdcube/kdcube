@@ -90,6 +90,12 @@ Notes:
 - `allowed` is the exact callable allow-list for that agent.
 - `discovery` defaults to `semantic_kernel`; only `@kernel_function` tools
   should be published to the model catalog for Python sources.
+- A module without `kernel` or `list_tools()` is read by reflection. The
+  catalog then lists the public callables the module defines; names it
+  imports (`Optional`, `kernel_function`, helpers from other modules) are not
+  tools. List a tool implemented elsewhere in the module's `__all__` to
+  re-export it. A tool's description is its `@kernel_function(description=...)`,
+  else a `description` attribute, else its docstring.
 
 ## 2.1) Make ReAct tools governable with strategy traits
 
