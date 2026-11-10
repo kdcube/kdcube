@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.
 title: "Platform Assembly Descriptor"
 summary: "Platform-level non-secret deployment configuration in assembly.yaml: tenant/project identity, auth, models, services, ports, storage backends, local runtime paths, and frontend/runtime wiring."
 tags: ["service", "configuration", "platform", "deployment", "assembly", "descriptor"]
-keywords: ["platform deployment identity", "tenant and project scope", "auth and cognito settings", "service port layout", "storage and workspace backends", "runtime path wiring", "application preparation concurrency", "application preparation retry", "bundle descriptor provider", "frontend build metadata", "local compose topology", "aws deployment mapping"]
-updated_at: 2026-10-18
+keywords: ["platform deployment identity", "tenant and project scope", "auth and cognito settings", "service port layout", "storage and workspace backends", "runtime path wiring", "application preparation concurrency", "application preparation retry", "bundle descriptor provider", "frontend build metadata", "local compose topology", "aws deployment mapping", "model role routing", "format fixer model"]
+updated_at: 2026-11-10
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
@@ -206,6 +206,44 @@ examples. A provider-native subprocess can consume the same model selection
 while retaining its own protocol constraints; the Claude Code example accepts
 the Anthropic provider only. Hosted application model picks remain bundle
 configuration under `role_models` or the application's supported-model list.
+
+### Platform model roles
+
+Platform and application code calls models by role (`classifier`,
+`answer_generator`, `format_fixer`, or an application's own role names). An
+assembly can give a role its model for every application on the platform, so
+an operator moves, for example, the JSON format fixer to a small fast model in
+one place:
+
+```yaml
+models:
+  default_llm_model_id: claude-sonnet-4-6
+  default_embedding_model_id: openai-text-embedding-3-small
+  role_models:
+    format_fixer:
+      provider: anthropic
+      model: claude-haiku-4-5
+```
+
+A role resolves from four scopes; the most specific scope that names the role
+wins:
+
+1. assembly `models.role_models`;
+2. application `config.role_models` (`bundles.yaml` props over the
+   application's code defaults);
+3. per-agent `config.react.<agent_id>.role_models`;
+4. request-scoped `bundle_call_context.role_models`.
+
+A role named in no scope runs on `models.default_llm_model_id`. A key of the
+platform model registry (`MODEL_CONFIGS`) resolves to its registered provider
+and model. Any other id runs as configured when `models.default_llm_provider`
+names its provider; without that provider the runtime falls back to `o3-mini`
+and logs a warning naming the configured id. `format_fixer` follows the same
+rules and has no separate setting.
+
+Provider ids are canonical: `anthropic`, `openai`, `google` (Gemini models,
+`gemini-*`), `openrouter`, `huggingface`, and `custom`. The alias
+`provider: gemini` is normalized to `google` with a warning.
 
 ### Platform Auth Selection
 
