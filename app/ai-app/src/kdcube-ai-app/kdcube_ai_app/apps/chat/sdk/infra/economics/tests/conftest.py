@@ -35,6 +35,8 @@ _DDL_BLOCKS = (
     ("CREATE OR REPLACE FUNCTION <SCHEMA>.update_updated_at()", "$$ LANGUAGE plpgsql;"),
     ("CREATE TABLE IF NOT EXISTS <SCHEMA>.user_lifetime_credits (",
      "CHECK (purchased_cents >= 0 AND spent_cents >= 0)\n);"),
+    ("CREATE TABLE IF NOT EXISTS <SCHEMA>.user_credit_reservations (",
+     "REFERENCES <SCHEMA>.user_lifetime_credits(tenant, project, user_id)\n      ON DELETE CASCADE\n);"),
     ("CREATE TABLE IF NOT EXISTS <SCHEMA>.plans (",
      "FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();"),
     ("CREATE TABLE IF NOT EXISTS <SCHEMA>.user_plans (",

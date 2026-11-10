@@ -217,7 +217,9 @@ into the PaymentIntent metadata (`kdcube_net_amount_cents`) and the
 `payment_intent.succeeded` handler credits that figure, capped at the amount
 received. When tax was collected, the ledger row records the credited amount and
 keeps `kdcube_gross_amount_cents` and `kdcube_tax_cents` in its metadata for
-payout reconciliation. A subscription plan that should not turn its tax-inclusive
+payout reconciliation. A wallet refund of such a payment debits the wallet in
+proportion to the money returned (a full refund removes exactly the credited
+amount). A subscription plan that should not turn its tax-inclusive
 invoice into model budget is declared `entitlement_only` (see [`plans`](#plans-seeded)).
 
 Turning `automatic_tax` on in this descriptor does not configure Stripe itself.

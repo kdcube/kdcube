@@ -1404,14 +1404,6 @@ class StripeEconomicsAdminService:
                 raise ValueError(f"Requested refund exceeds refundable amount: {refund_cents} > {max_refundable}")
 
         refund_usd = float(refund_cents) / 100.0
-        tokens_refund, _ = quote_tokens_for_usd(
-            usd_amount=refund_usd,
-            ref_provider=self.ref_provider,
-            ref_model=self.ref_model,
-        )
-        tokens_refund = int(tokens_refund)
-        if tokens_refund <= 0:
-            raise ValueError("Refund amount too small to convert to tokens")
 
         # If payment intent has metadata user_id, validate
         meta = (pi.get("metadata") or {})
@@ -1419,20 +1411,41 @@ class StripeEconomicsAdminService:
         if pi_user_id and str(pi_user_id) != str(user_id):
             raise ValueError("payment_intent user_id does not match requested user_id")
 
+        # The wallet was credited the top-up's pre-tax price, not the amount
+        # received (see net_topup_cents). A refund returns money in proportion,
+        # so it debits the wallet in the same proportion. Untaxed: identical.
+        credited_cents = net_topup_cents(meta, amount_received, reference=payment_intent_id)
+        if credited_cents >= amount_received:
+            credit_cents = refund_cents
+        else:
+            credit_cents = int(round(refund_cents * credited_cents / amount_received))
+        credit_usd = float(credit_cents) / 100.0
+
+        tokens_refund, _ = quote_tokens_for_usd(
+            usd_amount=credit_usd,
+            ref_provider=self.ref_provider,
+            ref_model=self.ref_model,
+        )
+        tokens_refund = int(tokens_refund)
+        if tokens_refund <= 0:
+            raise ValueError("Refund amount too small to convert to tokens")
+
         external_id = f"wallet_refund:{payment_intent_id}:{refund_cents}"
 
         key = LedgerKey(source="internal", kind="wallet_refund",
                         external_id=external_id)
         async with self.pg_pool.acquire() as conn:
             async with conn.transaction():
+                # amount_cents is the WALLET effect: the failure paths restore it.
                 claim = await self.ledger.claim(
                     conn=conn, key=key, tenant=tenant, project=project,
-                    user_id=user_id, amount_cents=refund_cents, tokens=tokens_refund,
+                    user_id=user_id, amount_cents=credit_cents, tokens=tokens_refund,
                     currency="usd", provider_event_id=None,
                     metadata={
                         "payment_intent_id": payment_intent_id,
                         "refund_cents": refund_cents,
                         "refund_usd": refund_usd,
+                        "credit_cents": credit_cents,
                         "tokens": tokens_refund,
                         "notes": notes,
                         "requested_by": actor or "unknown",
@@ -1463,7 +1476,7 @@ class StripeEconomicsAdminService:
                     tenant=tenant,
                     project=project,
                     user_id=user_id,
-                    usd_amount=refund_usd,
+                    usd_amount=credit_usd,
                     conn=conn,
                 )
 
@@ -1492,7 +1505,7 @@ class StripeEconomicsAdminService:
                         tenant=tenant,
                         project=project,
                         user_id=user_id,
-                        usd_amount=refund_usd,
+                        usd_amount=credit_usd,
                         conn=conn,
                     )
                     await self.ledger.mark_failed(
@@ -1546,6 +1559,7 @@ class StripeEconomicsAdminService:
             "external_id": external_id,
             "stripe_refund_id": refund_id,
             "refund_usd": refund_usd,
+            "credit_usd": credit_usd,
             "refund_tokens": tokens_refund,
         }
 

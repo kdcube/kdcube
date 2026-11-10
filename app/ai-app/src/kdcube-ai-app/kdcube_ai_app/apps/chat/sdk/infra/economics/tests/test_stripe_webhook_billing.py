@@ -311,3 +311,69 @@ async def test_invoice_paid_for_an_unknown_customer_is_ignored(econ_pg, monkeypa
     handler, budget = _handler(db, monkeypatch)
     res = await _invoice_paid(handler, _invoice_without_user(db))
     assert res.action == "ignored" and budget.topups == []
+
+
+# ---------------------------------------------------------------------------
+# wallet refunds of a taxed top-up debit the wallet in proportion
+# ---------------------------------------------------------------------------
+
+class _FakeStripe:
+    def __init__(self, pi):
+        self.refunds = []
+        outer = self
+
+        class PaymentIntent:
+            @staticmethod
+            def retrieve(pi_id, **kw):
+                return pi
+
+        class Refund:
+            @staticmethod
+            def create(**kw):
+                outer.refunds.append(kw)
+                return {"id": "re_1", "status": "pending"}
+
+        self.PaymentIntent = PaymentIntent
+        self.Refund = Refund
+
+
+def _admin_service(db, monkeypatch, fake_stripe):
+    async def _no_email(**kw):
+        return None
+
+    monkeypatch.setattr(stripe_mod, "send_admin_email", _no_email)
+    svc = stripe_mod.StripeEconomicsAdminService(
+        pg_pool=db.pool, user_credits_mgr=_credits_manager(db),
+        subscription_mgr=SubscriptionManager(db.pool), stripe_api_key="sk_test",
+    )
+    svc._stripe = lambda: fake_stripe
+    return svc
+
+
+@pytest.mark.parametrize("received, refund_usd, expected_wallet_debit, expected_left", [
+    (GROSS_CENTS, None, NET_CENTS, 0),        # full refund of a taxed top-up
+    (GROSS_CENTS, 2.975, 250, 250),           # half the money back, half the credit gone
+    (NET_CENTS, None, NET_CENTS, 0),          # untaxed: unchanged behaviour
+])
+async def test_wallet_refund_debits_what_the_top_up_credited(
+        econ_pg, monkeypatch, received, refund_usd, expected_wallet_debit, expected_left):
+    db = econ_pg
+    pi = _payment_intent(db, received=received)
+    handler, _ = _handler(db, monkeypatch, user_credits_mgr=_credits_manager(db))
+    await _pi_succeeded(handler, pi)
+    assert await _purchased_cents(db) == NET_CENTS
+
+    fake = _FakeStripe({**pi, "charges": {"data": []}})
+    svc = _admin_service(db, monkeypatch, fake)
+    res = await svc.request_wallet_refund(
+        tenant=db.tenant, project=db.project, user_id=USER,
+        payment_intent_id=pi["id"], usd_amount=refund_usd)
+
+    money_cents = received if refund_usd is None else int(round(refund_usd * 100))
+    assert fake.refunds[0]["amount"] == money_cents
+    assert await _purchased_cents(db) == expected_left
+    assert round(res["credit_usd"] * 100) == expected_wallet_debit
+    row = await db.pool.fetchrow(
+        f"SELECT amount_cents, metadata FROM {db.events_table} WHERE source='internal' AND kind='wallet_refund'")
+    assert row["amount_cents"] == expected_wallet_debit
+    assert row["metadata"]["refund_cents"] == money_cents
