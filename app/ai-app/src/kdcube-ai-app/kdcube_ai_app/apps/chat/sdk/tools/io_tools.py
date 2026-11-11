@@ -3,7 +3,7 @@
 
 # chat/sdk/tools/io_tools.py
 
-import os, json, pathlib, re, mimetypes, inspect
+import os, json, logging, pathlib, re, mimetypes, inspect
 from typing import Annotated, Optional, Any, Dict, List, Tuple
 import base64
 
@@ -57,8 +57,51 @@ def _is_limited_executor() -> bool:
     ctx = (os.environ.get("AGENT_IO_CONTEXT") or "").strip().lower()
     return ctx == "limited"
 
+logger = logging.getLogger(__name__)
+
+
 def _outdir() -> pathlib.Path:
     return resolve_runtime_output_dir()
+
+
+def _contained_output_relpath(od: pathlib.Path, rel: str) -> Optional[str]:
+    """``rel`` re-expressed relative to ``od``, or None when it escapes ``od``.
+
+    Both sides are resolved before the comparison, so ``..`` segments, an
+    absolute ``rel`` and a symlink inside the output directory are all handled,
+    and ``is_relative_to`` compares path COMPONENTS -- a sibling directory whose
+    name merely starts with the output dir's name is rejected, where a string
+    prefix test would accept it.
+    """
+    try:
+        root = od.resolve()
+        candidate = (od / rel).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if candidate == root or not candidate.is_relative_to(root):
+        return None
+    return candidate.relative_to(root).as_posix()
+
+
+def _safe_output_relpath(od: pathlib.Path, rel: str, *, tool_id: str, safe_tid: str) -> str:
+    """The filename a tool call may actually write, inside ``od``.
+
+    A caller-supplied ``filename`` is model-controlled, so an escaping value is
+    REFUSED -- loudly, in the log -- and replaced with a reserved in-directory
+    name rather than raising: the tool has usually already run by then, and
+    discarding its result to punish a bad filename loses real work.
+    """
+    contained = _contained_output_relpath(od, rel)
+    if contained is not None:
+        return contained
+    replacement = reserve_tool_call_filename(od, tool_id, safe_tid)
+    logger.warning(
+        "[io_tools] REFUSED filename=%r for %s: it resolves outside the turn output "
+        "directory %s; persisted as %r instead",
+        rel, tool_id, str(od), replacement,
+    )
+    return replacement
+
 
 def _sanitize_tool_id(tid: str) -> str:
     # "web_tools.web_search" -> "web_tools"
@@ -588,11 +631,14 @@ def _promote_tool_calls(raw_files: Dict[str, List[str]], outdir: pathlib.Path) -
     promos: List[Dict[str, Any]] = []
     for tool_id, rels in (raw_files or {}).items():
         for idx, rel in enumerate(rels or []):
-            p = (outdir / rel)
+            contained = _contained_output_relpath(outdir, str(rel or ""))
+            p = (outdir / contained) if contained is not None else None
             desc = ""
             tool_input: Dict[str, Any] = {}
             tool_output: Any = None
             try:
+                if p is None:
+                    raise PermissionError(f"tool-call record {rel!r} is outside the output directory")
                 payload = json.loads(p.read_text(encoding="utf-8"))
                 desc = payload.get("description") or ""
                 tool_input = (payload.get("in") or {}).get("params", {}) or {}
@@ -702,6 +748,7 @@ class AgentIO:
         od = _outdir()
         safe_tid = _sanitize_tool_id(tid)
         rel = filename or reserve_tool_call_filename(od, tid, safe_tid)
+        rel = _safe_output_relpath(od, rel, tool_id=tid, safe_tid=safe_tid)
 
         # ---- MODE 1: limited executor → delegate to supervisor via socket --
         if _is_limited_executor() and ToolStub is not None:
@@ -849,8 +896,11 @@ class AgentIO:
             filename: Optional[str] = None,
     ) -> str:
         od = _outdir()
-        rel = filename or reserve_tool_call_filename(od, tool_id, _sanitize_tool_id(tool_id))
+        safe_tid = _sanitize_tool_id(tool_id)
+        rel = filename or reserve_tool_call_filename(od, tool_id, safe_tid)
+        rel = _safe_output_relpath(od, rel, tool_id=tool_id, safe_tid=safe_tid)
         path = od / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         # Decode params if string, or use directly if dict
         if isinstance(params, dict):
@@ -916,7 +966,17 @@ class AgentIO:
     ) -> Annotated[str, "Saved relative filename"]:
         od = _outdir()
         rel = filename or "result.json"
+        contained = _contained_output_relpath(od, rel)
+        if contained is None:
+            logger.warning(
+                "[io_tools] REFUSED save_ret filename=%r: it resolves outside the turn output "
+                "directory %s; persisted as 'result.json' instead",
+                rel, str(od),
+            )
+            contained = "result.json"
+        rel = contained
         path = od / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         obj = json.loads(data) if isinstance(data, str) else data
 

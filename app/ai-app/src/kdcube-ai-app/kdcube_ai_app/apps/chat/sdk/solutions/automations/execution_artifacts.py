@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import mimetypes
 import pathlib
 import re
@@ -10,6 +11,8 @@ from typing import Any, Dict, Iterable
 from urllib.parse import quote, unquote, urlparse
 
 from kdcube_ai_app.apps.chat.sdk.runtime.harness.workspace.references import qualify_conversation_ref
+
+logger = logging.getLogger(__name__)
 
 
 def execution_completed_at(execution: Dict[str, Any]) -> str:
@@ -373,9 +376,47 @@ async def execution_for_agent(execution: Dict[str, Any], *, sc: Dict[str, Any]) 
     return result
 
 
+class ArtifactOutsideStorageRoot(PermissionError):
+    """An execution artifact record named a local file outside the storage root."""
+
+
+def _contained_path(candidate: pathlib.Path, root: pathlib.Path) -> pathlib.Path | None:
+    """``candidate`` resolved, but only if it really lies inside ``root``.
+
+    Both sides are resolved first, so a symlink planted inside the storage root
+    cannot point out of it, and ``is_relative_to`` compares path COMPONENTS --
+    a sibling directory whose name merely starts with the root's name
+    (``/srv/storage-evil`` against ``/srv/storage``) is rejected, where a string
+    prefix test would accept it. Returns None when the path escapes.
+    """
+    try:
+        resolved = candidate.resolve()
+        root_resolved = root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if resolved == root_resolved or resolved.is_relative_to(root_resolved):
+        return resolved
+    return None
+
+
 async def _read_artifact_bytes(artifact: Dict[str, Any], *, storage_root: pathlib.Path) -> bytes:
     async def _is_file(path: pathlib.Path) -> bool:
         return await asyncio.to_thread(lambda: path.exists() and path.is_file())
+
+    refused: list[str] = []
+
+    def _accept(value: str, candidate: pathlib.Path, *, where: str) -> pathlib.Path | None:
+        """Containment gate: every local read in this function goes through it,
+        before the file is stat'd, so a refused path is not an existence oracle."""
+        safe = _contained_path(candidate, storage_root)
+        if safe is None:
+            refused.append(where)
+            logger.warning(
+                "[execution-artifact] REFUSED %s=%r: resolves outside the storage root %s",
+                where, value, str(storage_root),
+            )
+            return None
+        return safe
 
     for key in ("source_physical_path", "physical_path", "local_path"):
         value = str(artifact.get(key) or "").strip()
@@ -384,31 +425,49 @@ async def _read_artifact_bytes(artifact: Dict[str, Any], *, storage_root: pathli
         path = pathlib.Path(value)
         if not path.is_absolute():
             path = storage_root / value
+        path = _accept(value, path, where=key)
+        if path is None:
+            continue
         if await _is_file(path):
             return await asyncio.to_thread(path.read_bytes)
 
     value = str(artifact.get("stored_path") or "").strip()
     if value:
-        path = storage_root / value
-        if await _is_file(path):
+        path = _accept(value, storage_root / value, where="stored_path")
+        if path is not None and await _is_file(path):
             return await asyncio.to_thread(path.read_bytes)
 
     hosted = _artifact_hosted_uri(artifact)
     if hosted:
         parsed = urlparse(hosted)
         if parsed.scheme == "file":
-            path = pathlib.Path(unquote(parsed.path))
-            if await _is_file(path):
+            raw = unquote(parsed.path)
+            path = _accept(raw, pathlib.Path(raw), where="hosted_uri(file)")
+            if path is not None and await _is_file(path):
                 return await asyncio.to_thread(path.read_bytes)
+            # A file: uri outside the automation storage root may still be a
+            # conversation-store blob (local file backend). The store resolves it
+            # against its own base and rejects anything outside that base.
         try:
             from kdcube_ai_app.apps.chat.sdk.config import get_settings
             from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 
             return await ConversationStore(get_settings().STORAGE_PATH).get_blob_bytes(hosted)
         except Exception as exc:
+            if refused:
+                raise _refusal(refused) from exc
             raise FileNotFoundError(f"Cannot read hosted artifact {hosted!r}: {exc}") from exc
 
+    if refused:
+        raise _refusal(refused)
     raise FileNotFoundError("artifact has no readable source path or hosted uri")
+
+
+def _refusal(refused: list[str]) -> ArtifactOutsideStorageRoot:
+    return ArtifactOutsideStorageRoot(
+        "This artifact names a file outside the automation storage root "
+        f"({', '.join(sorted(set(refused)))}); it was not read."
+    )
 
 
 async def materialize_execution_artifact_for_current_turn(

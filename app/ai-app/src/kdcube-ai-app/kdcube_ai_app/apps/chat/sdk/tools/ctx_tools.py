@@ -17,6 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output
 
 from kdcube_ai_app.apps.chat.sdk.tools.citations import (
     CITATION_OPTIONAL_ATTRS,
+    normalize_citation_item,
     normalize_url,
     normalize_sources_any,
     sids_in_text,
@@ -320,6 +321,44 @@ def _reconcile_history_sources(
 
     return canonical, sid_maps
 
+def _as_source_collections(value: Any) -> list:
+    """Normalise ``source_collections`` to a list of collections.
+
+    The documented shape is ``[[sources1], [sources2], ...]``; a caller holding
+    one collection naturally passes ``[{...}, {...}]``, and each source dict was
+    then read as a mapping of sources and merged to nothing. A dict element that
+    ``normalize_citation_item`` accepts is a single source: consecutive ones are
+    grouped in place into one collection, preserving order (and so sid
+    precedence). Every other element is passed through unchanged.
+    """
+    if not isinstance(value, list):
+        return [value]
+    out: list = []
+    flat: list = []
+    for item in value:
+        if isinstance(item, dict) and normalize_citation_item(item) is not None:
+            flat.append(item)
+            continue
+        if flat:
+            out.append(flat)
+            flat = []
+        out.append(item)
+    if flat:
+        out.append(flat)
+    return out
+
+def _publish_next_sid(next_sid: int) -> None:
+    """Publish the turn's next citation id for everything downstream that mints one.
+
+    Non-fatal if the ContextVar is unavailable (no runtime bootstrap, etc.).
+    """
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import SOURCE_ID_CV
+        SOURCE_ID_CV.set({"next": next_sid})
+    except Exception:
+        # non-fatal: context var not available, etc.
+        pass
+
 def _compute_next_sid(rows) -> int:
     sids = []
     for r in rows or []:
@@ -377,8 +416,7 @@ class ContextTools:
         else:
             collections = source_collections
 
-        if not isinstance(collections, list):
-            collections = [collections]
+        collections = _as_source_collections(collections)
 
         # Normalize and flatten in left→right order
         all_sources: list[dict] = []
@@ -386,6 +424,10 @@ class ContextTools:
             all_sources.extend(normalize_sources_any(collection))
 
         if not all_sources:
+            # An empty pool's next citation id is 1 (as _compute_next_sid gives
+            # for an empty list); returning without publishing it left the
+            # previous merge's counter in SOURCE_ID_CV.
+            _publish_next_sid(1)
             return []
 
         # Add embedded local media references (e.g., <img src="...">) as sources.
@@ -505,13 +547,7 @@ class ContextTools:
         for row in by_url.values():
             row.pop("content_blocks", None)
         merged = sorted(by_url.values(), key=lambda x: x["sid"])
-        next_sid = _compute_next_sid(merged)
-        try:
-            from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import SOURCE_ID_CV
-            SOURCE_ID_CV.set({"next": next_sid})
-        except Exception:
-            # non-fatal: context var not available, etc.
-            pass
+        _publish_next_sid(_compute_next_sid(merged))
         return merged
 
     async def reconcile_citations(
