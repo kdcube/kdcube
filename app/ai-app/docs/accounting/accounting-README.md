@@ -52,6 +52,16 @@ These decorators wrap model/back‑end calls and emit an `AccountingEvent` with:
 - `success` and `error_message`
 - **context snapshot** taken from `AccountingContext`
 
+**LLM token buckets.** In a stored `usage`, `input_tokens` is the *uncached*
+prompt; `cache_read_tokens` and `cache_creation_tokens` hold the prompt tokens
+read from and written to the provider cache. Each bucket is priced at its own
+rate, so every prompt token is billed exactly once. Anthropic reports usage in
+this shape. OpenAI and LangChain `usage_metadata` count cached tokens inside
+the prompt total; the platform converts those reports with
+`split_inclusive_prompt_usage` (`infra/accounting/usage.py`) where it parses
+them. A custom `usage_extractor` that reads an OpenAI-style report should do
+the same.
+
 For semantic search, the economics feasibility check and the accounting event are
 separate steps. Searchable components should receive a model-service facade rather
 than separate guard/embed callbacks. The facade exposes `embed_texts(...)` for
@@ -262,13 +272,31 @@ only when **all** its dimension files exist, so a range aggregated before a
 new dimension was introduced regenerates cleanly, and re-starting after a
 stalled job (heartbeat-flagged in the record) never repeats completed days.
 
-**Reported-cost rule** (shared with turn settlement): when pricing a rollup
-line, a price-table entry wins; a line without one is priced at the
-provider-reported cost accumulated in `spent.cost_usd` (e.g. runtimes that
-self-report spend). One implementation for every spend surface:
-[`infra/accounting/pricing.py`](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/pricing.py)
-(`compute_cost_estimate`), the same rule as
-`RateCalculator.calculate_turn_costs`.
+**One pricing operation.** Every surface that turns usage into dollars —
+turn settlement (`RateCalculator.calculate_turn_costs`), per-agent settlement
+(`_calculate_agent_costs`), the opex endpoints, the spend-rollup writer and
+the user's own budget view — prices each rollup line through
+`price_rollup_line` in
+[`infra/accounting/pricing.py`](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/pricing.py),
+so what a user is charged and what a report shows are the same number. For
+one line:
+
+1. a price-table row wins. Rows are matched case-insensitively on provider
+   and model (or web-search tier) and honour each row's `aliases`. LLM lines
+   price input, output (thinking tokens at `thinking_output_tokens_1M` when
+   the row sets it), cache reads, and cache writes (split 5m/1h when the row
+   has `cache_pricing`, else the flat `cache_write_tokens_1M`);
+2. otherwise the provider-reported cost accumulated in `spent.cost_usd` is
+   the ground truth (runtimes that self-report spend), for llm, embedding and
+   web-search lines alike;
+3. otherwise the line is unpriced: it costs $0.00, carries
+   `pricing_source: "missing_price"` in the breakdown, and the processor logs
+   one `[pricing] no price-table row for ...` warning per service/provider/
+   model. A model in use without a price row is a gap in the table, and this
+   is how it shows up.
+
+Each breakdown item carries `pricing_source` (`price_table`,
+`reported_usage_cost` or `missing_price`).
 
 **Derived spend-rollup index** (scale path): the aggregation routines also
 mirror each day's per-dimension totals and per-model lines into per-project
@@ -290,6 +318,9 @@ Spend-report surfaces on top of this data:
   sorted/filtered page (`sort_by`, `order`, `offset`, `q`); `source` in the
   response says whether the page came from the DB index (`rollup`) or the
   file aggregates (`aggregates`).
+- `GET /api/opex/total` / `/conversation` — window or conversation usage
+  with its `cost_estimate`; `total.cost_usd` and each
+  `rollup[].spent.cost_usd` carry the same priced figures.
 - `GET /api/economics/me/cost-breakdown` — the authenticated user's actual
   per-model spend (aggregates-only; `coverage` flags un-aggregated windows).
 - Economics admin dashboard **Cost Report** tab

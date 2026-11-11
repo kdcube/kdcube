@@ -14,7 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.infra.accounting.usage import price_table
-from kdcube_ai_app.infra.accounting.pricing import compute_cost_estimate
+from kdcube_ai_app.infra.accounting.pricing import apply_priced_cost, compute_cost_estimate
 from kdcube_ai_app.apps.chat.ingress.opex.paging import dimension_rows as _dimension_rows, page_dimension_rows as _page_dimension_rows
 from kdcube_ai_app.apps.chat.ingress.opex import spend_rollup
 from kdcube_ai_app.storage.storage import create_storage_backend
@@ -278,6 +278,7 @@ async def get_total_usage(
         cost_estimate = None
         if result.get("rollup"):
             cost_estimate = _compute_cost_estimate(result["rollup"])
+        total, rollup = apply_priced_cost(result["total"], result["rollup"], cost_estimate)
 
         # MOCK
         # result = {
@@ -291,8 +292,8 @@ async def get_total_usage(
 
         return {
             "status": "ok",
-            "total": result["total"],
-            "rollup": result["rollup"],
+            "total": total,
+            "rollup": rollup,
             "user_count": result["user_count"],
             "event_count": result.get("event_count", 0),
             "cost_estimate": cost_estimate
@@ -521,6 +522,7 @@ async def get_conversation_usage(
         cost_estimate = None
         if result.get("rollup"):
             cost_estimate = _compute_cost_estimate(result["rollup"])
+        total, rollup = apply_priced_cost(result["total"], result["rollup"], cost_estimate)
         # END OF TODO: get back when we have scheduled aggregates!
 
         # MOCK
@@ -535,8 +537,8 @@ async def get_conversation_usage(
 
         return {
             "status": "ok",
-            "total": result["total"],
-            "rollup": result["rollup"],
+            "total": total,
+            "rollup": rollup,
             "turns": result.get("turns", {}),
             "event_count": result.get("event_count", 0),
             "cost_estimate": cost_estimate

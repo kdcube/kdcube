@@ -29,6 +29,10 @@ anthropic = "anthropic"
 # `price_tables:` section overlays this per-section at runtime; see price_table().
 DEFAULT_PRICE_TABLE = {
         "llm": [
+            # Anthropic cache convention, shared by every anthropic row:
+            # 5-minute write = 1.25x input, 1-hour write = 2x input,
+            # read = 0.1x input. The flat cache_write_tokens_1M (used when a
+            # usage carries no TTL split) follows the 5-minute rate.
             {
                 "model": sonnet_46,
                 "provider": "anthropic",
@@ -186,15 +190,15 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 15.00,
                 "cache_pricing": {
                     "5m": {
-                        "write_tokens_1M": 3.00,
-                        "read_tokens_1M": 0.30,
-                    },
-                    "1h": {
                         "write_tokens_1M": 3.75,
                         "read_tokens_1M": 0.30,
                     },
+                    "1h": {
+                        "write_tokens_1M": 6.00,
+                        "read_tokens_1M": 0.30,
+                    },
                 },
-                "cache_write_tokens_1M": 3.00,
+                "cache_write_tokens_1M": 3.75,
                 "cache_read_tokens_1M": 0.30,
 
                 "vision": {
@@ -229,7 +233,7 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 5,
                 "cache_pricing": {
                     "5m": {
-                        "write_tokens_1M": 1,
+                        "write_tokens_1M": 1.25,
                         "read_tokens_1M": 0.1,
                     },
                     "1h": {
@@ -237,7 +241,7 @@ DEFAULT_PRICE_TABLE = {
                         "read_tokens_1M": 0.1,
                     },
                 },
-                "cache_write_tokens_1M": 2,
+                "cache_write_tokens_1M": 1.25,
                 "cache_read_tokens_1M": 0.1,
             },
             {
@@ -247,15 +251,15 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 4.00,
                 "cache_pricing": {
                     "5m": {
-                        "write_tokens_1M": 0.80,
-                        "read_tokens_1M": 0.08,
-                    },
-                    "1h": {
                         "write_tokens_1M": 1.00,
                         "read_tokens_1M": 0.08,
                     },
+                    "1h": {
+                        "write_tokens_1M": 1.60,
+                        "read_tokens_1M": 0.08,
+                    },
                 },
-                "cache_write_tokens_1M": 0.80,
+                "cache_write_tokens_1M": 1.00,
                 "cache_read_tokens_1M": 0.08,
             },
             {
@@ -265,15 +269,15 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 1.25,
                 "cache_pricing": {
                     "5m": {
-                        "write_tokens_1M": 0.25,
-                        "read_tokens_1M": 0.03,
-                    },
-                    "1h": {
                         "write_tokens_1M": 0.30,
                         "read_tokens_1M": 0.03,
                     },
+                    "1h": {
+                        "write_tokens_1M": 0.50,
+                        "read_tokens_1M": 0.03,
+                    },
                 },
-                "cache_write_tokens_1M": 0.25,
+                "cache_write_tokens_1M": 0.30,
                 "cache_read_tokens_1M": 0.03,
             },
             {
@@ -321,6 +325,34 @@ DEFAULT_PRICE_TABLE = {
                 "output_tokens_1M": 4.40,
                 "cache_write_tokens_1M": 0.00,
                 "cache_read_tokens_1M": 0.55,
+            },
+            {
+                # OpenAI standard tier: input $0.20, cached input $0.02,
+                # output $1.25 per 1M. OpenAI bills no cache write.
+                # `gpt-5-nano` is a different model with different rates and is
+                # deliberately not an alias.
+                "model": "gpt-5.4-nano",
+                "provider": "openai",
+                "aliases": [
+                    "gpt-5-4-nano",
+                ],
+                "input_tokens_1M": 0.20,
+                "output_tokens_1M": 1.25,
+                "cache_write_tokens_1M": 0.00,
+                "cache_read_tokens_1M": 0.02,
+            },
+            {
+                # Speech-to-text. The response reports token usage, so a
+                # transcription books as an llm event priced per token: audio
+                # input $1.25, output $5.00 per 1M (about $0.003 per minute).
+                # No cached-input or cache-write billing. `whisper-1` reports a
+                # duration rather than tokens and cannot be priced by this table.
+                "model": "gpt-4o-mini-transcribe",
+                "provider": "openai",
+                "input_tokens_1M": 1.25,
+                "output_tokens_1M": 5.00,
+                "cache_write_tokens_1M": 0.00,
+                "cache_read_tokens_1M": 0.00,
             },
             {
                 "model": "gemini-2.5-pro",
@@ -646,6 +678,13 @@ class ClientConfigHint:
 
 @dataclass
 class ServiceUsage:
+    """Usage of one tracked call.
+
+    `input_tokens` is the UNCACHED prompt: prompt tokens read from cache go in
+    `cache_read_tokens` and tokens written to cache in `cache_creation_tokens`,
+    and each bucket is priced at its own rate. A provider report that counts
+    cached tokens inside its prompt total is converted with
+    `split_inclusive_prompt_usage` before it lands here."""
     input_tokens: int = 0
     output_tokens: int = 0
     thinking_tokens: int = 0
@@ -775,6 +814,64 @@ def _norm_usage_dict(u: Dict[str, Any], debug: bool = False) -> Dict[str, int]:
             logger.info("=== USAGE DEBUG === %s", out)
     return out
 
+def split_inclusive_prompt_usage(u: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Convert a usage report whose prompt count INCLUDES cached tokens into the
+    accounting convention, where `input_tokens` is the UNCACHED prompt only.
+
+    Accounting convention (ServiceUsage and every price consumer):
+      input_tokens        uncached prompt tokens, billed at the input rate
+      cache_read_tokens   prompt tokens served from cache, cache-read rate
+      cache_creation_tokens  prompt tokens written to cache, cache-write rate
+    Anthropic's native usage already follows it. These shapes do not, and
+    count cached tokens inside the prompt total:
+      LangChain UsageMetadata   input_tokens + input_token_details.{cache_read, cache_creation}
+      OpenAI Chat Completions   prompt_tokens + prompt_tokens_details.cached_tokens
+      OpenAI Responses          input_tokens + input_tokens_details.cached_tokens
+    Stored as-is, every cached token is billed twice: at the input rate inside
+    `input_tokens` and again at the cache rate.
+
+    Returns a copy of `u` with `input_tokens`/`prompt_tokens` set to the uncached
+    count and `cache_read_input_tokens` / `cache_creation_input_tokens` set.
+    A report whose total is smaller than its cached part is not an inclusive
+    total; it is returned with the cache fields set and the prompt untouched,
+    never clamped."""
+    u = dict(u or {})
+    details = (
+        u.get("input_token_details")
+        or u.get("prompt_tokens_details")
+        or u.get("input_tokens_details")
+        or {}
+    )
+    if not isinstance(details, dict):
+        details = {}
+    try:
+        cache_read = int(details.get("cache_read") or details.get("cached_tokens") or 0)
+        cache_creation = int(details.get("cache_creation") or 0)
+        total = int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
+    except (TypeError, ValueError):
+        return u
+    if cache_read <= 0 and cache_creation <= 0:
+        return u
+    u["cache_read_input_tokens"] = cache_read
+    if cache_creation:
+        u["cache_creation_input_tokens"] = cache_creation
+    cached = cache_read + cache_creation
+    if total < cached:
+        logger.warning(
+            "[accounting] prompt total %s is smaller than its cached part %s; "
+            "prompt count left as reported", total, cached,
+        )
+        return u
+    uncached = total - cached
+    if "input_tokens" in u:
+        u["input_tokens"] = uncached
+    if "prompt_tokens" in u:
+        u["prompt_tokens"] = uncached
+    if "input_tokens" not in u and "prompt_tokens" not in u:
+        u["input_tokens"] = uncached
+    return u
+
+
 def _approx_tokens_by_chars(text: str) -> Dict[str, int]:
     toks = max(1, len(text or "") // 4)
     return {"prompt_tokens": toks, "completion_tokens": 0, "total_tokens": toks}
@@ -832,6 +929,9 @@ def _structured_usage_extractor(result, *_a, **_kw) -> ServiceUsage:
             input_tokens=u.get("prompt_tokens", 0),
             output_tokens=u.get("completion_tokens", 0),
             thinking_tokens=u.get("thinking_tokens", 0),
+            cache_creation_tokens=int(u.get("cache_creation_input_tokens", 0) or 0),
+            cache_read_tokens=int(u.get("cache_read_input_tokens", 0) or 0),
+            cache_creation=u.get("cache_creation") or None,
             total_tokens=u.get("total_tokens", (u.get("prompt_tokens", 0) + u.get("completion_tokens", 0))),
             requests=1,
         )
@@ -951,27 +1051,29 @@ _BUCKETS = {
     "1d": 86400,
 }
 
+def _norm_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _row_matches(row: Dict[str, Any], provider: str, name_key: str, name: str) -> bool:
+    """Case-insensitive provider match plus name match against the row's
+    `name_key` value or any of its `aliases`. The single matching rule for
+    every price lookup, so settlement and reporting resolve the same row."""
+    if _norm_key(row.get("provider")) != _norm_key(provider):
+        return False
+    name_norm = _norm_key(name)
+    if _norm_key(row.get(name_key)) == name_norm:
+        return True
+    return name_norm in {_norm_key(a) for a in (row.get("aliases") or []) if _norm_key(a)}
+
+
 def _find_llm_price(provider: str,
                     model: str,
                     pricing_table = None) -> Optional[Dict[str, Any]]:
     if not pricing_table:
         pricing_table = price_table()
-    llm_pricelist = pricing_table.get("llm") or {}
-    provider_norm = str(provider or "").strip().lower()
-    model_norm = str(model or "").strip().lower()
-    for p in llm_pricelist:
-        aliases = [
-            str(alias).strip().lower()
-            for alias in list(p.get("aliases") or [])
-            if str(alias).strip()
-        ]
-        if (
-            str(p.get("provider") or "").strip().lower() == provider_norm
-            and (
-                str(p.get("model") or "").strip().lower() == model_norm
-                or model_norm in aliases
-            )
-        ):
+    for p in pricing_table.get("llm") or []:
+        if isinstance(p, dict) and _row_matches(p, provider, "model", model):
             return p
     return None
 
@@ -980,9 +1082,8 @@ def _find_emb_price(provider: str,
                     pricing_table=None) -> Optional[Dict[str, Any]]:
     if not pricing_table:
         pricing_table = price_table()
-    emb_pricelist = pricing_table.get("embedding") or {}
-    for p in emb_pricelist:
-        if p.get("provider") == provider and p.get("model") == model:
+    for p in pricing_table.get("embedding") or []:
+        if isinstance(p, dict) and _row_matches(p, provider, "model", model):
             return p
     return None
 
@@ -991,10 +1092,8 @@ def _find_web_search_price(provider: str,
                            pricing_table=None) -> Optional[Dict[str, Any]]:
     if not pricing_table:
         pricing_table = price_table()
-    web_search_pricelist = pricing_table.get("web_search") or {}
-
-    for p in web_search_pricelist:
-        if p.get("provider") == provider and p.get("tier") == tier:
+    for p in pricing_table.get("web_search") or []:
+        if isinstance(p, dict) and _row_matches(p, provider, "tier", tier):
             return p
     return None
 
