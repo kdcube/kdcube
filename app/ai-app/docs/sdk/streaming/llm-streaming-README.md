@@ -189,7 +189,7 @@ Example role map:
     "model": "gpt-4.1-mini"
   },
   "report_writer": {
-    "provider": "gemini",
+    "provider": "google",
     "model": "gemini-2.5-pro"
   }
 }
@@ -205,9 +205,12 @@ role
   -> provider client
 ```
 
-If a role is missing, `Config.ensure_role(...)` fills it from the default role
-spec. `format_fixer` is special-cased to prefer the configured format-fixer
-model.
+If a role is missing, `Config.ensure_role(...)` fills it from assembly
+`models.role_models`, else from `models.default_llm_model_id`. The JSON format
+fixer is the ordinary role `format_fixer` and resolves the same way; the scope
+precedence is documented under
+[Platform model roles](../../configuration/assembly-descriptor-README.md#platform-model-roles).
+Provider ids are canonical: Gemini models use provider `google`.
 
 ## Message Input Contract
 

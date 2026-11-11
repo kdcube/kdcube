@@ -39,6 +39,10 @@ from kdcube_ai_app.apps.chat.sdk.runtime.resident_resources.descriptor import (
     resource_family_catalog_from_bundle_props,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import AgentSkillConfig
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_reflection import (
+    declared_tool_description,
+    reflected_tool_callables,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
     _NAMED_SERVICE_OPERATION_TO_TOOL,
     _agent_tool_connections,
@@ -884,18 +888,14 @@ def _module_tool_docs(module_name: str) -> dict[str, str]:
             reg = {}
     docs: dict[str, str] = {}
     names = list(reg.keys()) if isinstance(reg, Mapping) and reg else [
-        name for name in dir(owner) if not name.startswith("_")
+        name for name, _fn in reflected_tool_callables(mod)
     ]
     for fn_name in names:
         meta = reg.get(fn_name) if isinstance(reg, Mapping) else None
         fn = (meta.get("callable") if isinstance(meta, Mapping) else None) or getattr(owner, fn_name, None)
         desc = _norm(meta.get("description")) if isinstance(meta, Mapping) else ""
         if not desc and fn is not None:
-            desc = (
-                getattr(fn, "__kernel_function_description__", "")
-                or getattr(fn, "description", "")
-                or (getattr(fn, "__doc__", "") or "")
-            )
+            desc = declared_tool_description(fn)
         desc = _first_para(str(desc or ""))
         if callable(fn) or (isinstance(meta, Mapping) and meta):
             docs[fn_name] = desc
@@ -915,8 +915,7 @@ def _module_tool_names(module_name: str) -> list[str] | None:
                 return [str(k) for k in reg.keys()]
         except Exception:
             return None
-    owner = getattr(mod, "tools", mod)
-    names = [name for name in dir(owner) if not name.startswith("_") and callable(getattr(owner, name, None))]
+    names = [name for name, _fn in reflected_tool_callables(mod)]
     return names or None
 
 

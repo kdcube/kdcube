@@ -22,6 +22,11 @@ from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AI
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS, model_caps, model_request_params
+from kdcube_ai_app.infra.service_hub.model_roles import (
+    assembly_role_models,
+    canonical_provider,
+    normalize_role_spec,
+)
 from kdcube_ai_app.infra.accounting import track_embedding, track_llm
 from kdcube_ai_app.infra.accounting.usage import (
     _structured_usage_extractor,
@@ -599,6 +604,36 @@ async def resolve_config_request_secrets(
         return config_request
     return config_request.model_copy(update=updates)
 
+_DEFAULT_LLM_FALLBACK_ID = "o3-mini"
+
+
+def resolve_default_llm_model(model_id: Optional[str], provider: Optional[str] = None) -> Dict[str, Any]:
+    """Resolve `models.default_llm_model_id` to a registry-shaped model entry.
+
+    A `MODEL_CONFIGS` key resolves to its entry. An id outside the registry
+    resolves to itself when assembly `models.default_llm_provider` names its
+    provider (the same pair the direct agent host uses). Otherwise the id
+    falls back to `o3-mini`; that moves every role without an explicit spec
+    to another model and possibly another provider, so it is logged as a
+    warning naming the configured id.
+    """
+    entry = MODEL_CONFIGS.get(model_id) if model_id else None
+    if entry is not None:
+        return entry
+    explicit_provider = canonical_provider(provider)
+    if model_id and explicit_provider:
+        return {"model_name": model_id, "provider": explicit_provider}
+    logging.getLogger(__name__).warning(
+        "models.default_llm_model_id %r is not a MODEL_CONFIGS key and "
+        "models.default_llm_provider is not set; roles without an explicit role "
+        "model fall back to %r. Known ids: %s",
+        model_id,
+        _DEFAULT_LLM_FALLBACK_ID,
+        ", ".join(sorted(MODEL_CONFIGS)),
+    )
+    return MODEL_CONFIGS[_DEFAULT_LLM_FALLBACK_ID]
+
+
 class Config:
     """
     Central config: keys, embedding, and ROLE → {provider, model} mapping.
@@ -634,11 +669,15 @@ class Config:
         # logging
         self.log_level = get_settings().PLATFORM.LOG.LOG_LEVEL
 
-        # format fix (Claude by default)
-        self.format_fixer_model = "claude-3-haiku-20240307"
+        # format fix: the `format_fixer` role, resolved like every other role
         self.format_fix_enabled = True
 
-        self.default_llm_model = MODEL_CONFIGS.get(default_llm_model) or  MODEL_CONFIGS.get("o3-mini")
+        self.default_llm_model = resolve_default_llm_model(
+            default_llm_model,
+            get_plain("a:models.default_llm_provider", None),
+        )
+        # assembly `models.role_models`: the lowest-precedence role scope
+        self.assembly_role_models: Dict[str, Dict[str, Any]] = assembly_role_models()
         # role map (filled later; defaults below)
         self.role_models: Dict[str, Dict[str, str]] = role_models or self.default_role_map()
 
@@ -730,27 +769,50 @@ class Config:
         self.kb_search_url = endpoint
 
     # ----- role map -----
+    BASE_ROLES = ("classifier", "query_writer", "reranker", "answer_generator", "format_fixer")
+
     def default_role_map(self) -> Dict[str, Dict[str, str]]:
-        """Defaults for our base roles; new roles will still get default provider/model lazily."""
-        BASE_ROLES = ("classifier", "query_writer", "reranker", "answer_generator", "format_fixer")
-        base = {r: {"provider": self.default_llm_model["provider"], "model": self.default_llm_model["model_name"]}
-                for r in BASE_ROLES}
-        # prefer Anthropic for format fixer
-        base["format_fixer"] = {"provider": "anthropic", "model": self.format_fixer_model}
+        """Defaults for the base roles plus every assembly-declared role.
+
+        A base role runs on the assembly `models.role_models` spec for that
+        role when one exists, else on `models.default_llm_model_id`.
+        """
+        base = {r: self.get_default_role_spec(r) for r in self.BASE_ROLES}
+        for role in (getattr(self, "assembly_role_models", None) or {}):
+            base[role] = self.get_default_role_spec(role)
         return base
 
-    def get_default_role_spec(self) -> Dict[str, str]:
-        """Default spec for any role not explicitly configured."""
-        return {"provider": self.default_llm_model["provider"], "model": self.default_llm_model["model_name"]}
+    def get_default_role_spec(self, role: Optional[str] = None) -> Dict[str, str]:
+        """Default spec for a role not configured at bundle scope or above."""
+        default = {"provider": self.default_llm_model["provider"], "model": self.default_llm_model["model_name"]}
+        assembly_spec = (getattr(self, "assembly_role_models", None) or {}).get(role) if role else None
+        if not assembly_spec:
+            return default
+        spec = dict(assembly_spec)
+        spec.setdefault("provider", default["provider"])
+        spec.setdefault("model", default["model"])
+        return spec
 
     def ensure_role(self, role: str) -> Dict[str, str]:
-        """Make sure a role has a mapping; if missing, fill with defaults (special-case format_fixer)."""
+        """Make sure a role has a mapping; if missing, fill it from the defaults."""
         if role not in self.role_models:
-            if role == "format_fixer":
-                self.role_models[role] = {"provider": "anthropic", "model": self.format_fixer_model}
-            else:
-                self.role_models[role] = self.get_default_role_spec()
+            self.role_models[role] = self.get_default_role_spec(role)
         return self.role_models[role]
+
+    @property
+    def format_fixer_model(self) -> str:
+        """Model of the `format_fixer` role at config scope (back-compat accessor)."""
+        return str(self.ensure_role("format_fixer").get("model") or "")
+
+    @format_fixer_model.setter
+    def format_fixer_model(self, model: str) -> None:
+        role_models = getattr(self, "role_models", None)
+        if not isinstance(role_models, dict):
+            role_models = {}
+            self.role_models = role_models
+        current = role_models.get("format_fixer") or {}
+        provider = current.get("provider") or self.default_llm_model["provider"]
+        role_models["format_fixer"] = {"provider": provider, "model": model}
 
     def set_role_models(self, role_models: Dict[str, Dict[str, str]] | None):
         """
@@ -766,9 +828,11 @@ class Config:
         merged.update(defaults)
 
         # merge/insert provided roles (including brand-new ones)
-        for r, spec in provided.items():
-            prov = spec.get("provider") or merged.get(r, {}).get("provider") or self.default_llm_model["provider"]
-            model = spec.get("model")    or merged.get(r, {}).get("model")    or self.default_llm_model["model_name"]
+        for r, raw_spec in provided.items():
+            spec = normalize_role_spec(raw_spec) or {}
+            fallback = merged.get(r) or self.get_default_role_spec(r)
+            prov = spec.get("provider") or fallback.get("provider") or self.default_llm_model["provider"]
+            model = spec.get("model")    or fallback.get("model")    or self.default_llm_model["model_name"]
             merged[r] = {"provider": prov, "model": model}
 
         self.role_models = merged
@@ -919,9 +983,7 @@ class ModelRouter:
 
     def _effective_role_spec(self, role: str) -> Dict[str, Any]:
         base = dict(self.config.ensure_role(role) or {})
-        override = self._request_role_models().get(role)
-        if isinstance(override, str):
-            override = {"model": override}
+        override = normalize_role_spec(self._request_role_models().get(role))
         if not isinstance(override, dict):
             return base
         provider = str(override.get("provider") or base.get("provider") or self.config.default_llm_model["provider"])
@@ -1005,7 +1067,7 @@ class ModelRouter:
         if not spec:
             return None
 
-        provider, model = spec["provider"], spec["model"]
+        provider, model = canonical_provider(spec["provider"]), spec["model"]
         custom_num_ctx = self._custom_num_ctx(model, spec.get("num_ctx")) if provider == "custom" else None
         key = (provider, model, role, round(temperature, 3), custom_num_ctx)
 
@@ -1016,7 +1078,7 @@ class ModelRouter:
             client = self._mk_openai(model, temperature)
         elif provider == "anthropic":
             client = self._mk_anthropic()
-        elif provider in ("google", "gemini"):           # <--- NEW
+        elif provider == "google":
             client = self._mk_gemini(model, temperature)
         elif provider == "custom":
             if not self.config.custom_model_endpoint:
@@ -1099,17 +1161,21 @@ def ms_freeform_meta_extractor(model_service, _client=None, messages=None, *a, *
 # Format fixer
 # =========================
 class FormatFixerService:
-    """Fixes malformed JSON responses using Claude"""
-    def __init__(self, config: Config):
+    """Fixes malformed JSON responses with the model of the `format_fixer` role.
+
+    The role is resolved like every other role (assembly `models.role_models`,
+    bundle `role_models`, per-agent ReAct `role_models`, request-scoped
+    `bundle_call_context.role_models`, then `models.default_llm_model_id`), and
+    the call goes through the model service's own client and request path, so
+    provider choice, capability-aware request parameters and accounting are
+    the same as for any other role.
+    """
+    ROLE = "format_fixer"
+
+    def __init__(self, config: Config, service: "ModelServiceBase"):
         self.config = config
+        self.service = service
         self.logger = AgentLogger("FormatFixer", config.log_level)
-        try:
-            import anthropic
-            self.claude_client = anthropic.Anthropic(api_key=config.claude_api_key)
-            # self.logger.log_step("claude_client_initialized", {"model": config.format_fixer_model})
-        except ImportError:
-            self.claude_client = None
-            self.logger.log_error(ImportError("anthropic package not available"), "Claude client initialization")
 
     async def fix_format(
             self,
@@ -1129,6 +1195,7 @@ class FormatFixerService:
         """
         # Extract text from system prompt (handles both types)
         system_prompt_text = _extract_system_prompt_text(system_prompt)
+        target = self.service.router.describe(self.ROLE)
 
         self.logger.start_operation(
             "format_fixing",
@@ -1136,15 +1203,9 @@ class FormatFixerService:
             expected_format=expected_format,
             input_data_length=0,
             system_prompt_length=len(system_prompt_text),
-            model=self.config.format_fixer_model,
-            provider="anthropic"
+            model=target.model_name,
+            provider=target.provider,
         )
-
-        if not self.claude_client:
-            msg = "Claude client not available"
-            self.logger.log_error(Exception(msg), "Client unavailable")
-            self.logger.finish_operation(False, msg)
-            return {"success": False, "error": msg, "raw": raw_output}
 
         try:
             fix_prompt = f"""You are a JSON format fixer. You receive malformed JSON output and need to fix it to match the expected format.
@@ -1157,21 +1218,27 @@ Malformed output: {raw_output}
 Please fix the JSON to match the expected format. Return only the fixed JSON, no additional text."""
 
             self.logger.log_step("sending_fix_request", {
-                "model": self.config.format_fixer_model,
+                "model": target.model_name,
+                "provider": target.provider,
                 "fix_prompt_length": len(fix_prompt),
                 "raw_output": raw_output
             })
 
-            response = self.claude_client.messages.create(
-                model=self.config.format_fixer_model,
+            client = self.service.router.get_client(self.ROLE, 0.0)
+            result = await self.service.call_model_text(
+                client,
+                [HumanMessage(content=fix_prompt)],
+                temperature=0.0,
                 max_tokens=1000,
-                messages=[{"role": "user", "content": fix_prompt}]
+                client_cfg=target,
+                role=self.ROLE,
             )
-
-            fixed_content = response.content[0].text
+            fixed_content = str((result or {}).get("text") or "")
+            if (result or {}).get("error"):
+                raise RuntimeError(str(result["error"]))
 
             try:
-                parsed = json.loads(fixed_content)
+                parsed = json.loads(_strip_json_fence(fixed_content))
                 self.logger.log_step("fix_validation_successful", {"parsed_type": type(parsed).__name__})
                 self.logger.finish_operation(True, "Format fixing successful")
                 return {"success": True, "data": parsed, "raw": fixed_content}
@@ -1184,6 +1251,18 @@ Please fix the JSON to match the expected format. Return only the fixed JSON, no
             self.logger.log_error(e, "Format fixing failed")
             self.logger.finish_operation(False, f"Format fixing failed: {str(e)}")
             return {"success": False, "error": str(e), "raw": raw_output}
+
+
+def _strip_json_fence(text: str) -> str:
+    """Drop one surrounding markdown code fence, which chat models often add."""
+    stripped = (text or "").strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        body = stripped[3:-3]
+        newline = body.find("\n")
+        if newline != -1 and not body[:newline].strip().startswith(("{", "[")):
+            body = body[newline + 1:]
+        return body.strip()
+    return stripped
 
 from kdcube_ai_app.apps.chat.reg import EMBEDDERS
 async def embedding_model() -> ModelRecord:
@@ -1265,7 +1344,7 @@ class ModelServiceBase:
     @property
     def format_fixer(self):
         if self._format_fixer is None:
-            self._format_fixer = FormatFixerService(self.config)
+            self._format_fixer = FormatFixerService(self.config, self)
         return self._format_fixer
 
     @property
@@ -1433,10 +1512,11 @@ class ModelServiceBase:
                     if fix.get("success"):
                         try:
                             validated = response_format.model_validate(fix["data"])
+                            fixer_cfg = self.router.describe(FormatFixerService.ROLE)
                             self.logger.finish_operation(True,
                                                          "Parsed after FormatFixer",
-                                                         model=self.format_fixer.config.format_fixer_model,
-                                                         provider="anthropic",)
+                                                         model=fixer_cfg.model_name,
+                                                         provider=fixer_cfg.provider,)
                             return {
                                 "success": True,
                                 "data": validated.model_dump(),
@@ -1583,6 +1663,7 @@ class ModelServiceBase:
         except Exception as e:
             self.logger.log_error(e, "freeform model call failed")
             return {"text": f"Model call failed: {e}",
+                    "error": str(e),
                     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                     "provider_message_id": None, "model_name": model_name}
 
