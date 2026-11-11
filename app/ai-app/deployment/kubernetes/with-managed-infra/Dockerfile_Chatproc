@@ -49,6 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-noto-cjk \
         fonts-noto-color-emoji \
         libmagic1 \
+        libatomic1 \
         file \
         gosu \
     && rm -rf /var/lib/apt/lists/* \

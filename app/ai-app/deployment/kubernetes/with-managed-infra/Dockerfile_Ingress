@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     libmagic1 \
+    libatomic1 \
     file \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean

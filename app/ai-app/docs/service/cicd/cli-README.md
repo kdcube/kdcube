@@ -660,6 +660,14 @@ a selected-source edit repeats the browser download. Every pip layer shares a
 BuildKit cache mount, so a layer that does re-run reinstalls from cached
 wheels instead of the network.
 
+Every image that runs Playwright installs `libatomic1` in its first OS package
+layer. Since Playwright 1.65 the driver bundles Node.js 26, whose Linux binary
+needs `libatomic.so.1`. The driver must start before `playwright install
+--with-deps` can install anything, and `--with-deps` covers only the browser's
+libraries, so a `python:3.12-slim` image without it fails with exit 127.
+`deployment/docker/tests/test_playwright_driver_prerequisites.py` finds every
+Dockerfile that runs Playwright and checks this.
+
 ##### Pinned Project Board source family
 
 Project Board deployments use two dedicated, clean source trees checked out at
