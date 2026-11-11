@@ -2,6 +2,8 @@ import re
 from typing import Optional
 from playwright.sync_api import sync_playwright, Browser, Page
 
+from kdcube_ai_app.infra.rendering.browser_settings import browser_settings, no_local_browser_error
+
 
 class ServerSideTSXTranspiler:
     """
@@ -20,7 +22,29 @@ class ServerSideTSXTranspiler:
     def start(self):
         """Initialize browser with Babel"""
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=True)
+
+        # Same remote-browser setting as SharedBrowserService
+        # (infra/rendering/shared_browser.py): a deployment can run Chromium
+        # in a separate Playwright server instead of inside this process.
+        settings = browser_settings()
+        ws_endpoint = settings.ws_endpoint
+        if ws_endpoint:
+            try:
+                self.browser = self.playwright.chromium.connect(ws_endpoint)
+            except Exception as e:
+                print(
+                    f"⚠️ Failed to connect to remote Playwright server at "
+                    f"{ws_endpoint} ({e}); falling back to a local launch"
+                )
+                self.browser = None
+
+        if self.browser is None:
+            if not settings.local_chromium:
+                self.playwright.stop()
+                self.playwright = None
+                raise no_local_browser_error(ws_endpoint)
+            self.browser = self.playwright.chromium.launch(headless=True)
+
         self.page = self.browser.new_page()
 
         # Load Babel Standalone

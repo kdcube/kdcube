@@ -8,9 +8,12 @@ from typing import Optional
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 
 import logging
+
+from kdcube_ai_app.infra.rendering.browser_settings import browser_settings, no_local_browser_error
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +103,8 @@ class SharedBrowserService:
     _playwright = None
     _browser = None
     _ref_count: int = 0  # Track how many services are using this
+    _last_activity_at = 0.0  # time.monotonic() of the last get_browser() call
+    _idle_task = None  # watchdog for platform.rendering.browser.idle_disconnect_s
 
     async def __aenter__(self):
         await self.start()
@@ -109,7 +114,12 @@ class SharedBrowserService:
         await self.close()
 
     async def start(self):
-        """Launch Playwright + Chromium once."""
+        """Launch Playwright + Chromium once, or connect to a remote Playwright server.
+
+        ``platform.rendering.browser.ws_endpoint`` selects a remote Playwright
+        server; a failed connect falls back to the local launch. A browser
+        whose connection has dropped is replaced on the next call.
+        """
         if not os.getenv("PLAYWRIGHT_BROWSERS_PATH") and Path("/opt/ms-playwright").exists():
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/ms-playwright"
 
@@ -124,6 +134,38 @@ class SharedBrowserService:
                 self._playwright = await async_playwright().start()
             except Exception as e:
                 raise RuntimeError(f"Failed to start Playwright: {e}") from e
+
+        if self._browser is not None and not self._browser.is_connected():
+            # The browser process or remote server went away (a renderer that
+            # stopped while idle, a crash). Drop the stale handle so the block
+            # below reconnects or relaunches.
+            logger.warning(
+                "SharedBrowserService: browser is no longer connected; reconnecting"
+            )
+            self._browser = None
+
+        settings = browser_settings()
+        if self._browser is None:
+            ws_endpoint = settings.ws_endpoint
+            if ws_endpoint:
+                try:
+                    self._browser = await self._playwright.chromium.connect(ws_endpoint)
+                    logger.info(
+                        "SharedBrowserService: connected to remote Playwright server at %s",
+                        ws_endpoint,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "SharedBrowserService: failed to connect to remote Playwright "
+                        "server at %s (%s)%s",
+                        ws_endpoint, e,
+                        "; falling back to a local launch" if settings.local_chromium else "",
+                    )
+                    self._browser = None
+
+        if self._browser is None and not settings.local_chromium:
+            # This deployment leaves Chromium out: never launch or download it.
+            raise no_local_browser_error(settings.ws_endpoint)
 
         if self._browser is None:
             launch_args = []
@@ -183,13 +225,57 @@ class SharedBrowserService:
                     ) from e
 
     async def get_browser(self):
-        """Get the browser instance, starting if needed."""
+        """Get the browser instance, starting (or reconnecting) if needed."""
         await self.start()
         self._ref_count += 1
+        self._last_activity_at = time.monotonic()
+        self._arm_idle_watchdog()
         return self._browser
+
+    def _arm_idle_watchdog(self):
+        """(Re-)start the idle-disconnect watchdog if configured and not already running."""
+        idle_s = browser_settings().idle_disconnect_s
+        if idle_s is None:
+            return
+        if self._idle_task is not None and not self._idle_task.done():
+            return
+        self._idle_task = asyncio.ensure_future(self._idle_watchdog(idle_s))
+
+    async def _idle_watchdog(self, idle_s: float):
+        """Close the browser after `idle_s` seconds with no get_browser() call
+        and no open browser context.
+
+        Lets an on-demand remote renderer stop while nothing is rendering, and
+        frees a local Chromium's memory. The next get_browser() call
+        reconnects (or relaunches) via start().
+        """
+        try:
+            while True:
+                await asyncio.sleep(idle_s)
+                if self._browser is None:
+                    return
+                idle_for = time.monotonic() - self._last_activity_at
+                if idle_for < idle_s:
+                    continue
+                if list(getattr(self._browser, "contexts", None) or []):
+                    # A render or browser session is still open on it.
+                    continue
+                logger.info(
+                    "SharedBrowserService: idle for %.0fs (limit %.0fs); "
+                    "closing browser connection",
+                    idle_for, idle_s,
+                )
+                await self.close()
+                return
+        except asyncio.CancelledError:
+            pass
 
     async def close(self):
         """Close the browser and Playwright driver."""
+        idle_task, self._idle_task = self._idle_task, None
+        if idle_task is not None and idle_task is not asyncio.current_task():
+            idle_task.cancel()
+
         if self._browser is not None:
             try:
                 await self._browser.close()

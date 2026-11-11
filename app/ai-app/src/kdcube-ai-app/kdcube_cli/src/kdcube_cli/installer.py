@@ -2741,6 +2741,25 @@ def save_env_file(env_file: EnvFile) -> None:
     text = "\n".join(env_file.lines).rstrip() + "\n"
     env_file.path.write_text(text)
 
+INSTALL_CHROMIUM_ENV_KEY = "KDCUBE_INSTALL_CHROMIUM"
+
+
+def install_chromium_build_value(assembly: Optional[Dict[str, object]]) -> str:
+    """``INSTALL_CHROMIUM`` image build value from assembly.yaml.
+
+    ``platform.rendering.browser.local_chromium: false`` builds the processor
+    and executor images without Chromium ("0"); anything else keeps it ("1").
+    """
+    value = parse_bool(_get_nested(assembly or {}, "platform", "rendering", "browser", "local_chromium"))
+    return "0" if value is False else "1"
+
+
+def exec_image_build_args(env_main: EnvFile) -> List[str]:
+    """``docker build`` arguments for the py-code-exec image, from the rendered .env."""
+    value = env_main.entries.get(INSTALL_CHROMIUM_ENV_KEY, (None, None))[1]
+    return ["--build-arg", f"INSTALL_CHROMIUM={'0' if str(value or '').strip() == '0' else '1'}"]
+
+
 def missing_build_keys(env_main: EnvFile) -> List[str]:
     ui_image = env_main.entries.get("KDCUBE_UI_IMAGE", (None, None))[1]
     skip_ui = bool(ui_image and not is_placeholder(ui_image))
@@ -5257,6 +5276,7 @@ def gather_configuration(
         update_env_value(env_proc, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
     if is_placeholder(env_proc.entries.get("HOST_MANAGED_BUNDLES_PATH", (None, None))[1]):
         update_env_value(env_proc, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
+    update_env_value(env_main, INSTALL_CHROMIUM_ENV_KEY, install_chromium_build_value(assembly_data))
 
     _autosave()
 
@@ -6300,7 +6320,11 @@ def run_setup(
                     console.print("[red]Docker compose build failed. Check the output and retry.[/red]")
                 try:
                     subprocess.run(
-                        ["docker", "build", "-t", "py-code-exec:latest", "-f", "Dockerfile_Exec", "../../.."],
+                        [
+                            "docker", "build", "-t", "py-code-exec:latest",
+                            *exec_image_build_args(env_main),
+                            "-f", "Dockerfile_Exec", "../../..",
+                        ],
                         cwd=ctx.docker_dir,
                         check=True,
                     )

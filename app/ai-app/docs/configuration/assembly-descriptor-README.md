@@ -197,8 +197,9 @@ services:
 `build_model_service()` additionally projects it into a role-bound
 `ModelServiceBase`. An unknown model ID without an explicit provider fails
 instead of falling back to a different registered model. `provider: custom`
-requires an absolute HTTP(S) endpoint and accepts one positive shared
-`num_ctx`; the model ID is sent unchanged on every request. A protected custom
+requires an absolute HTTP(S) endpoint or a `bus://` Data Bus address (see
+[Ollama Integration §6.1](../recipes/connections/integrations/olama-README.md))
+and accepts one positive shared `num_ctx`; the model ID is sent unchanged on every request. A protected custom
 gateway reads `platform.services.llm.custom.api_key` from `secrets.yaml`.
 
 Native ReAct and LangGraph use this model-service route in the runnable agent
@@ -484,6 +485,26 @@ frontend:
       animateStreaming: true
 ```
 
+Two optional browser features of the chat web app read this section; both are
+off when absent:
+
+```yaml
+frontend:
+  config:
+    analytics:                     # web analytics
+      provider: google
+      measurementId: G-XXXXXXXXXX
+    attachments:
+      compressImages: true         # shrink large images before upload
+```
+
+With `analytics` set, the app loads the provider's tag once, reports a page
+view, and reports each chat send as a `chat_send` event whose parameters
+describe the request shape (app id, attachment and event counts, follow-up
+flag), never message text or file names. No measurement ID ships in the build.
+`attachments.compressImages` is described in
+[Attachments System §2.4](../hosting/attachments-system.md).
+
 Use this section for browser-only deployment differences, for example a local
 development auth proxy path or a custom SPA route prefix. `auth.turnstile_development_token`
 is still read from the `auth` section and is published as
@@ -691,6 +712,23 @@ processor finalizers. Normal completion, managed errors, watchdog timeout, and
 task cancellation all attempt per-turn browser cleanup. The idle janitor TTL,
 janitor interval, and max session count are backend constants today; they are
 not assembly-backed operator settings yet.
+
+### `platform.attachments`
+
+Byte caps for chat attachments, shared by ingress and the processor:
+`max_image_bytes` (default 5 MB), `max_doc_bytes` (default 10 MB) and
+`max_message_bytes` (default 25 MB, text plus attachments). See
+[Attachments System §2.4](../hosting/attachments-system.md) for the
+enforcement points and limits that sit above them.
+
+### `platform.rendering.browser`
+
+Where the processor's Chromium runs: `ws_endpoint` (a remote Playwright
+server; empty launches Chromium locally), `idle_disconnect_s` (close an
+unused browser; `0` keeps it open) and `local_chromium` (`false` builds the
+processor and executor images without Chromium and never launches one
+locally). See
+[Playwright Integration](../sdk/integrations/browser/playwright-README.md#remote-browser-and-idle-disconnect).
 
 ### `platform.services.proc.service`
 

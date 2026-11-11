@@ -416,6 +416,9 @@ class AsyncMarkdownPDF:
                 html_path = html_dir / "index.html"
             html_path.write_text(html_content, encoding="utf-8")
 
+            # Re-acquire per render: the service replaces a browser whose
+            # connection dropped or that it closed while idle.
+            await self.start()
             # High-DPI context for crisp canvas/bitmaps
             context = await self._browser.new_context(device_scale_factor=3)
             page = await context.new_page()

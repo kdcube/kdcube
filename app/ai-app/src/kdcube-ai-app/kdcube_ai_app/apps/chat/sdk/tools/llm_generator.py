@@ -28,8 +28,8 @@ from kdcube_ai_app.infra.service_hub.errors import ServiceException, ServiceErro
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_IMAGE_MIME,
     MODALITY_DOC_MIME,
-    MODALITY_MAX_IMAGE_BYTES,
-    MODALITY_MAX_DOC_BYTES,
+    max_image_bytes,
+    max_doc_bytes,
 )
 from kdcube_ai_app.apps.chat.sdk.util import estimate_b64_size
 
@@ -46,7 +46,7 @@ def _collect_multimodal_source_attachments(src_list: List[Dict[str, Any]]) -> Li
         if not data_b64 or not mime:
             continue
         size = estimate_b64_size(data_b64)
-        if mime in MODALITY_IMAGE_MIME and size <= MODALITY_MAX_IMAGE_BYTES:
+        if mime in MODALITY_IMAGE_MIME and size <= max_image_bytes():
             attachments.append({
                 "base64": data_b64,
                 "mime": mime,
@@ -54,7 +54,7 @@ def _collect_multimodal_source_attachments(src_list: List[Dict[str, Any]]) -> Li
                 "summary": s.get("text") or "",
                 "size": size,
             })
-        elif mime in MODALITY_DOC_MIME and size <= MODALITY_MAX_DOC_BYTES:
+        elif mime in MODALITY_DOC_MIME and size <= max_doc_bytes():
             attachments.append({
                 "base64": data_b64,
                 "mime": mime,

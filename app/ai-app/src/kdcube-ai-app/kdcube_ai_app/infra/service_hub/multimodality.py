@@ -15,13 +15,65 @@ from PIL import Image
 MODALITY_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 MODALITY_DOC_MIME = {"application/pdf"}
 
+# Default attachment byte caps. The effective caps are descriptor-owned
+# (assembly.yaml ``platform.attachments``); read them through
+# ``max_image_bytes()``, ``max_doc_bytes()`` and ``max_message_bytes()``.
 MODALITY_MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
 MODALITY_MAX_DOC_BYTES = 10 * 1024 * 1024   # 10 MB
 MODALITY_MAX_IMAGE_DIMENSION_PX = 8000
 
 MESSAGE_MAX_BYTES = 25 * 1024 * 1024  # total message size cap (text + attachments); keep margin
 
+ATTACHMENT_LIMITS_PATH = "platform.attachments"
+
 logger = logging.getLogger(__name__)
+
+
+def _descriptor_byte_cap(field: str, default: int) -> int:
+    """One positive byte cap from ``platform.attachments.<field>``.
+
+    Absent -> ``default``. A value that is not a positive integer is logged
+    and ignored, so a malformed descriptor keeps the default cap.
+    """
+    path = f"{ATTACHMENT_LIMITS_PATH}.{field}"
+    try:
+        from kdcube_ai_app.apps.chat.sdk.config import get_plain
+
+        raw = get_plain(f"a:{path}", None)
+    except Exception:
+        # A process without platform settings (an isolated executor, a bare
+        # script) has no assembly descriptor to read: the default applies.
+        logger.debug("assembly %s unavailable; using %d", path, default, exc_info=True)
+        return default
+    if raw is None or raw == "":
+        return default
+    try:
+        if isinstance(raw, bool):
+            raise ValueError("boolean")
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("assembly %s=%r is not an integer byte count; using %d", path, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("assembly %s=%r must be positive; using %d", path, raw, default)
+        return default
+    return value
+
+
+def max_image_bytes() -> int:
+    """Per-image attachment cap (``platform.attachments.max_image_bytes``)."""
+    return _descriptor_byte_cap("max_image_bytes", MODALITY_MAX_IMAGE_BYTES)
+
+
+def max_doc_bytes() -> int:
+    """Per-PDF attachment cap (``platform.attachments.max_doc_bytes``)."""
+    return _descriptor_byte_cap("max_doc_bytes", MODALITY_MAX_DOC_BYTES)
+
+
+def max_message_bytes() -> int:
+    """Total message cap, text plus attachments (``platform.attachments.max_message_bytes``)."""
+    return _descriptor_byte_cap("max_message_bytes", MESSAGE_MAX_BYTES)
+
 _LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
 _IMAGE_FORMAT_BY_MIME = {

@@ -613,6 +613,13 @@ async def lifespan(app: FastAPI):
         app.state.conversation_index = conversation_index
         app.state.conversation_store = conversation_store
         app.state.chat_submitter = ChatIngressSubmitter(app=app)
+        # Local named-service and operation calls have no request to read
+        # app.state from; register the services so they bind there too.
+        from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import register_proc_runtime_services
+        register_proc_runtime_services(
+            chat_submitter=app.state.chat_submitter,
+            conversation_browser=conversation_browser,
+        )
 
         applications_config = settings.PLATFORM.APPLICATIONS
         app.state.application_lifecycle = ProcApplicationLifecycle(
@@ -732,6 +739,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import register_proc_runtime_services
+    register_proc_runtime_services(chat_submitter=None, conversation_browser=None)
     # mark draining so /health returns 503 during graceful shutdown window
     app.state.draining = True
     app.state.shutting_down = True

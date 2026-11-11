@@ -1,3 +1,5 @@
+import {partitionBySizeCap} from "../features/chat/attachmentLimits.ts";
+
 export const handleContentDownload = (fileName: string, content: string | Blob | MediaSource, mimeType: string = 'plain/text') => {
     const contentBlob = typeof content === "string" ? new Blob([content], {type: mimeType}) : content;
     const url = URL.createObjectURL(contentBlob);
@@ -24,7 +26,8 @@ function openUrlSafely(url: string): boolean {
 interface FileSelectionOptions {
     accept?: string;
     multiple?: boolean;
-    maxSize?: number; // in bytes
+    maxSize?: number; // in bytes, for every file
+    maxSizeFor?: (file: File) => number; // in bytes, per file; used when maxSize is absent
     maxFiles?: number;
 }
 
@@ -58,6 +61,7 @@ async function selectFileAdvanced(options: FileSelectionOptions = {}): Promise<F
         accept,
         multiple = false,
         maxSize,
+        maxSizeFor,
         maxFiles
     } = options;
 
@@ -75,13 +79,14 @@ async function selectFileAdvanced(options: FileSelectionOptions = {}): Promise<F
         fileArray = fileArray.slice(0, maxFiles);
     }
 
-    // Apply size limit
-    if (maxSize) {
-        const oversizedFiles = fileArray.filter(file => file.size > maxSize);
-        if (oversizedFiles.length > 0) {
-            alert(`Some files exceed the ${(maxSize / 1024 / 1024).toFixed(1)}MB limit`);
-            fileArray = fileArray.filter(file => file.size <= maxSize);
+    // Apply size limits, naming every refused file and its limit.
+    const capFor = maxSize ? () => maxSize : maxSizeFor;
+    if (capFor) {
+        const {accepted, rejected} = partitionBySizeCap(fileArray, capFor);
+        if (rejected.length > 0) {
+            alert(rejected.join("\n"));
         }
+        fileArray = accepted;
     }
 
     return fileArray;

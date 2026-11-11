@@ -834,7 +834,11 @@ def build_compose_images(
         )
         _run_compose(
             console,
-            ["docker", "build", "--progress=plain", "-t", "py-code-exec:latest", "-f", "Dockerfile_Exec", "../../.."],
+            [
+                "docker", "build", "--progress=plain", "-t", "py-code-exec:latest",
+                *installer_mod.exec_image_build_args(env_main),
+                "-f", "Dockerfile_Exec", "../../..",
+            ],
             cwd=ctx.docker_dir,
         )
         try:

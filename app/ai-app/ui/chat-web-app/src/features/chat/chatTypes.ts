@@ -33,7 +33,22 @@ export interface ChatVersionSettings {
     versions?: { platform?: string };
 }
 
-export interface ChatSettings extends ChatScope, ChatAuthSettings, ChatRoutingSettings, ChatTransportSettings, ChatEventReportingSettings, ChatVersionSettings {
+export interface ChatAttachmentSettings {
+    /** Server caps and client options; see features/chat/attachmentLimits.ts. */
+    attachments?: {
+        maxImageBytes?: number;
+        maxDocBytes?: number;
+        maxMessageBytes?: number;
+        compressImages?: boolean;
+    };
+}
+
+export interface ChatAnalyticsSettings {
+    /** Opt-in web analytics; see utils/analytics.ts. Absent = off. */
+    analytics?: Record<string, unknown>;
+}
+
+export interface ChatSettings extends ChatScope, ChatAuthSettings, ChatRoutingSettings, ChatTransportSettings, ChatEventReportingSettings, ChatVersionSettings, ChatAttachmentSettings, ChatAnalyticsSettings {
 }
 
 export interface ChatSettingsState {

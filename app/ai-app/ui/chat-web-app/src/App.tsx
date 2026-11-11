@@ -4,11 +4,12 @@ import PlatformVersionBadge from "./components/PlatformVersionBadge.tsx";
 import './App.css'
 import {useAppDispatch, useAppSelector, useAppStore} from "./app/store.ts";
 import {
-    loadChatSettings, selectChatEventReportingEnabled,
+    loadChatSettings, selectAnalyticsSettings, selectChatEventReportingEnabled,
     selectChatSettingsLoaded,
     selectChatSettingsLoading, selectChatSettingsLoadingError
 } from "./features/chat/chatSettingsSlice.ts";
 import {initializeEventLogger} from "./services/eventLogger";
+import {initAnalytics} from "./utils/analytics.ts";
 
 const App = () => {
     const dispatch = useAppDispatch();
@@ -21,6 +22,12 @@ const App = () => {
         // Initialize event logger for error and log tracking
         if (settingsLoaded && selectChatEventReportingEnabled(store.getState()))
             initializeEventLogger(store);
+    }, [store, settingsLoaded]);
+
+    useEffect(() => {
+        // Opt-in: does nothing unless the runtime config enables analytics.
+        if (settingsLoaded)
+            initAnalytics(selectAnalyticsSettings(store.getState()));
     }, [store, settingsLoaded]);
 
     useEffect(() => {

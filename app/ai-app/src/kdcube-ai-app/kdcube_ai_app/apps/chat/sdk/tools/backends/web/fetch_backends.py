@@ -19,8 +19,8 @@ from kdcube_ai_app.tools.scrap_utils import build_content_blocks_from_html
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_IMAGE_MIME,
     MODALITY_DOC_MIME,
-    MODALITY_MAX_IMAGE_BYTES,
-    MODALITY_MAX_DOC_BYTES,
+    max_image_bytes,
+    max_doc_bytes,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ async def _materialize_binary_attachment(url: str, *, include_base64: bool = Tru
     size_bytes = len(content_bytes or b"")
     base64_data = None
     if include_base64 and (mime in MODALITY_IMAGE_MIME or mime in MODALITY_DOC_MIME):
-        limit = MODALITY_MAX_IMAGE_BYTES if mime in MODALITY_IMAGE_MIME else MODALITY_MAX_DOC_BYTES
+        limit = max_image_bytes() if mime in MODALITY_IMAGE_MIME else max_doc_bytes()
         if size_bytes and size_bytes <= limit:
             base64_data = base64.b64encode(content_bytes).decode("ascii")
     return {

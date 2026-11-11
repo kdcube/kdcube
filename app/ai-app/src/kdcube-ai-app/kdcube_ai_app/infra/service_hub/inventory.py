@@ -951,13 +951,24 @@ class ModelRouter:
         )
 
     def _mk_custom(self, model: str, temperature: float, *, num_ctx: Any = None):
-        return CustomModelClient(
+        from kdcube_ai_app.infra.service_hub.bus_model_client import BusModelClient, is_bus_endpoint
+
+        kwargs: dict[str, Any] = dict(
             endpoint=self.config.custom_model_endpoint,
             api_key=self.config.custom_model_api_key,
             model_name=model,
             temperature=temperature,
             num_ctx=self._custom_num_ctx(model, num_ctx),
         )
+        if is_bus_endpoint(self.config.custom_model_endpoint):
+            # bus:// routes each call over the Data Bus to a model provider
+            # that claims it; any other endpoint is the HTTP model gateway.
+            return BusModelClient(
+                tenant=getattr(self.config, "tenant", None),
+                project=getattr(self.config, "project", None),
+                **kwargs,
+            )
+        return CustomModelClient(**kwargs)
     def _mk_anthropic(self):
         if self._anthropic_client:
             return self._anthropic_client

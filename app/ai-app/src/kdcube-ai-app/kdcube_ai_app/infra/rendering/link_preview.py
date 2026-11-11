@@ -239,18 +239,17 @@ class AsyncLinkPreview:
         Browser-based fetch for sites that need JavaScript.
         Used as fallback or when screenshot is needed.
         """
-        # Ensure browser is started
-        if not self._browser:
-            if self.shared_browser:
-                self._browser = await self.shared_browser.get_browser()
-            else:
-                if self._own_browser_service is None:
-
-                    self._own_browser_service = SharedBrowserService(
-                        headless=self.headless,
-                        auto_install_browser=self.auto_install_browser,
-                    )
-                self._browser = await self._own_browser_service.get_browser()
+        # Re-acquire on every fetch: the service replaces a browser whose
+        # connection dropped or that it closed while idle.
+        if self.shared_browser:
+            self._browser = await self.shared_browser.get_browser()
+        else:
+            if self._own_browser_service is None:
+                self._own_browser_service = SharedBrowserService(
+                    headless=self.headless,
+                    auto_install_browser=self.auto_install_browser,
+                )
+            self._browser = await self._own_browser_service.get_browser()
 
         context = None
         page = None

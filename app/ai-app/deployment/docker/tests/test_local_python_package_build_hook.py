@@ -71,7 +71,7 @@ def test_browser_download_never_sits_behind_the_venv_or_the_sources():
         dockerfile = (DOCKER_ROOT / relative_path).read_text(encoding="utf-8")
         bootstrap = "playwright-bootstrap/bin/python -m playwright install --with-deps chromium"
         venv_copy = "COPY --from=builder /opt/venv /opt/venv"
-        reconcile = "RUN python -m playwright install chromium"
+        reconcile = "      python -m playwright install chromium \\\n"
         source_copy = "COPY --chown=appuser:appuser src/kdcube-ai-app/ ."
         assert dockerfile.count(bootstrap) == 1, relative_path
         assert dockerfile.count(venv_copy) == 1, relative_path
@@ -86,7 +86,7 @@ def test_browser_download_never_sits_behind_the_venv_or_the_sources():
         "custom-ui-managed-infra/Dockerfile_Exec",
     ):
         dockerfile = (DOCKER_ROOT / relative_path).read_text(encoding="utf-8")
-        browser = "RUN python -m playwright install --with-deps chromium"
+        browser = "      python -m playwright install --with-deps chromium \\\n"
         assert dockerfile.count(browser) == 1, relative_path
         assert (
             dockerfile.index(ORDINARY_INSTALL) < dockerfile.index(browser) < dockerfile.index(SOURCES_COPY)

@@ -98,16 +98,56 @@ In the workflow (example: `kdcube_ai_app/apps/chat/sdk/examples/bundles/eco@2026
   supported mimes:
   - Images: `image/jpeg`, `image/png`, `image/gif`, `image/webp`
   - Docs: `application/pdf`
-- Base64 payloads are size-limited (`MODALITY_MAX_IMAGE_BYTES`, `_SUMMARY_MAX_DOC_BYTES`).
+- Base64 payloads are size-limited by the image and PDF caps in §2.4.
 
 ### 2.4 Attachment size caps (ingress)
 
-Ingress enforces both per-file and total-message caps, sourced from
-`kdcube_ai_app/infra/service_hub/multimodality.py`.
+Ingress enforces both per-file and total-message caps. The processor applies
+the same image and PDF caps when it prepares attachments for a model. The caps
+are descriptor-owned, so a deployment that serves larger photos or scans raises
+them in `assembly.yaml` instead of patching code:
 
-- Per-image cap: `MODALITY_MAX_IMAGE_BYTES` (5 MB)
-- Per-PDF cap: `MODALITY_MAX_DOC_BYTES` (10 MB)
-- Total message cap (text + attachments): `MESSAGE_MAX_BYTES` (25 MB)
+```yaml
+platform:
+  attachments:
+    max_image_bytes: 5242880      # per image (jpeg/png/gif/webp); default 5 MB
+    max_doc_bytes: 10485760       # per PDF; default 10 MB
+    max_message_bytes: 26214400   # text + all attachments; default 25 MB
+```
+
+| Field | Reader | Default |
+|---|---|---|
+| `max_image_bytes` | `multimodality.max_image_bytes()` | 5 MB |
+| `max_doc_bytes` | `multimodality.max_doc_bytes()` | 10 MB |
+| `max_message_bytes` | `multimodality.max_message_bytes()` | 25 MB |
+
+Values are positive integer byte counts. An absent field uses the default; a
+malformed one is logged and also uses the default. Ingress and processor read
+the same `assembly.yaml`, so both enforce the same caps; the Socket.IO
+transport sizes its message buffer from `max_message_bytes` when it starts.
+The web proxy's `client_max_body_size` and the model provider's own request
+limits still apply above these caps.
+
+The runtime browser config (`GET /api/cp-frontend-config`) publishes the
+configured caps as `attachments.maxImageBytes`, `maxDocBytes` and
+`maxMessageBytes`. The chat web app refuses a file over its cap in the picker
+and names the file and the limit, instead of uploading bytes ingress will
+reject. Its chat submit requests are bounded (60 s, plus time proportional to
+the attachment size), so a stalled upload fails the turn with a readable error.
+
+A deployment whose users attach phone photos can let the browser shrink them:
+
+```yaml
+frontend:
+  config:
+    attachments:
+      compressImages: true   # default false
+```
+
+With it on, an image above 90% of `max_image_bytes` is scaled to at most
+2048 px on its longer edge and re-encoded as JPEG before the upload; the picker
+then holds such images only to `max_message_bytes`. A browser that cannot
+decode the image sends the original, and the server cap decides.
 
 When composing messages, `build_attachment_message_blocks(...)` in
 `kdcube_ai_app/apps/chat/sdk/runtime/files_and_attachments.py` produces

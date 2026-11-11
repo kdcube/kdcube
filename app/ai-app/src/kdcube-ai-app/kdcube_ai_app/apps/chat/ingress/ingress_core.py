@@ -870,12 +870,16 @@ async def process_chat_message(
         )
 
     from kdcube_ai_app.infra.service_hub.multimodality import (
-        MESSAGE_MAX_BYTES,
         MODALITY_DOC_MIME,
         MODALITY_IMAGE_MIME,
-        MODALITY_MAX_DOC_BYTES,
-        MODALITY_MAX_IMAGE_BYTES,
+        max_doc_bytes,
+        max_image_bytes,
+        max_message_bytes,
     )
+
+    MESSAGE_MAX_BYTES = max_message_bytes()
+    MODALITY_MAX_IMAGE_BYTES = max_image_bytes()
+    MODALITY_MAX_DOC_BYTES = max_doc_bytes()
 
     text_bytes = len(text.encode("utf-8"))
     if text_bytes > MESSAGE_MAX_BYTES:

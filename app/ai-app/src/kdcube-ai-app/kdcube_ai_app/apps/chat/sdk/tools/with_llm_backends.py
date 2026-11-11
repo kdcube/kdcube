@@ -28,8 +28,8 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_IMAGE_MIME,
     MODALITY_DOC_MIME,
-    MODALITY_MAX_IMAGE_BYTES,
-    MODALITY_MAX_DOC_BYTES,
+    max_image_bytes,
+    max_doc_bytes,
 )
 from kdcube_ai_app.apps.chat.sdk.util import estimate_b64_size
 
@@ -226,7 +226,7 @@ async def generate_content_llm(
                 size_bytes = estimate_b64_size(data_b64)
             if size_bytes is None:
                 continue
-            limit = MODALITY_MAX_IMAGE_BYTES if mime in MODALITY_IMAGE_MIME else MODALITY_MAX_DOC_BYTES
+            limit = max_image_bytes() if mime in MODALITY_IMAGE_MIME else max_doc_bytes()
             if size_bytes > limit:
                 continue
             summary = ""

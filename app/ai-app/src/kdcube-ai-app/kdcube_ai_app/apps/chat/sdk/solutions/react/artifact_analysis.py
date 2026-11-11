@@ -16,8 +16,8 @@ import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_DOC_MIME,
     MODALITY_IMAGE_MIME,
-    MODALITY_MAX_DOC_BYTES,
-    MODALITY_MAX_IMAGE_BYTES,
+    max_doc_bytes,
+    max_image_bytes,
     validate_image_bytes,
 )
 
@@ -114,7 +114,7 @@ def prepare_summary_artifact(
         try:
             size_bytes = file_path.stat().st_size
             if mime in MODALITY_IMAGE_MIME or mime in MODALITY_DOC_MIME:
-                limit = MODALITY_MAX_IMAGE_BYTES if mime in MODALITY_IMAGE_MIME else MODALITY_MAX_DOC_BYTES
+                limit = max_image_bytes() if mime in MODALITY_IMAGE_MIME else max_doc_bytes()
                 if size_bytes <= limit:
                     file_bytes = file_path.read_bytes()
                     if mime in MODALITY_IMAGE_MIME:

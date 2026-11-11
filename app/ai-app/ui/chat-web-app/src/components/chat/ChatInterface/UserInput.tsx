@@ -14,6 +14,8 @@ import {
 } from "../../../features/chat/chatStateSlice.ts";
 import {sendChatMessage} from "../../../features/chat/chatServiceMiddleware.ts";
 import {UserAttachment} from "../../../features/chat/chatTypes.ts";
+import {selectAttachmentSettings} from "../../../features/chat/chatSettingsSlice.ts";
+import {resolveAttachmentLimits, uploadCapForFile} from "../../../features/chat/attachmentLimits.ts";
 import PopupArea from "../../../features/popupNotifications/PopupArea.tsx";
 
 interface UserInputProps {
@@ -27,6 +29,8 @@ const UserInput = ({inputPlaceholder = "Ask me anything..."}: UserInputProps) =>
     const isLocked = useAppSelector(selectUserInputLocked)
     const lockMessage = useAppSelector(selectUserInputLockMessage)
     const currentTurn = useAppSelector(selectCurrentTurn)
+    const attachmentSettings = useAppSelector(selectAttachmentSettings)
+    const attachmentLimits = useMemo(() => resolveAttachmentLimits(attachmentSettings), [attachmentSettings])
     const inProgress = useMemo(() => !!currentTurn, [currentTurn])
     const [steerPanelOpen, setSteerPanelOpen] = useState(false)
     const [steerMessage, setSteerMessage] = useState("")
@@ -200,7 +204,10 @@ const UserInput = ({inputPlaceholder = "Ask me anything..."}: UserInputProps) =>
                             <div className="pl-2"/>
                             <button
                                 onClick={() => {
-                                    selectFileAdvanced({multiple: true}).then((res) => {
+                                    selectFileAdvanced({
+                                        multiple: true,
+                                        maxSizeFor: (file) => uploadCapForFile(file, attachmentLimits),
+                                    }).then((res) => {
                                         addInputFiles(res)
                                     })
                                 }}
@@ -242,7 +249,7 @@ const UserInput = ({inputPlaceholder = "Ask me anything..."}: UserInputProps) =>
                 </div>
             </div>
         );
-    }, [addFilesDisabled, addInputFiles, effectivePlaceholder, inProgress, inputDisabled, isLocked, lockMessage, removeInputFiles, sendDisabled, sendMessage, sendSteer, setUserInputValue, steerMessage, steerPanelOpen, steerSendDisabled, stopDisabled, userAttachments, userInput]);
+    }, [addFilesDisabled, addInputFiles, attachmentLimits, effectivePlaceholder, inProgress, inputDisabled, isLocked, lockMessage, removeInputFiles, sendDisabled, sendMessage, sendSteer, setUserInputValue, steerMessage, steerPanelOpen, steerSendDisabled, stopDisabled, userAttachments, userInput]);
 }
 
 export default UserInput;
