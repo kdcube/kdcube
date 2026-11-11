@@ -46,6 +46,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import BudgetIns
 from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
     resolve_plan_id,
     subscription_is_active,
+    subscription_needs_plan_lookup,
     subscription_provides_plan_budget,
 )
 from kdcube_ai_app.apps.chat.sdk.infra.economics.quota_lock import QuotaLock, quota_lock_key
@@ -511,7 +512,16 @@ class EconomicsGuard:
         has_active_subscription = subscription_is_active(subscription, self.now)
         # Only external subscriptions fund a separate plan budget; internal plans draw
         # from the project budget bounded by quota (the plan_id still sets the quota).
-        funds_from_subscription = subscription_provides_plan_budget(subscription, self.now)
+        # An entitlement-only plan routes the same way: it grants access, not budget.
+        subscription_plan = None
+        if subscription_needs_plan_lookup(subscription, self.now):
+            subscription_plan = await self.cp.subscription_mgr.get_plan(
+                tenant=s.tenant, project=s.project,
+                plan_id=subscription.plan_id, include_inactive=True,
+            )
+        funds_from_subscription = subscription_provides_plan_budget(
+            subscription, self.now, plan=subscription_plan
+        )
 
         # plan id (shared resolver; budget_bypass == role in admin/privileged)
         plan_id, _ = resolve_plan_id(

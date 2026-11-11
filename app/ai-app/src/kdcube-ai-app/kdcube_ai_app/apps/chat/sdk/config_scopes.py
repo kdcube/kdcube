@@ -198,6 +198,14 @@ def economics_llm_reference_service() -> dict | None:
     return node if isinstance(node, dict) else None
 
 
+def economics_stripe_checkout() -> dict:
+    """`stripe.checkout:` section from economics.yaml -- Stripe Checkout Session
+    options (`automatic_tax`, `tax_id_collection`). Returns {} when the
+    section/file is absent. Runtime-read, mtime-cached; never seeded."""
+    node = _load_economics_plain("stripe.checkout")
+    return dict(node) if isinstance(node, dict) else {}
+
+
 def _load_global_secret_plain(dotted_path: str) -> Any:
     data = _load_plain_yaml(
         _descriptor_path(

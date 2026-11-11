@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+import types
 from typing import Any, Optional
 
 import pytest
@@ -76,11 +77,17 @@ class _Sub:
 
 
 class _SubMgr:
-    def __init__(self, sub=None):
+    def __init__(self, sub=None, plan=None):
         self.sub = sub
+        self.plan = plan
+        self.plan_reads = []
 
     async def get_subscription(self, **kw):
         return self.sub
+
+    async def get_plan(self, **kw):
+        self.plan_reads.append(kw)
+        return self.plan
 
 
 class _Credits:
@@ -513,6 +520,32 @@ async def test_characterize_internal_subscription_funds_from_project(monkeypatch
     # no subscription budget instantiated for an internal plan
     assert _SubBudget.instances == []
     # routes exactly like a registered project-funded turn
+    assert _trace(ep) == {
+        "budget_reserved_usd": [2.0], "budget_committed_usd": [0.03],
+        "budget_forced": [], "budget_released": 0,
+        "wallet_reserved_cents": [], "wallet_committed_cents": [], "wallet_consumed_cents": [],
+        "wallet_released": 0, "rl_committed_tokens": [1000], "rl_released": [], "events": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_characterize_entitlement_only_subscription_funds_from_project(monkeypatch):
+    # active EXTERNAL subscription to an entitlement-only plan -> funding_source=project,
+    # exactly like an internal plan: no subscription budget, project reserve+commit.
+    from kdcube_ai_app.apps.chat.sdk.infra.economics import subscription_budget as sub_budget_mod
+    from kdcube_ai_app.apps.chat.sdk.infra.economics import subscription as sub_mod
+    _SubBudget.instances = []
+    _SubBudget.available_usd = 10.0
+    monkeypatch.setattr(sub_budget_mod, "SubscriptionBudgetLimiter", _SubBudget)
+    monkeypatch.setattr(sub_mod, "build_subscription_period_descriptor",
+                        lambda **kw: {"period_key": "pk", "period_start": None, "period_end": None})
+    ep = _make_ep(role="registered", wallet=0, sub=_Sub(active=True, provider="stripe"),
+                  budget=_Budget(overdraft=None),
+                  cost_usd=0.03, ranked_tokens=1000, monkeypatch=monkeypatch)
+    # jsonb delivered as text (a pool without the jsonb codec) is honoured too
+    ep.cp_manager.subscription_mgr.plan = types.SimpleNamespace(metadata='{"entitlement_only": true}')
+    await ep.run()
+    assert _SubBudget.instances == []
     assert _trace(ep) == {
         "budget_reserved_usd": [2.0], "budget_committed_usd": [0.03],
         "budget_forced": [], "budget_released": 0,

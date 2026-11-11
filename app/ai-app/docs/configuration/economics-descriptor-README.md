@@ -23,19 +23,20 @@ It defines:
 - the plan catalog (provider, price, active state, subscribe/grant behaviour)
 - the provider/model price table (USD↔token conversion for the whole economy)
 - the token-economy reference model (the USD↔token unit of account)
+- Stripe Checkout options (Stripe Tax, tax id collection)
 
 This descriptor has **two runtime roles**:
 
 - **seeded into the economics tables at deploy time** — quota policies, budget
   policies, the plan catalog, and the overdraft limit are written to Postgres
   once; Postgres is then the live authority for those sections;
-- **read live from the file** — the `reservation`, `price_tables`, and
-  `llm_reference_service` sections are never stored in the database; the runtime
+- **read live from the file** — the `reservation`, `price_tables`,
+  `llm_reference_service`, and `stripe` sections are never stored in the database; the runtime
   reads them live from the file (mtime-cached), so an edit is picked up without a
   restart. An admin mutation triggers a descriptor write-back that regenerates the
   seeded sections from the DB and preserves these live sections verbatim.
 
-It does not provide values through `get_settings()`; the two live sections are
+It does not provide values through `get_settings()`; the live sections are
 read through dedicated helpers in
 [config_scopes.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config_scopes.py),
 and the seeded sections are read from the economics tables each turn.
@@ -103,6 +104,7 @@ budget_policies:
 plans:
   free: { provider: internal, monthly_price_cents: 0, active: true }
   pro:  { provider: stripe, monthly_price_cents: 2000, active: true, stripe_price_id: price_xxx }
+  access: { provider: stripe, monthly_price_cents: 199, active: true, stripe_price_id: price_yyy, entitlement_only: true }
 
 price_tables:            # optional; whole-table replacement of the in-code baseline
   llm:                   # must include the reference model, else the baseline is used
@@ -113,6 +115,11 @@ price_tables:            # optional; whole-table replacement of the in-code base
 llm_reference_service:   # optional; the USD↔token unit of account (defaults to the in-code reference)
   provider: anthropic
   service_name: claude-sonnet-4-5-20250929
+
+stripe:                  # optional; Stripe Checkout Session options
+  checkout:
+    automatic_tax: false       # Stripe Tax on both Checkout Sessions
+    tax_id_collection: false   # collect business tax ids at checkout
 ```
 
 ## What each section does
@@ -195,6 +202,35 @@ Runtime consumers:
 - [config_scopes.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config_scopes.py) — `economics_llm_reference_service()`
 - [usage.py](../../src/kdcube-ai-app/kdcube_ai_app/infra/accounting/usage.py) — `llm_reference_service()` / `usd_per_reference_token()`
 
+### `stripe` (runtime-read)
+
+Options for the Stripe Checkout Sessions the platform creates (wallet top-up and
+subscription). Both default to `false`, which creates sessions without tax.
+
+| Property | Default | Behaviour |
+|---|---|---|
+| `checkout.automatic_tax` | `false` | `true` enables Stripe Tax on both sessions: `automatic_tax`, a required billing address, and `customer_update.address: auto` (the session attaches a Customer, and Stripe computes tax from that Customer's address). The top-up's inline price is sent with `tax_behavior: exclusive`, so the customer pays the top-up amount plus tax; a subscription plan's tax behaviour is set on its Stripe Price. |
+| `checkout.tax_id_collection` | `false` | `true` lets a business customer enter a tax id at checkout (`tax_id_collection`, with `customer_update.name: auto` so Stripe saves it on the Customer). |
+
+A wallet top-up always credits its **pre-tax** price: checkout stamps the price
+into the PaymentIntent metadata (`kdcube_net_amount_cents`) and the
+`payment_intent.succeeded` handler credits that figure, capped at the amount
+received. When tax was collected, the ledger row records the credited amount and
+keeps `kdcube_gross_amount_cents` and `kdcube_tax_cents` in its metadata for
+payout reconciliation. A wallet refund of such a payment debits the wallet in
+proportion to the money returned (a full refund removes exactly the credited
+amount). A subscription plan that should not turn its tax-inclusive
+invoice into model budget is declared `entitlement_only` (see [`plans`](#plans-seeded)).
+
+Turning `automatic_tax` on in this descriptor does not configure Stripe itself.
+The Stripe account needs Stripe Tax enabled with its origin address and tax
+registrations, each catalog Price created with an explicit tax behaviour
+(`exclusive` matches the top-up), and a tax code on each Product.
+
+Runtime consumer:
+[config_scopes.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config_scopes.py) — `economics_stripe_checkout()`,
+used by [checkout.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/economics/checkout.py).
+
 ### `project_budget` (seeded)
 
 Only `overdraft_limit_usd` is seeded (into `tenant_project_budget`):
@@ -225,7 +261,21 @@ providers listed here are seeded.
 
 `plan_id -> catalog entry`: `provider` (`internal` or `stripe`),
 `monthly_price_cents`, `active`, optional `stripe_price_id` (required when
-`provider: stripe`), optional `metadata`. Seeded into the `plans` table.
+`provider: stripe`), optional `entitlement_only`, optional `metadata`. Seeded
+into the `plans` table.
+
+`entitlement_only: true` declares a plan whose subscription buys **access** (a
+tier, a seat, a membership fee) rather than model spend. An active external
+(`stripe`) subscription normally funds its own per-period plan budget from the
+paid invoice amount and turns are charged against that budget. For an
+entitlement-only plan the paid invoice is recorded but funds no plan budget,
+and the subscriber's turns are funded the way an internal plan's are: from the
+project budget, bounded by the plan's `quota_policies` entry. Use it when the
+fee is not meant to become model budget, for example a low access fee that
+would otherwise cap the subscriber below the free tier, or a tax-exclusive
+price whose collected tax must not be credited. Default `false`. The property
+is stored as `plans.metadata.entitlement_only` and can also be set through the
+plan upsert API (`entitlement_only` field).
 
 `quota_policies.<plan_id>` defines the limits for a plan; `plans.<plan_id>`
 defines its catalog entry (price, provider, active state). Most plans are
@@ -305,8 +355,8 @@ so the next deploy-time seed does not regress the change.
 
 - Rebuilds `quota_policies`, `budget_policies`, `plans`, and
   `project_budget.overdraft_limit_usd` from the database.
-- **Preserves** the `reservation` and `price_tables` sections verbatim (they are
-  never stored in the DB).
+- **Preserves** the `reservation`, `price_tables`, `llm_reference_service`, and
+  `stripe` sections verbatim (they are never stored in the DB).
 - Writes atomically (temp file + `os.replace`) under an exclusive `flock`.
 - Best-effort: a write failure logs a warning and never fails the originating
   admin operation.

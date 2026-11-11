@@ -16,7 +16,7 @@ Two distinct purposes:
   - quota / budget / subscription: Postgres is the live runtime authority. The
     descriptor is only a persistence snapshot so the next deploy-time
     `seed_economics` does not regress runtime/admin changes.
-  - reservation / price_tables / llm_reference_service: the descriptor file IS the
+  - reservation / price_tables / llm_reference_service / stripe: the descriptor file IS the
     live runtime source (read per turn via config_scopes, mtime-cached). These are
     never stored in the DB, so write-backs preserve them verbatim from the existing
     file. Writing here lets runtime pick up changes in real time across replicas
@@ -37,6 +37,11 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 import yaml
 
 from kdcube_ai_app.apps.chat.sdk.config_scopes import _descriptor_path
+from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
+    ENTITLEMENT_ONLY_KEY,
+    plan_metadata,
+    plan_is_entitlement_only,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +121,12 @@ async def build_economics_descriptor(
         }
         if getattr(pl, "stripe_price_id", None):
             entry["stripe_price_id"] = pl.stripe_price_id
+        if plan_is_entitlement_only(pl):
+            entry["entitlement_only"] = True
+        metadata = plan_metadata(pl)
+        metadata.pop(ENTITLEMENT_ONLY_KEY, None)
+        if metadata:
+            entry["metadata"] = metadata
         plans[pl.plan_id] = entry
 
     # Overdraft limit lives in tenant_project_budget; the balance is intentionally
@@ -156,6 +167,9 @@ async def build_economics_descriptor(
     llm_reference_service = existing.get("llm_reference_service")
     if isinstance(llm_reference_service, dict):
         payload["llm_reference_service"] = llm_reference_service
+    stripe_section = existing.get("stripe")
+    if isinstance(stripe_section, dict):
+        payload["stripe"] = stripe_section
     return payload
 
 

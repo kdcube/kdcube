@@ -12,6 +12,9 @@ from calendar import monthrange
 
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
+from kdcube_ai_app.apps.chat.sdk.infra.economics.external_events import (
+    ExternalEconomicsLedger, LedgerKey,
+)
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 def _now() -> datetime:
@@ -123,6 +126,14 @@ class SubscriptionPlan:
     created_by: Optional[str]
     notes: Optional[str]
 
+    @property
+    def entitlement_only(self) -> bool:
+        """The plan grants entitlement without funding a plan budget
+        (`metadata.entitlement_only`)."""
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import plan_is_entitlement_only
+
+        return plan_is_entitlement_only(self)
+
 
 class RLMonthAnchorStore:
     """
@@ -209,10 +220,10 @@ class RLMonthAnchorStore:
 class SubscriptionManager:
     TABLE = "user_plans"
     PLAN_TABLE = "plans"
-    EXT_EVENTS_TABLE = "external_economics_events"
 
     def __init__(self, pg_pool: asyncpg.Pool):
         self.pg_pool = pg_pool
+        self.ledger = ExternalEconomicsLedger(pg_pool=pg_pool)
 
     @staticmethod
     def _schema(tenant: str, project: str) -> str:
@@ -789,68 +800,6 @@ class SubscriptionManager:
 
         return [self._from_row(r) for r in rows]
 
-    # ---------------- internal idempotency (no SQL in routes) ----------------
-
-    async def _lock_or_create_internal_event(
-            self,
-            *,
-            conn: asyncpg.Connection,
-            kind: str,
-            external_id: str,
-            tenant: str,
-            project: str,
-            user_id: str,
-            amount_cents: int,
-            metadata: Dict[str, Any],
-    ) -> Tuple[str, bool]:
-        """Returns (status, was_created)"""
-        tbl = f"{self._schema(tenant, project)}.{self.EXT_EVENTS_TABLE}"
-        res = await conn.fetchval(f"""
-            INSERT INTO {tbl} (
-              source, kind, external_id,
-              tenant, project, user_id,
-              amount_cents, tokens, currency,
-              status, stripe_event_id, metadata
-            ) VALUES (
-              'internal', $2, $1,
-              $3, $4, $5,
-              $6, NULL, 'usd',
-              'pending', NULL, $7
-            )
-            ON CONFLICT (source, kind, external_id) DO NOTHING
-            RETURNING TRUE
-        """, external_id, kind, tenant, project, user_id, int(amount_cents), metadata)
-
-        was_created = bool(res)
-
-        row = await conn.fetchrow(f"""
-            SELECT status
-            FROM {tbl}
-            WHERE source='internal' AND kind=$2 AND external_id=$1
-            FOR UPDATE
-        """, external_id, kind)
-
-        if not row:
-            raise RuntimeError("Failed to lock/create external_economics_events row (internal)")
-
-        return str(row["status"]), was_created
-
-    async def _mark_internal_event_applied(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str) -> None:
-        tbl = f"{self._schema(tenant, project)}.{self.EXT_EVENTS_TABLE}"
-        await conn.execute(f"""
-            UPDATE {tbl}
-            SET status='applied', applied_at=NOW(), error=NULL, updated_at=NOW()
-            WHERE source='internal' AND kind=$2 AND external_id=$1
-        """, external_id, kind)
-
-    async def _mark_internal_event_failed(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str, error: str) -> None:
-        tbl = f"{self._schema(tenant, project)}.{self.EXT_EVENTS_TABLE}"
-        await conn.execute(f"""
-            UPDATE {tbl}
-            SET status='failed', error=$2, updated_at=NOW()
-            WHERE source='internal' AND kind=$3 AND external_id=$1
-        """, external_id, (error or "")[:2000], kind)
-
     async def rollover_unused_balance_once(
             self,
             *,
@@ -876,20 +825,15 @@ class SubscriptionManager:
             note += f" by={actor}"
 
         async def _run(c: asyncpg.Connection) -> Dict[str, Any]:
-            status, was_created = await self._lock_or_create_internal_event(
-                conn=c,
-                kind="subscription_rollover",
-                external_id=period_key,
-                tenant=tenant,
-                project=project,
-                user_id=user_id,
-                amount_cents=0,
-                metadata={"period_end": period_end.isoformat() if period_end else None, "by": actor or "unknown"},
+            key = LedgerKey(source="internal", kind="subscription_rollover",
+                            external_id=period_key)
+            claim = await self.ledger.claim(
+                conn=c, key=key, tenant=tenant, project=project, user_id=user_id,
+                amount_cents=0, tokens=None, currency="usd", provider_event_id=None,
+                metadata={"period_end": period_end.isoformat() if period_end else None,
+                          "by": actor or "unknown"},
             )
-            if status == "applied":
-                return {"status": "ok", "action": "duplicate", "moved_usd": 0.0}
-            
-            if not was_created and status == "pending":
+            if claim.already_applied or claim.concurrent_duplicate:
                 return {"status": "ok", "action": "duplicate", "moved_usd": 0.0}
 
             try:
@@ -902,14 +846,16 @@ class SubscriptionManager:
                     request_id=request_id,
                 )
 
-                await self._mark_internal_event_applied(c, tenant=tenant, project=project, kind="subscription_rollover", external_id=period_key)
+                await self.ledger.mark_applied(conn=c, key=key, tenant=tenant,
+                                               project=project)
                 return {
                     "status": "ok",
                     "action": "applied",
                     "moved_usd": float(moved_cents) / 100.0,
                 }
             except Exception as e:
-                await self._mark_internal_event_failed(c, tenant=tenant, project=project, kind="subscription_rollover", external_id=period_key, error=str(e))
+                await self.ledger.mark_failed(conn=c, key=key, tenant=tenant,
+                                              project=project, error=str(e))
                 raise
 
         if conn:

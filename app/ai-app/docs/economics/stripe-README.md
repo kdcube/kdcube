@@ -120,6 +120,9 @@ throttled and Stripe will retry — causing duplicate processing attempts.
 - Configure webhook endpoint: `POST https://<your-domain>/api/economics/webhooks/stripe`
 - Select events to listen for (see "Webhook Events Handled" below).
 - Copy signing secret → `platform.services.stripe.webhook_secret` in `secrets.yaml`.
+- To charge tax, enable Stripe Tax on the account and set
+  `stripe.checkout.automatic_tax` in `economics.yaml`; see
+  [Economics Descriptor: `stripe`](../configuration/economics-descriptor-README.md#stripe-runtime-read).
 
 ---
 
@@ -137,6 +140,17 @@ All Stripe objects created by KDCube carry metadata for routing webhook events:
 
 If metadata is missing, the webhook handler attempts fallback lookups via the DB.
 
+**Customers** are the exception: a Stripe Customer the platform creates carries
+`tenant`, `project` and an opaque `kdcube_customer_ref`, and its description reads
+`Customer <ref> from <tenant>/<project>`. It carries no platform user id. The
+mapping of record is `user_plans.stripe_customer_id`, written when the customer is
+created; `invoice.paid` resolves a user that no invoice, line, subscription or
+customer metadata names through that row. The reference is an HMAC of the user id
+under a sub-key derived from `platform.services.session_token.secret`, so an
+operator holding the secret can compute a user's reference (random when the
+secret is not configured). Customers created before this behaviour keep `user_id`
+in their metadata, and it still takes precedence.
+
 ---
 
 ## Webhook Events Handled
@@ -151,6 +165,15 @@ If metadata is missing, the webhook handler attempts fallback lookups via the DB
 | `customer.subscription.deleted`     | Mark subscription as canceled                                 |
 
 All events are idempotent via `external_economics_events` table (keyed by Stripe event ID).
+
+Every rail claims and marks its row through one module,
+[`external_events.py`](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/external_events.py)
+(`ExternalEconomicsLedger`). A row is identified by `(source, kind, external_id)`;
+`source` is `stripe` for provider events and `internal` for admin/subscription
+operations. `ExternalEconomicsLedger.apply_once` claims the row, runs the
+caller's effect and marks it applied on the caller's connection, so the credit
+and the ledger mark commit or roll back together. A new payment rail uses a new
+`source` value with the same ledger.
 
 **Event ordering matters in the reconcile job.** Events are replayed in ascending
 `created` timestamp order to guarantee causal consistency:
