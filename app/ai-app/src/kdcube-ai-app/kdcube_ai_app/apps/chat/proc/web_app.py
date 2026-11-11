@@ -115,6 +115,22 @@ log_secret_statuses(force=True)
 logger = logging.getLogger("ChatProc.WebApp")
 
 
+def _turn_config_request(comm_context):
+    """The turn's ConfigRequest from the payload's client-originated config values.
+
+    Model credentials are resolved server-side only, whichever producer enqueued
+    the payload, so any credential field in ``config.values`` is dropped here.
+    """
+    from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest
+    from kdcube_ai_app.infra.service_hub.model_credentials import strip_client_model_credentials
+
+    return ConfigRequest(**strip_client_model_credentials(
+        comm_context.config.values,
+        door="chat.proc",
+        subject=getattr(comm_context.routing, "session_id", None),
+    ))
+
+
 async def _resolve_chat_bundle_spec(redis, *, tenant, project, bundle_id):
     """The chat request path's bundle spec; a pinned app this proc has not prepared refuses by name (W333)."""
     from kdcube_ai_app.infra.plugin.bundle_snapshot import BundleSnapshotError
@@ -422,16 +438,20 @@ async def lifespan(app: FastAPI):
         )
         from kdcube_ai_app.infra.jobs.stream import BACKGROUND_JOB_OPERATION
         from kdcube_ai_app.infra.service_hub.inventory import (
-            ConfigRequest,
             create_workflow_config,
             resolve_config_request_secrets,
         )
+        from kdcube_ai_app.infra.service_hub.model_credentials import signed_in_user_id
 
         bundle_id = comm_context.routing.bundle_id
         tenant_id = getattr(getattr(comm_context, "actor", None), "tenant_id", None) or get_settings().TENANT
         project_id = getattr(getattr(comm_context, "actor", None), "project_id", None) or get_settings().PROJECT
-        cfg_req = ConfigRequest(**(comm_context.config.values or {}))
-        cfg_req = await resolve_config_request_secrets(cfg_req, bundle_id=bundle_id)
+        cfg_req = _turn_config_request(comm_context)
+        cfg_req = await resolve_config_request_secrets(
+            cfg_req,
+            bundle_id=bundle_id,
+            user_id=signed_in_user_id(getattr(comm_context, "user", None)),
+        )
         wf_config = create_workflow_config(cfg_req)
         spec_resolved = await _resolve_chat_bundle_spec(
             app.state.redis_async,

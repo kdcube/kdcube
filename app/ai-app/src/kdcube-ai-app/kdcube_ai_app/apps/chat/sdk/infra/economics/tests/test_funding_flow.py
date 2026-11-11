@@ -449,3 +449,50 @@ async def test_settle_subscription_no_reservation_charges_subscription_not_proje
     assert sub.committed == []                           # no reservation was committed
     assert out.primary_funding_usd == pytest.approx(0.02, rel=1e-6)
     assert out.project_absorption_usd == 0.0
+
+
+# --------------------------------------------------------------------------
+# Caller-funded turns: the caller's own provider key paid the provider
+# --------------------------------------------------------------------------
+class _NoMoney:
+    """Fails the test, by name, on any call."""
+
+    def __init__(self, name):
+        self._name = name
+
+    def __getattr__(self, attr):
+        async def _forbidden(*_a, **_k):
+            raise AssertionError(f"caller-funded turn touched money: {self._name}.{attr}")
+        return _forbidden
+
+
+def _caller_ctx(rl):
+    ctx = _ctx(rl=rl, budget=_NoMoney("project_budget"), sub=_NoMoney("subscription"))
+    ctx.cp_manager = _CP(_NoMoney("wallet"))
+    return ctx
+
+
+async def test_caller_funded_reserve_takes_no_money_hold_even_with_a_wallet():
+    out = await ff.reserve_funding(
+        _caller_ctx(_RL()), admit=_AdmitSplit(reserved=2000, wallet_part=500),
+        funding_source=ff.CALLER_FUNDED_SOURCE, budget_bypass=False, has_wallet=True,
+    )
+    assert out.status is ff.ReserveStatus.OK
+    assert out.reservation.app_reservation_active is False
+    assert out.reservation.wallet_reservation_active is False
+    assert out.reservation.plan_reservation_active is True  # the quota hold stays
+
+
+async def test_caller_funded_settle_commits_quota_and_debits_nothing():
+    rl = _RL()
+    ctx = _caller_ctx(rl)
+    res = await _resv(ctx, admit=_AdmitSplit(reserved=2000), funding_source=ff.CALLER_FUNDED_SOURCE)
+    out = await ff.settle_plan_funding(
+        ctx, res, ranked_tokens=1500, total_cost_usd=0.4,
+        effective_policy=QuotaPolicy(tokens_per_month=10**9),
+        plan_has_lifetime_budget=True, user_budget_tokens=10**6,
+    )
+    assert [c["tokens"] for c in rl.commits] == [1500]
+    assert out.quota_commit_tokens == 1500
+    assert out.total_cost_usd == pytest.approx(0.4)  # recorded for reporting
+    assert out.primary_funding_usd == 0.0 and out.wallet_usd == 0.0 and out.project_absorption_usd == 0.0

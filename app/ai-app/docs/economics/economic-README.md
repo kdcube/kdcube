@@ -143,6 +143,9 @@ Funding sources are money or tokens used to pay for requests:
 - Subscription period budget (per‑month balance, USD)
 - Wallet or lifetime credits (USD balance, stored in cents)
 - Project budget (tenant/project balance, USD)
+- Caller (`funding_source="caller"`): every model call runs on the caller's own
+  provider key; quota applies and nothing is debited — see
+  [User Model Keys](../configuration/user-model-keys-README.md)
 
 Role determines which funding sources are allowed, while plan determines rate limits.
 
@@ -274,6 +277,8 @@ part; the wallet covers the over‑quota/over‑funds remainder.
   requests/concurrency gate is satisfied (a wallet lifts that gate). Otherwise the request is
   denied and **no money hold is left behind**.
 - Privileged bypass → no pre‑check; project budget is charged after run.
+- Caller‑funded turn → admitted on quota alone; the rate‑limit reservation is the
+  only hold, and settle commits quota without debiting any balance.
 - Wallet‑backed free users keep `plan_id=free` but use **wallet service limits**
   (requests/concurrency) while **token limits** remain from `free`.
 

@@ -392,6 +392,53 @@ async def test_regular_attachment_only_message_is_enqueued(_patch_ingress_depend
 
 
 @pytest.mark.asyncio
+async def test_client_config_never_carries_a_model_credential_into_the_turn(_patch_ingress_dependencies, caplog):
+    """A client-sent config.<provider>_api_key would outrank every server-side key lookup."""
+    redis = _MiniRedis()
+    app = SimpleNamespace(state=SimpleNamespace(
+        redis_async=redis,
+        conversation_browser=_IdleConversationBrowser(),
+        conversation_store=_DummyConversationStore(),
+    ))
+    session = SimpleNamespace(
+        session_id="sess-1", user_type=UserType.REGISTERED, user_id="user-1", username="user",
+        email="user@example.com", fingerprint="fp-1", roles=[], permissions=[], timezone="UTC",
+    )
+
+    with caplog.at_level("WARNING"):
+        result = await process_chat_message(
+            app=app,
+            chat_queue_manager=_QueueManagerCaptures(redis),
+            chat_comm=_DummyRelay(),
+            session=session,
+            request_context=SimpleNamespace(user_utc_offset_min=None),
+            message_data={
+                "conversation_id": "conv-1",
+                "external_events": [_text_event("event.user.followup", "hello")],
+                "config": {
+                    "claude_api_key": "sk-client-supplied",
+                    "OpenAI_API_Key": "sk-client-supplied-2",
+                    "custom_model_api_key": "sk-client-supplied-3",
+                    "role_models": {"answer": {"provider": "anthropic", "model": "m"}},
+                },
+            },
+            message_text="",
+            ingress=IngressConfig(
+                transport="sse", entrypoint="/sse/chat", component="chat.sse",
+                instance_id="ingress-1", stream_id="stream-1",
+            ),
+        )
+
+    assert result.ok is True
+    events = await _scoped_external_source(redis).read_since(0)
+    values = events[0].task_payload_model().config.values
+    assert values["role_models"] == {"answer": {"provider": "anthropic", "model": "m"}}
+    assert not {key.lower() for key in values} & {"claude_api_key", "openai_api_key", "custom_model_api_key"}
+    assert "sk-client-supplied" not in caplog.text
+    assert "claude_api_key" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_idle_non_reactive_external_event_is_recorded_without_wakeup(_patch_ingress_dependencies):
     redis = _MiniRedis()
     app = SimpleNamespace(state=SimpleNamespace(

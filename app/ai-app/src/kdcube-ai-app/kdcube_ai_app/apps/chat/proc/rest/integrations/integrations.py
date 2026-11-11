@@ -42,6 +42,7 @@ from kdcube_ai_app.infra.service_hub.inventory import (
     create_workflow_config,
     resolve_config_request_secrets,
 )
+from kdcube_ai_app.infra.service_hub.model_credentials import strip_client_model_credentials
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventPayload,
     ExternalEventRouting,
@@ -6187,7 +6188,12 @@ async def _load_bundle_workflow(
         session: UserSession,
         phases: Optional[Dict[str, float]] = None,
 ) -> tuple[Any, Any, str, str, ExternalEventPayload]:
-    cfg_req = payload.config_request or ConfigRequest()
+    # config_request is client input: drop any model credential before secrets resolve.
+    cfg_req = ConfigRequest(**strip_client_model_credentials(
+        payload.config_request.model_dump(exclude_unset=True) if payload.config_request else {},
+        door="integrations.operation",
+        subject=getattr(session, "session_id", None),
+    ))
     tenant_id, project_id = _resolve_path_scope(tenant=tenant, project=project)
     _bind_route_scope_to_config_request(cfg_req, tenant=tenant_id, project=project_id)
 

@@ -328,3 +328,29 @@ async def test_public_anonymous_invocation_masks_parent_authenticated_context(mo
             assert (context["tenant"], context["project"], context["bundle_id"]) == (TENANT, PROJECT, BUNDLE)
             assert get_current_auth_context() is parent
     assert get_current_auth_context() is None
+
+
+@pytest.mark.asyncio
+async def test_a_client_config_request_cannot_carry_a_model_credential(mounted, monkeypatch):
+    """config_request on the REST operation door is client input, like chat config."""
+    resolved_from: list = []
+
+    async def capture(config, *, bundle_id):
+        resolved_from.append(config)
+        return config
+
+    monkeypatch.setattr(integrations, "resolve_config_request_secrets", capture)
+    async with client_for(mounted) as client:
+        token = await mint(client)
+        response = await client.post(path(), json={
+            "data": {},
+            "config_request": {
+                "claude_api_key": "sk-client-supplied",
+                "openrouter_api_key": "sk-client-supplied-2",
+                "role_models": {"answer": {"provider": "anthropic", "model": "m"}},
+            },
+        }, headers={**cookie(), operation_csrf.OPERATION_CSRF_HEADER: token})
+    assert response.status_code == 200, response.text
+    operation_config = resolved_from[-1]
+    assert operation_config.role_models == {"answer": {"provider": "anthropic", "model": "m"}}
+    assert all(cfg.claude_api_key is None and cfg.openrouter_api_key is None for cfg in resolved_from)
