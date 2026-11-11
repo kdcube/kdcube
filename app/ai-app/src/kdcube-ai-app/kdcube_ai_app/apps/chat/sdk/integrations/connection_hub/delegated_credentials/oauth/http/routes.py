@@ -2932,6 +2932,19 @@ def _token_error(
     )
 
 
+# Card identity refusals that no retry clears: the Card the grant would be
+# recorded on cannot be identified as stored (for example a connector Card
+# whose entry door was emptied, W35). Reporting them as temporarily_unavailable
+# with "retry the request" kept a client retrying a refresh that fails for good.
+_PERMANENT_CARD_IDENTITY_REFUSALS = frozenset({
+    "card_identity_entry_resource_missing",
+    "card_identity_incomplete",
+    "card_identity_kind_mismatch",
+    "card_identity_collision",
+    "card_identity_mismatch",
+})
+
+
 # Live-grant states that end on their own: the Card sweep completes, an
 # in-flight Card mutation commits, or a store read succeeds again. The token is
 # still valid, so the client is told to retry after the wait instead of being
@@ -3456,12 +3469,19 @@ async def _issue_tokens(
                 str(card_conflict_error or "invalid_grant"),
                 "The delegated access card changed after approval; restart authorization.",
             )
+        conflict_reason = str(getattr(exc, "reason", "") or type(exc).__name__)
         LOGGER.error(
             "[connection-hub.oauth] token withheld: delegated card conflict "
             "client=%s reason=%s",
             client_id,
-            getattr(exc, "reason", type(exc).__name__),
+            conflict_reason,
         )
+        if conflict_reason in _PERMANENT_CARD_IDENTITY_REFUSALS:
+            return _token_error(
+                "invalid_grant",
+                f"The delegated access card cannot be recorded ({conflict_reason}); "
+                "a retry will not succeed, authorize again.",
+            )
         return _token_error(
             "temporarily_unavailable",
             "The delegated access card could not be recorded; retry the request.",
