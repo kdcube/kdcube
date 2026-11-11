@@ -37,6 +37,10 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     TelegramUserAdminStorage,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import integration_secret_value
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.identity import (
+    format_telegram_actor_user_id,
+    telegram_actor_id_template,
+)
 
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
@@ -75,13 +79,20 @@ async def _telegram_bot_token(entrypoint: Any, *, integration_id: str = "") -> s
     )
 
 
-def _telegram_recipient_for_user(storage_root: str | pathlib.Path, *, user_id: str) -> dict[str, Any] | None:
+def _telegram_recipient_for_user(
+    storage_root: str | pathlib.Path,
+    *,
+    user_id: str,
+    entrypoint: Any = None,
+    integration_id: str = "",
+) -> dict[str, Any] | None:
     target = str(user_id or "").strip()
     if not target:
         return None
     try:
         registry = TelegramUserAdminStorage(storage_root)
         rows = registry.list_users()
+        actor_id_template = telegram_actor_id_template(entrypoint, integration_id=integration_id)
     except Exception:
         log.exception("[delivery.telegram] failed to read telegram registry user_id=%s", target)
         return None
@@ -93,7 +104,7 @@ def _telegram_recipient_for_user(storage_root: str | pathlib.Path, *, user_id: s
             continue
         telegram_user_id = str(row.get("telegram_user_id") or "").strip()
         kdcube_user_id = str(row.get("kdcube_user_id") or "").strip()
-        bundle_user_scope = kdcube_user_id or (f"telegram_{telegram_user_id}" if telegram_user_id else "")
+        bundle_user_scope = kdcube_user_id or format_telegram_actor_user_id(telegram_user_id, actor_id_template)
         if bundle_user_scope != target:
             continue
         chat_id = str(row.get("telegram_chat_id") or telegram_user_id or "").strip()
@@ -482,7 +493,12 @@ async def send_report_to_telegram(
     chat_id = _infer_telegram_chat_id(explicit=telegram_chat_id, conversation_id=conversation_id)
     recipient = None
     if not chat_id:
-        recipient = _telegram_recipient_for_user(storage_root, user_id=user_id)
+        recipient = _telegram_recipient_for_user(
+            storage_root,
+            user_id=user_id,
+            entrypoint=entrypoint,
+            integration_id=telegram_integration_id,
+        )
         chat_id = str((recipient or {}).get("chat_id") or "").strip()
     if not chat_id:
         return {

@@ -10,6 +10,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     resolve_config,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import select_integration
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.identity import telegram_actor_user_id
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_id, get_current_request_context
 
 BUNDLE_ID = ""
@@ -397,7 +398,8 @@ async def delete_conversation(
                 tenant=tenant,
                 project=project,
                 user_type=str(user.get("role") or "anonymous"),
-                user_or_fp=effective_user_id or f"telegram_{user.get('telegram_user_id')}",
+                user_or_fp=effective_user_id
+                or telegram_actor_user_id(entrypoint, user.get("telegram_user_id")),
                 conversation_id=conversation_id,
             )
     registry_result["telegram_user_id"] = str(user.get("telegram_user_id") or "")

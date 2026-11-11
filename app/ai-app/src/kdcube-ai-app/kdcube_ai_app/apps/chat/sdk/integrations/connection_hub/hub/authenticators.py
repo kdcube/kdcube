@@ -5,6 +5,10 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from kdcube_ai_app.apps.chat.sdk.identity_authority import resolve_platform_authority
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import validate_telegram_init_data
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.identity import (
+    format_telegram_actor_user_id,
+    telegram_actor_id_template_from_definition,
+)
 from connection_hub.authenticators.models import (
     AuthenticatedRequest,
     RequestEnvelope,
@@ -345,6 +349,12 @@ async def _telegram_token_for_row(
     return ""
 
 
+def _row_actor_id_template(row: Mapping[str, Any] | None) -> str:
+    props = row.get("properties") if isinstance(row, Mapping) and isinstance(row.get("properties"), Mapping) else {}
+    definition = props.get("definition") if isinstance(props.get("definition"), Mapping) else {}
+    return telegram_actor_id_template_from_definition(definition)
+
+
 def _row_web_app_auth_max_age(row: Mapping[str, Any], cfg: Mapping[str, Any]) -> int:
     props = row.get("properties") if isinstance(row.get("properties"), Mapping) else {}
     definition = props.get("definition") if isinstance(props.get("definition"), Mapping) else {}
@@ -441,6 +451,7 @@ async def authenticate_request(
     verified = None
     selected_authenticator = ""
     selected_connection_id = ""
+    selected_row: Mapping[str, Any] | None = None
     selected_authority_id = authority_id
     last_error = ""
     rows = matching_authenticator_rows(
@@ -495,6 +506,7 @@ async def authenticate_request(
                 max_age_seconds=_row_web_app_auth_max_age(row, cfg),
             )
             selected_authenticator = _str(row.get("authenticator_id"))
+            selected_row = row
             selected_authority_id = _str(row.get("authority_id")) or selected_authority_id
             selected_connection_id = _str(row.get("connection_id") or row.get("integration_id")) or selected_authenticator
             break
@@ -542,7 +554,10 @@ async def authenticate_request(
             error="telegram_subject_missing",
         ).to_dict()
 
-    actor_user_id = f"telegram_{telegram_user_id}"
+    actor_user_id = format_telegram_actor_user_id(
+        telegram_user_id,
+        _row_actor_id_template(selected_row),
+    )
     edge = edge_store.resolve_edge(from_provider="telegram", from_subject=telegram_user_id) or {}
     platform_user_id = _str(edge_target(edge).get("user_id"))
     principal = (

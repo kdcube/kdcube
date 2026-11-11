@@ -186,7 +186,7 @@ therefore still required even though duplicate `react.write` is rejected.
 | --- | --- |
 | `stream_activity=true`, `stream_activity_display=true` | Stream progress, files, citations, statuses, and errors. |
 | `stream_activity=true`, `stream_activity_display=false` | Suppress progress display, but still deliver `chat.files` and `chat.error` live. |
-| `stream_activity=false` | Disable the live pass. Final delivery may still send the final answer and files when `send_responses=true`. |
+| `stream_activity=false` | Disable the live pass. With `send_responses=true`, final delivery sends the final answer, then the timeline's files and every file the turn announced through `chat.files` (collected silently while the turn ran), each once. |
 | `send_responses=false` | Do not send the final rendered turn response. |
 
 ## Implementation Map

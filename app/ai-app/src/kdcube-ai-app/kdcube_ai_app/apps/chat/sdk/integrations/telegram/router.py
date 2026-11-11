@@ -52,10 +52,12 @@ async def deliver_turn_to_telegram(
     progress_message_id: str | int | None = None,
     progress_summary: str = "",
     send_responses: bool = True,
+    extra_file_items: list[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     telegram_messages = render_turn_messages(
         turn_result=turn_result,
         delivered_file_keys=delivered_file_keys,
+        extra_file_items=extra_file_items,
     )
     log.info(
         "[%s] telegram response rendered | update_id=%s message_thread_id=%s source=%s messages=%s files=%s details=%s",
@@ -117,6 +119,7 @@ def render_turn_messages(
     *,
     turn_result: Dict[str, Any],
     delivered_file_keys: set[str] | None = None,
+    extra_file_items: list[Dict[str, Any]] | None = None,
 ) -> list[TelegramMessage]:
     return render_telegram_messages_from_timeline(
         timeline=(
@@ -127,6 +130,7 @@ def render_turn_messages(
         react_turn=turn_result,
         exclude_file_keys=delivered_file_keys or set(),
         prefer_react_turn_answer=True,
+        extra_file_items=extra_file_items,
     )
 
 

@@ -370,7 +370,8 @@ Before calling the bundle done, prove:
   not `/widgets/<widget_alias>/`
 - the webhook rejects missing or wrong `X-Telegram-Bot-Api-Secret-Token`
 - `setWebhook` points at the active public URL
-- an unlinked Telegram user sees the Connection Hub connect prompt
+- an unlinked Telegram user sees the Connection Hub connect prompt (or, with
+  `allow_unconnected: true`, gets an answer as an `external` user)
 - a linked Telegram user can be bound to a conversation and run the intended workflow
 - a chat update submits through the shared chat ingress and receives a final
   Telegram delivery
@@ -390,6 +391,8 @@ kdcube_ai_app.apps.chat.sdk.integrations.telegram
                       and progress-card finalization
   router.py           framework-neutral turn-result rendering and delivery
   webapp_auth.py      Telegram Mini App initData extraction and signature validation
+  identity.py         Telegram actor user id construction from the configured
+                      actor_id_template
   chat_submit.py      helpers for /steer, /followup, RawAttachment, UserSession,
                       RequestContext, and IngressConfig
   signed_downloads.py short-lived signed link helpers re-exported for Telegram clients
@@ -770,6 +773,47 @@ when turn completes:
 `TelegramActivityStreamer.progress_summary()`. File messages that were already
 streamed are excluded by passing `delivered_file_keys`.
 
+### One Card From Acknowledgement To Answer
+
+An app that acknowledges a Telegram message immediately (for example a short
+"received" reply sent from the webhook) can make that acknowledgement the
+progress card, so the user sees one message move from acknowledgement through
+progress to the answer instead of two cards:
+
+```python
+res = await telegram_user_admin.run_with_queued_telegram_delivery(
+    self,
+    runner=run_turn,
+    progress_message_id=ack_message_id,  # the app's own stored id, or None
+)
+```
+
+With live streaming on, the streamer adopts that message
+(`TelegramActivityStreamer(initial_message_id=...)`) and edits it instead of
+creating a card on the first activity. Without an id the card is created
+lazily, as before. Final-only delivery (`stream_activity=false`) does not adopt
+the message.
+
+Three optional definition properties shape the card text:
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `integrations.telegram.progress_start_text` | empty | Text written into an adopted card when the turn starts. Ignored when no message was adopted, so it never creates a card by itself. |
+| `integrations.telegram.progress_status_labels` | empty | Map of step name to label for `chat.step` / `chat.service` status lines. Keys and event step/title are compared case-insensitively with `_`/`-` treated as spaces; an exact step or title match wins, otherwise the first key that prefixes the step or title. Unmapped steps use the event title or step. |
+| `integrations.telegram.progress_status_format` | `{label}: {status}` | Format of a status line. Fields: `{label}`, `{status}`, `{step}`, `{title}`. An unusable format falls back to the default. |
+
+```yaml
+integrations:
+  telegram.default:
+    provider: telegram
+    definition:
+      progress_start_text: "Seen, working on it"
+      progress_status_format: "Working: {label}"
+      progress_status_labels:
+        web_search: "searching the web"
+        get_route: "planning the route"
+```
+
 ## Activity Streaming
 
 ```python
@@ -820,7 +864,7 @@ Two bundle properties control this behavior:
 
 | Property | Meaning |
 | --- | --- |
-| `integrations.telegram.stream_activity` | Enables the Telegram activity streamer. When this is `false`, no live progress or live file delivery is sent by the streamer. Final delivery can still run after the turn according to `send_responses`. |
+| `integrations.telegram.stream_activity` | Enables the Telegram activity streamer. When this is `false`, nothing is sent while the turn runs. With `send_responses=true`, the streamer still collects the files the turn announces through `chat.files` (`collect_files=True`), and final delivery appends them after the answer, de-duplicated against the files in the result's turn log or timeline. A runner result therefore does not need to carry hosted files for final-only delivery to send them. |
 | `integrations.telegram.stream_activity_display` | Controls the progress display inside the streamer. When this is `false`, the streamer suppresses progress/status/thinking/source messages but still delivers `chat.files` events and `chat.error` messages. Use this when Telegram should stay quiet during long turns but files produced during the turn must still be delivered immediately and de-duplicated from final delivery. |
 
 When `turn_id` is provided, the streamer ignores activity whose
@@ -832,6 +876,35 @@ across turn execution, so two Telegram turns for one conversation do not stream
 or finalize concurrently. The webhook submit path does not take this lock; a
 message that arrives while a turn is running is submitted to chat ingress, which
 admits it as a followup/steer continuation into the running turn.
+
+## Access And Identity Properties
+
+A Telegram bot is either a linked-accounts bot, where every chatter first
+connects a platform account, or an open bot that anyone can talk to. The
+integration definition selects the mode per deployment:
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `integrations.telegram.allow_unconnected` | `false` | When `false`, a Telegram user without a linked platform account receives the Connection Hub connect prompt and no turn is submitted. When `true`, that user's turn is submitted as an `external` user with no platform roles or permissions; linked users are unaffected. Only a real true value (`true`, `"true"`, `"yes"`, `"on"`, `1`) enables it. |
+| `integrations.telegram.actor_id_template` | `telegram_{telegram_user_id}` | Namespace of the actor user id a Telegram chatter is stored, accounted, and addressed under. It must contain the `{telegram_user_id}` placeholder and no other field; an unusable template raises instead of silently re-keying users. The webhook submit path, Mini App identity, Connection Hub request authentication, report delivery, and automation delivery all build or match the id through `integrations.telegram.identity`. |
+
+```yaml
+integrations:
+  telegram.default:
+    provider: telegram
+    enabled: true
+    definition:
+      allow_unconnected: true
+      actor_id_template: "internal:telegram:{telegram_user_id}"
+```
+
+Choose `actor_id_template` once, before the first user chats: changing it later
+starts every existing Telegram user on a new, empty storage scope. A
+deployment that federates identities across surfaces uses it to keep Telegram
+actors in the same canonical namespace as its other providers.
+
+Both properties may also sit inside the `webhook` block, like the streaming
+properties.
 
 ## Mini App Auth
 

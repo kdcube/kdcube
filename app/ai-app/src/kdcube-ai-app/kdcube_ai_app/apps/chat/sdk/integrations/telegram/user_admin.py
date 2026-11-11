@@ -50,6 +50,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     register_config,
     resolve_config,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.identity import telegram_actor_user_id
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_bundle_id,
     get_current_request_context,
@@ -597,6 +598,32 @@ def _telegram_definition_prop(entrypoint: Any, key: str, default: Any = None, *,
     )
 
 
+def _telegram_definition_flag(entrypoint: Any, key: str, default: bool = False, *, integration_id: str = "") -> bool:
+    """Read a boolean definition prop strictly: only a real true value enables it."""
+    value = _telegram_definition_prop(entrypoint, key, default, integration_id=integration_id)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    return bool(default)
+
+
+def _telegram_allows_unconnected(entrypoint: Any, *, integration_id: str = "") -> bool:
+    """Whether Telegram users without a linked platform account may chat.
+
+    Default ``False``: a turn from an unlinked Telegram account is answered with
+    the connect prompt. With ``allow_unconnected: true`` the turn runs as an
+    ``external`` user with no platform roles or permissions.
+    """
+    return _telegram_definition_flag(entrypoint, "allow_unconnected", False, integration_id=integration_id)
+
+
 def _telegram_target_agent_id(entrypoint: Any) -> str:
     bundle_prop = getattr(entrypoint, "bundle_prop", None)
     configured = ""
@@ -660,7 +687,11 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
             "topic_bound": bool(conversation_resolution.get("topic_bound")),
         }
     turn_id = new_turn_id()
-    actor_user_id = f"telegram_{telegram_user_id}"
+    actor_user_id = telegram_actor_user_id(
+        entrypoint,
+        telegram_user_id,
+        integration_id=str(summary.get("integration_id") or "").strip(),
+    )
     identity_authority = await _telegram_platform_authority(
         entrypoint,
         actor_user_id=actor_user_id,
@@ -668,7 +699,10 @@ async def submit_telegram_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> D
         local_role=role,
         source="telegram.webhook",
     )
-    if not str(identity_authority.get("platform_user_id") or "").strip():
+    if not str(identity_authority.get("platform_user_id") or "").strip() and not _telegram_allows_unconnected(
+        entrypoint,
+        integration_id=str(summary.get("integration_id") or "").strip(),
+    ):
         return {
             "mode": "connection_required",
             "accepted": True,
@@ -820,7 +854,19 @@ def _queued_telegram_meta(entrypoint: Any) -> Dict[str, Any]:
     return telegram
 
 
-async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> Dict[str, Any]:
+async def run_with_queued_telegram_delivery(
+    entrypoint: Any,
+    *,
+    runner: Any,
+    progress_message_id: str | int | None = None,
+) -> Dict[str, Any]:
+    """Run a queued Telegram turn, stream its progress, and deliver the result.
+
+    ``progress_message_id`` is an existing Telegram message the app already
+    posted for this turn (for example an acknowledgement sent at webhook
+    time). When live streaming is on, progress edits that message, so the
+    acknowledgement, the progress, and the final answer share one card.
+    """
     telegram_meta = _queued_telegram_meta(entrypoint)
     if not telegram_meta:
         return await runner()
@@ -836,22 +882,37 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         or getattr(getattr(comm_context, "routing", None), "turn_id", "")
         or ""
     ).strip()
-    stream_enabled = bool(
-        _telegram_definition_prop(entrypoint, "stream_activity", True, integration_id=integration_id)
-        and _telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)
-    )
+    stream_activity = bool(_telegram_definition_prop(entrypoint, "stream_activity", True, integration_id=integration_id))
+    send_responses = bool(_telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id))
+    stream_enabled = stream_activity and send_responses
+    # Final-only delivery (stream_activity=false) still owes the user the files
+    # the turn announced through chat.files: those files need not be in the
+    # runner's result or timeline, so the streamer observes them silently and
+    # final delivery appends them after the answer.
+    collect_files = send_responses and not stream_activity
     stream_show_progress = bool(
         _telegram_definition_prop(entrypoint, "stream_activity_display", True, integration_id=integration_id)
     )
+    status_labels = _telegram_definition_prop(entrypoint, "progress_status_labels", None, integration_id=integration_id)
+    status_format = _telegram_definition_prop(entrypoint, "progress_status_format", "", integration_id=integration_id)
+    start_text = str(
+        _telegram_definition_prop(entrypoint, "progress_start_text", "", integration_id=integration_id) or ""
+    ).strip()
     async with TelegramActivityStreamer(
         comm=getattr(entrypoint, "comm", None),
         bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
         chat_id=chat_id,
         message_thread_id=message_thread_id,
         turn_id=turn_id,
-        enabled=stream_enabled,
+        enabled=stream_enabled or collect_files,
         show_progress=stream_show_progress,
+        collect_files=collect_files,
+        initial_message_id=progress_message_id if stream_enabled else None,
+        status_labels=status_labels,
+        status_format=str(status_format or ""),
     ) as telegram_streamer:
+        if stream_enabled and start_text:
+            await telegram_streamer.send_start_text(start_text)
         result = await runner()
     if not isinstance(result, dict):
         result = {}
@@ -865,7 +926,8 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         delivered_file_keys=telegram_streamer.delivered_file_keys() if telegram_streamer else set(),
         progress_message_id=telegram_streamer.progress_message_id() if telegram_streamer else None,
         progress_summary=telegram_streamer.progress_summary() if telegram_streamer else "",
-        send_responses=bool(_telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)),
+        send_responses=send_responses,
+        extra_file_items=telegram_streamer.collected_file_items() if telegram_streamer else [],
     )
     result["telegram"] = {
         "queued_delivery": True,

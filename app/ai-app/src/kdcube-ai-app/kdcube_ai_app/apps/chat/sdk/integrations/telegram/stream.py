@@ -61,11 +61,15 @@ class TelegramActivityStreamer:
         turn_id: str | None = None,
         enabled: bool = True,
         show_progress: bool = True,
+        collect_files: bool = False,
         quiet_seconds: float = 1.5,
         min_send_interval_seconds: float = 3.0,
         max_message_chars: int = 1400,
         send_messages: SendMessages | None = None,
         edit_text_message: EditTextMessage | None = None,
+        initial_message_id: str | int | None = None,
+        status_labels: Mapping[str, str] | None = None,
+        status_format: str | None = None,
     ) -> None:
         self.comm = comm
         self.bot_token = str(bot_token or "").strip()
@@ -77,6 +81,10 @@ class TelegramActivityStreamer:
         # (chat.delta / chat.step / chat.service / chat.compaction / chat.citations)
         # but KEEP file delivery (chat.files) and error surfacing (chat.error).
         self.show_progress = bool(show_progress)
+        # When True, observe ONLY chat.files and record the files instead of
+        # sending them: final-only delivery appends them after the answer.
+        # Nothing is sent to Telegram while the turn runs.
+        self.collect_files = bool(collect_files)
         self.quiet_seconds = max(0.3, float(quiet_seconds or 1.5))
         self.min_send_interval_seconds = max(0.5, float(min_send_interval_seconds or 3.0))
         self.max_message_chars = max(300, int(max_message_chars or 1400))
@@ -89,7 +97,14 @@ class TelegramActivityStreamer:
         self._seen_progress_texts: set[str] = set()
         self._seen_activity_signatures: dict[str, float] = {}
         self._delivered_file_keys: set[str] = set()
-        self._progress_message_id: str | int | None = None
+        self._collected_files: list[dict[str, Any]] = []
+        self._collected_file_keys: set[str] = set()
+        # A caller that already posted a status message for this turn (for
+        # example an acknowledgement sent at webhook time) passes its id so
+        # progress edits that message instead of creating a second card.
+        self._progress_message_id: str | int | None = _normalize_message_id(initial_message_id)
+        self._status_labels = _normalize_status_labels(status_labels)
+        self._status_format = str(status_format or "").strip() or DEFAULT_STATUS_FORMAT
         self._progress_chunks: list[str] = []
         self._last_send_at = 0.0
         self._listener_attached = False
@@ -102,11 +117,25 @@ class TelegramActivityStreamer:
     def delivered_file_keys(self) -> set[str]:
         return set(self._delivered_file_keys)
 
+    def collected_file_items(self) -> list[dict[str, Any]]:
+        """Files announced by chat.files this turn and held for final delivery."""
+        return [dict(item) for item in self._collected_files]
+
     def progress_message_id(self) -> str | int | None:
         return self._progress_message_id
 
     def progress_summary(self, *, max_chars: int = 3900) -> str:
         return self._progress_body(limit=max(300, int(max_chars or 3900))).strip()
+
+    async def send_start_text(self, text: str) -> None:
+        """Write ``text`` into an adopted progress message when the turn starts.
+
+        A no-op unless the streamer is enabled and adopted an existing message
+        (``initial_message_id``): it never creates a new card by itself.
+        """
+        if not self.enabled or not self._progress_message_id or not str(text or "").strip():
+            return
+        await self._send_text(str(text), reason="start")
 
     async def __aenter__(self) -> "TelegramActivityStreamer":
         add_listener = getattr(self.comm, "add_activity_listener", None)
@@ -181,6 +210,8 @@ class TelegramActivityStreamer:
         return str(conv.get("turn_id") or "").strip()
 
     def _should_accept_activity(self, activity: Mapping[str, Any]) -> bool:
+        if self.collect_files:
+            return self._activity_type(activity) == "chat.files"
         if self.show_progress:
             return True
         return self._activity_type(activity) in {"chat.files", "chat.error"}
@@ -332,6 +363,10 @@ class TelegramActivityStreamer:
         if not isinstance(env, Mapping):
             return
         typ = str(env.get("type") or "")
+        if self.collect_files:
+            if typ == "chat.files":
+                self._collect_files_event(env)
+            return
         # When progress display is suppressed, process ONLY file delivery
         # (chat.files) and errors (chat.error); skip thinking/step/progress.
         if not self.show_progress and typ not in {"chat.files", "chat.error"}:
@@ -418,6 +453,19 @@ class TelegramActivityStreamer:
         result = await self._send_file_messages(messages, reason="chat.files")
         if result.get("ok"):
             self._delivered_file_keys.update(pending_keys)
+
+    def _collect_files_event(self, env: Mapping[str, Any]) -> None:
+        data = env.get("data") if isinstance(env.get("data"), Mapping) else {}
+        items = data.get("items") if isinstance(data, Mapping) else None
+        if not isinstance(items, list):
+            return
+        for item in items:
+            file_item = self._file_item_from_event_item(item)
+            key = _file_delivery_key(file_item)
+            if not file_item or not key or key in self._collected_file_keys:
+                continue
+            self._collected_file_keys.add(key)
+            self._collected_files.append(file_item)
 
     async def _handle_citations_event(self, env: Mapping[str, Any]) -> None:
         data = env.get("data") if isinstance(env.get("data"), Mapping) else {}
@@ -553,9 +601,18 @@ class TelegramActivityStreamer:
         label = title or step or "Progress"
         await self._send_once(
             key=f"status:{env.get('type')}:{step}:{status}:{label}",
-            text=f"{label}: {status}",
+            text=self._status_text(step=step, title=title, label=label, status=status),
             reason="status",
         )
+
+    def _status_text(self, *, step: str, title: str, label: str, status: str) -> str:
+        mapped = _lookup_status_label(self._status_labels, step=step, title=title)
+        effective_label = mapped or label
+        try:
+            return self._status_format.format(label=effective_label, status=status, step=step, title=title)
+        except (KeyError, IndexError, ValueError):
+            log.warning("[telegram.stream] invalid status_format=%r; using default", self._status_format)
+            return DEFAULT_STATUS_FORMAT.format(label=effective_label, status=status, step=step, title=title)
 
     @staticmethod
     def _is_internal_status(*, step: str, title: str) -> bool:
@@ -733,6 +790,51 @@ class TelegramActivityStreamer:
         if title:
             return title
         return "Tool update received."
+
+
+DEFAULT_STATUS_FORMAT = "{label}: {status}"
+
+
+def _normalize_message_id(value: Any) -> str | int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value or None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lstrip("-").isdigit():
+        number = int(text)
+        return number or None
+    return text
+
+
+def _normalize_status_labels(labels: Mapping[str, Any] | None) -> list[tuple[str, str]]:
+    """Normalized (key, label) pairs in configuration order; non-string labels are ignored."""
+    if not isinstance(labels, Mapping):
+        return []
+    out: list[tuple[str, str]] = []
+    for key, value in labels.items():
+        normalized_key = _normalize_status_token(str(key or ""))
+        label = str(value).strip() if isinstance(value, str) else ""
+        if normalized_key and label:
+            out.append((normalized_key, label))
+    return out
+
+
+def _lookup_status_label(labels: list[tuple[str, str]], *, step: str, title: str) -> str:
+    """Exact step/title match first, then the first configured key that prefixes either."""
+    if not labels:
+        return ""
+    step_key = _normalize_status_token(step)
+    title_key = _normalize_status_token(title)
+    for key, label in labels:
+        if key in (step_key, title_key):
+            return label
+    for key, label in labels:
+        if (step_key and step_key.startswith(key)) or (title_key and title_key.startswith(key)):
+            return label
+    return ""
 
 
 def _telegram_edit_not_modified(result: Mapping[str, Any] | None) -> bool:

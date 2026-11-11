@@ -86,7 +86,9 @@ processor later claims queued chat turn
 There is no webhook-side agent-execution fallback. If shared chat ingress is
 unavailable, the webhook sends a short retry response and does not run the app
 in the webhook process. An unlinked user receives the Connection Hub linking
-prompt directly; that prompt is a transport response, not an agent turn.
+prompt directly; that prompt is a transport response, not an agent turn. An
+open bot sets `allow_unconnected: true` to submit those turns as `external`
+users instead; see the Telegram SDK Integration access properties.
 
 The submit and delivery paths do not use process-local conversation locks. Such
 a lock cannot order requests across processors or replicas. Shared chat ingress,
@@ -387,8 +389,10 @@ the final answer reducer. The final Telegram answer is still produced after
 display part of the streamer, but the streamer still accepts `chat.files` and
 `chat.error` events. This lets Telegram stay quiet during a turn while preserving
 live file delivery and final-delivery de-duplication. Set
-`integrations.telegram.stream_activity=false` only when the streamer itself
-should be disabled.
+`integrations.telegram.stream_activity=false` for final-only delivery: nothing
+is sent during the turn, the streamer only collects `chat.files` items, and
+`deliver_turn_to_telegram(..., extra_file_items=...)` sends those files after
+the answer.
 
 The wrapper passes `delivered_file_keys` from the streamer to final delivery so
 file artifacts already sent during progress streaming are not sent twice.
