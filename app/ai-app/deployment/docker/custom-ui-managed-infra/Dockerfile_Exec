@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash curl ca-certificates grep findutils patch ripgrep \
     fonts-noto fonts-noto-cjk fonts-noto-color-emoji \
     libmagic1 file \
+    libatomic1 \
     && rm -rf /var/lib/apt/lists/* && apt-get clean
 RUN which patch && patch --version | head -n 1
 
