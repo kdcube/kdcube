@@ -213,6 +213,27 @@ The descriptor can offer these user-selectable families:
 | Delegated resource families | family id | Not projected to the resident caller. |
 | Subagents | one `enabled` capability | Spawner, tool, and guidance are not installed. |
 
+### Named-service actions in the ceiling
+
+An agent's named-service entry
+(`surfaces.as_consumer.agents.<agent>.tools[kind=named_service].namespaces.<namespace>.allowed`)
+sets the action ceiling for that namespace by one rule:
+
+| `allowed` for the namespace | Action ceiling |
+| --- | --- |
+| `object.action` | Every action the Connection Hub catalog offers for the namespace, including actions the provider adds later. |
+| `object.action` and `object.action.<name>` entries | The same: every action in the catalog. The listed names change nothing. |
+| `object.action.<name>` entries only | Exactly the listed actions. |
+| no action entry | No action. |
+
+Operations that are not actions (`object.get`, `object.list`, ...) are always
+read exactly. The capability ceiling, the picker states, a picker save, the
+Agent Card base and the dispatch gate all read `allowed` by this rule: with
+only listed actions, the gate admits the action call for those actions and
+refuses any other with a fix owned by the app admin. An administrator can
+narrow the ceiling further on the descriptor Control Card; see
+[Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md#named-service-actions-on-a-descriptor-control).
+
 ## Creation, edits, and descriptor changes
 
 The Control Card id is deterministic for the grantor, descriptor issuer kind,
