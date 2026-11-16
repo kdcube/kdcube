@@ -24,6 +24,7 @@ associated data, so a record copied to another reference fails to open.
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 import os
 import re
@@ -255,6 +256,40 @@ class FileRootKeyProvider:
         return key_id
 
 
+ROOT_KEY_PROVIDER_ENV = "KDCUBE_HOST_VAULT_ROOT_KEY_PROVIDER"
+
+
+def load_root_key_provider(home: Path, spec: str | None = None) -> RootKeyProvider:
+    """The vault's root-key custody, chosen by the host operator.
+
+    ``spec`` (default: ``$KDCUBE_HOST_VAULT_ROOT_KEY_PROVIDER``, else ``file``):
+
+    - ``file``: :class:`FileRootKeyProvider` at ``<home>/root-keys`` (the default).
+    - ``module:factory``: ``factory(home)`` from an importable module returns the
+      provider, e.g. a TEE-, HSM- or OS-keychain-backed one. The module must be on the
+      vault process's path; the operator owns that code like the vault itself.
+
+    The value names code, never key material. An unknown, unimportable or non-provider
+    spec refuses with ``backend_unavailable`` rather than falling back to files.
+    """
+    spec = (spec if spec is not None else os.environ.get(ROOT_KEY_PROVIDER_ENV, "")).strip() or "file"
+    if spec == "file":
+        return FileRootKeyProvider(Path(home) / "root-keys")
+    module_name, sep, attr = spec.partition(":")
+    if not sep or not module_name or not attr:
+        raise VaultError(ErrorCode.BACKEND_UNAVAILABLE, detail="root key provider spec: file | module:factory")
+    try:
+        factory = getattr(importlib.import_module(module_name), attr)
+    except (ImportError, AttributeError) as exc:
+        raise VaultError(ErrorCode.BACKEND_UNAVAILABLE,
+                         detail=f"root key provider {spec!r}: {type(exc).__name__}") from None
+    provider = factory(Path(home))
+    if not all(callable(getattr(provider, m, None))
+               for m in ("current_key_id", "key", "rotate", "qualify_custody")):
+        raise VaultError(ErrorCode.BACKEND_UNAVAILABLE, detail=f"root key provider {spec!r}: not a RootKeyProvider")
+    return provider
+
+
 def _publish_private_file(path: Path, value: bytes, *, mode: int) -> None:
     # A unique name lets rotation recover after a crash leaves a temporary
     # key or marker behind. Never follow or overwrite that abandoned inode.
@@ -377,6 +412,8 @@ __all__ = [
     "Envelope",
     "FakeInMemoryRootKeyProvider",
     "FileRootKeyProvider",
+    "ROOT_KEY_PROVIDER_ENV",
     "RootKeyProvider",
+    "load_root_key_provider",
     "SealedValue",
 ]

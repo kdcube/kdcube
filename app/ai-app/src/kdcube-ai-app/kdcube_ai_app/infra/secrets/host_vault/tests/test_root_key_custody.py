@@ -149,3 +149,55 @@ def test_private_key_read_rechecks_the_opened_inodes_before_return(provider, mon
 
     monkeypatch.setattr(keys.os, "read", change_during_read)
     refused(lambda: provider.key(current))
+
+
+# ── operator-selected root-key provider (KDCUBE_HOST_VAULT_ROOT_KEY_PROVIDER) ──
+
+import sys as _sys
+import types as _types
+
+from kdcube_ai_app.infra.secrets.host_vault import keys as _keys
+from kdcube_ai_app.infra.secrets.host_vault.protocol import ErrorCode as _ErrorCode
+from kdcube_ai_app.infra.secrets.host_vault.protocol import VaultError as _VaultError
+
+
+def _install_module(monkeypatch, name, **attrs):
+    module = _types.ModuleType(name)
+    for k, v in attrs.items():
+        setattr(module, k, v)
+    monkeypatch.setitem(_sys.modules, name, module)
+
+
+def test_root_key_provider_defaults_to_files(tmp_path, monkeypatch):
+    monkeypatch.delenv(_keys.ROOT_KEY_PROVIDER_ENV, raising=False)
+    provider = _keys.load_root_key_provider(tmp_path)
+    assert isinstance(provider, _keys.FileRootKeyProvider)
+    assert provider._dir == tmp_path / "root-keys"
+    monkeypatch.setenv(_keys.ROOT_KEY_PROVIDER_ENV, "  file ")
+    assert isinstance(_keys.load_root_key_provider(tmp_path), _keys.FileRootKeyProvider)
+
+
+def test_root_key_provider_from_operator_factory(tmp_path, monkeypatch):
+    seen = {}
+
+    def factory(home):
+        seen["home"] = home
+        return _keys.FakeInMemoryRootKeyProvider()
+
+    _install_module(monkeypatch, "fake_custody_plugin", provider=factory)
+    monkeypatch.setenv(_keys.ROOT_KEY_PROVIDER_ENV, "fake_custody_plugin:provider")
+    provider = _keys.load_root_key_provider(tmp_path)
+    assert isinstance(provider, _keys.FakeInMemoryRootKeyProvider)
+    assert seen["home"] == tmp_path
+    # an explicit spec wins over the environment
+    assert isinstance(_keys.load_root_key_provider(tmp_path, "file"), _keys.FileRootKeyProvider)
+
+
+@pytest.mark.parametrize("spec", ["nope", "missing_module_xyz:provider", "fake_custody_plugin:absent",
+                                  "fake_custody_plugin:not_a_provider", ":provider", "fake_custody_plugin:"])
+def test_root_key_provider_refuses_instead_of_falling_back(tmp_path, monkeypatch, spec):
+    _install_module(monkeypatch, "fake_custody_plugin", not_a_provider=lambda home: object())
+    with pytest.raises(_VaultError) as err:
+        _keys.load_root_key_provider(tmp_path, spec)
+    assert err.value.code is _ErrorCode.BACKEND_UNAVAILABLE
+    assert not (tmp_path / "root-keys").exists(), "never silently falls back to file custody"
