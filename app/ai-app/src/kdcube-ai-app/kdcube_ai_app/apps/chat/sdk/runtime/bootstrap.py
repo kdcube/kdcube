@@ -56,17 +56,29 @@ except Exception:  # pragma: no cover
 # helpers for generic CV blob
 # ---------------------------
 
-def _decode_value(packed: dict) -> Any:
-    kind = packed.get("kind")
-    data = packed.get("data")
-    if kind == "json":
+_LEGACY_ENVELOPE_KINDS = frozenset({"json", "pickle_b64", "repr"})
+
+
+def _decode_value(packed: Any) -> Any:
+    """Decode one generic ContextVar snapshot value.
+
+    `snapshot._encode_value` stores JSON-safe values as they are. An older
+    writer wrapped them as ``{"kind": ..., "data": ...}``; only that exact
+    shape is unwrapped. Reading every dict as an envelope returned its missing
+    "data" and set dict-valued ContextVars to None in the child (W39: the
+    bundle call context lost the conversation's named-service denials).
+    """
+    if (
+        isinstance(packed, dict)
+        and set(packed) == {"kind", "data"}
+        and packed.get("kind") in _LEGACY_ENVELOPE_KINDS
+    ):
+        kind = packed["kind"]
+        data = packed["data"]
+        if kind == "pickle_b64" and cloudpickle is not None:
+            return cloudpickle.loads(base64.b64decode(data.encode("ascii")))
         return data
-    if kind == "pickle_b64" and cloudpickle is not None:
-        return cloudpickle.loads(base64.b64decode(data.encode("ascii")))
-    if kind == "repr":
-        # last resort; you may choose to leave it as string
-        return data
-    return data
+    return packed
 
 
 def _find_cv_in_child(entry: dict) -> Optional[ContextVar]:
@@ -402,7 +414,26 @@ def bootstrap_bind_all(spec_json: str, *,
         except Exception:
             print("apply_env failed", file=sys.stderr)
 
-    # 2) run_ctx/accounting CVs
+    # 2) Best-effort generic ContextVar snapshot first. The dedicated pockets
+    #    below (run_ctx, accounting, comm_ctx) restore after it, so they keep
+    #    the last word on the ContextVars they own (W39).
+    if spec.cv_snapshot:
+        try:
+            for e in (spec.cv_snapshot or {}).get("entries", []):
+                mod = (e or {}).get("module")
+                if mod:
+                    try:
+                        importlib.import_module(mod)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            restore_all_contextvars(spec.cv_snapshot)
+        except Exception:
+            print("generic CV restore failed", file=sys.stderr)
+
+    # 3) run_ctx/accounting CVs
     try:
         from kdcube_ai_app.apps.chat.sdk.runtime import run_ctx as _run_ctx
         if hasattr(_run_ctx, "restore_ctxvars_from_env"):
@@ -426,23 +457,6 @@ def bootstrap_bind_all(spec_json: str, *,
             _comm_ctx.restore_ctxvars(spec.contextvars["comm_ctx"])
     except Exception:
         print("comm_ctx restore failed", file=sys.stderr)
-
-    # 3) generic CV snapshot (best-effort)
-    if spec.cv_snapshot:
-        try:
-            for e in (spec.cv_snapshot or {}).get("entries", []):
-                mod = (e or {}).get("module")
-                if mod:
-                    try:
-                        importlib.import_module(mod)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        try:
-            restore_all_contextvars(spec.cv_snapshot)
-        except Exception:
-            print("generic CV restore failed", file=sys.stderr)
 
     # 4) make services/registry once
     try:
@@ -533,7 +547,29 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
         except Exception:
             print(f"apply_env failed {traceback.format_exc()}", file=sys.stderr)
 
-    # 2) Module-specific ContextVars restoration
+    # 2) Best-effort generic ContextVar snapshot first. The dedicated pockets
+    #    below (run_ctx, accounting, comm_ctx) restore after it, so they keep
+    #    the last word on the ContextVars they own (W39).
+    if spec.cv_snapshot:
+        # Preload declaring modules to improve attr-based resolution
+        try:
+            for e in (spec.cv_snapshot or {}).get("entries", []):
+                mod = (e or {}).get("module")
+                if mod:
+                    try:
+                        importlib.import_module(mod)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            stats = restore_all_contextvars(spec.cv_snapshot)
+            # optional debug:
+            # logger.debug("Generic CV restore: %s", stats)
+        except Exception:
+            print("generic CV restore failed", file=sys.stderr)
+
+    # 3) Module-specific ContextVars restoration
     #    2.1 run_ctx: fallback from env → OUTDIR_CV/WORKDIR_CV, then restore snapshot
     try:
         from kdcube_ai_app.apps.chat.sdk.runtime import run_ctx as _run_ctx
@@ -565,26 +601,6 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
             print(f"comm_ctx restore done")
     except Exception:
         print(f"comm_ctx restore failed {traceback.format_exc()}", file=sys.stderr)
-
-    # 3) Best-effort generic CV snapshot restore (for any other ContextVars)
-    if spec.cv_snapshot:
-        # Preload declaring modules to improve attr-based resolution
-        try:
-            for e in (spec.cv_snapshot or {}).get("entries", []):
-                mod = (e or {}).get("module")
-                if mod:
-                    try:
-                        importlib.import_module(mod)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-        try:
-            stats = restore_all_contextvars(spec.cv_snapshot)
-            # optional debug:
-            # logger.debug("Generic CV restore: %s", stats)
-        except Exception:
-            print("generic CV restore failed", file=sys.stderr)
 
     # 4) Build services/registry/integrations; bind into tool module
     try:
