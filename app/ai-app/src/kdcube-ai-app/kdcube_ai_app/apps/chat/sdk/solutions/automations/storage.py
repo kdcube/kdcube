@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, List
 import yaml
 
 try:
-    from .executions_storage import AutomationExecutionsStorage
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.executions_storage import AutomationExecutionsStorage
 except ImportError:
     import importlib.util
     import sys

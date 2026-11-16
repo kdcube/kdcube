@@ -6,6 +6,6 @@
 - `faiss`         : faiss vector backends (optional faiss + numpy deps).
 - `sqlite`        : the SQLite + vector hybrid index (`HybridIndex`).
 """
-from .vector_store import VectorStore, BruteForceVectorStore
+from kdcube_ai_app.infra.index.vector_store import VectorStore, BruteForceVectorStore
 
 __all__ = ["VectorStore", "BruteForceVectorStore"]

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 """Pin-board search (hybrid semantic + lexical + recency) over infra.index.sqlite."""
-from .pin_index import PinSearchIndex, card_to_document, card_text
-from .pin_search import CANVAS_PIN_SEARCH_FILTERS, clear_pins, index_pins, search_pins, pin_index_db_path
-from .service import CanvasPinSearch
-from .named_service import (
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search.pin_index import PinSearchIndex, card_to_document, card_text
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search.pin_search import CANVAS_PIN_SEARCH_FILTERS, clear_pins, index_pins, search_pins, pin_index_db_path
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search.service import CanvasPinSearch
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search.named_service import (
     CANVAS_BOARD_OBJECT_KIND,
     CANVAS_BOARD_SCHEMA,
     CANVAS_CARD_COMMENT_OBJECT_KIND,

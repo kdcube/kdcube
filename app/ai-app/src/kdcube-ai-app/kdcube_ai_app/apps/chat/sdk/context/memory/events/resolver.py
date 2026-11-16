@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from ..models import MemoryRecord, MemoryScope, normalize_scope_filter
-from ..store import UserMemoryStore
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import MemoryRecord, MemoryScope, normalize_scope_filter
+from kdcube_ai_app.apps.chat.sdk.context.memory.store import UserMemoryStore
 
 
 MEMORY_RESOLVER_NAME = "sdk.memory"

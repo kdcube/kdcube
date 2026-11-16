@@ -14,12 +14,12 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission im
     NamedServiceAdmission,
 )
 
-from .client_tools import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     named_service_namespace_client_resolver_config,
     named_service_namespace_provider_configs_from_config,
 )
-from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
-from .types import OBJECT_ACTION, OBJECT_RESOLVE, NamedServiceRequest
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import OBJECT_ACTION, OBJECT_RESOLVE, NamedServiceRequest
 
 LOGGER = logging.getLogger("kdcube.sdk.named_services.canvas_resolver")
 

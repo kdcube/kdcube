@@ -25,7 +25,7 @@ from typing import Any, Mapping, Optional
 
 from kdcube_ai_app.infra.index.sqlite import VectorStore
 
-from .pin_search import (
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search.pin_search import (
     DEFAULT_EMBEDDING_DIM,
     DEFAULT_MIN_SEMANTIC_SCORE,
     clear_pins,

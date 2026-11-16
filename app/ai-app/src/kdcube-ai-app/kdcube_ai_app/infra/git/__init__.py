@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-from .auth import (
+from kdcube_ai_app.infra.git.auth import (
     DEFAULT_GIT_HTTP_USER,
     build_git_env,
     ensure_git_commit_identity,

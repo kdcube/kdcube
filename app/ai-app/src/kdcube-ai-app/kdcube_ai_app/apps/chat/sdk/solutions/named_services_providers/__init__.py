@@ -23,11 +23,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission im
     effective_named_service_operation,
 )
 
-from .agent_instructions import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.agent_instructions import (
     compose_named_service_agent_instructions,
     named_service_agent_instruction_block,
 )
-from .client_tools import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     NAMED_SERVICE_TOOLS_ALIAS,
     NAMED_SERVICE_TOOLS_MODULE,
     client_has_named_service_tools,
@@ -48,28 +48,28 @@ from .client_tools import (
     named_services_config,
     named_service_tool_spec,
 )
-from .canvas_resolver import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.canvas_resolver import (
     NamedServiceCanvasObjectResolver,
     register_configured_named_service_canvas_resolvers,
 )
-from .artifact_rehoster import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.artifact_rehoster import (
     NamedServiceArtifactNamespaceRehoster,
     register_configured_named_service_artifact_rehosters,
 )
-from .block_policy_adapter import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.block_policy_adapter import (
     NAMED_SERVICE_BLOCK_PRODUCTION_POLICY_ID,
     NAMED_SERVICE_EVENT_SOURCE_PREFIX,
     named_service_event_source_id,
     register_configured_named_service_event_sources,
 )
-from .boundary_policy import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.boundary_policy import (
     NamedServiceBoundaryCatalog,
     NamespaceBoundaryPolicy,
     as_list,
     as_mapping,
     clean_namespace,
 )
-from .discovery import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
     ConfiguredNamedServiceDiscovery,
     DEFAULT_DISCOVERY_TTL_SECONDS,
     NAMED_SERVICE_DISCOVERY_SCHEMA,
@@ -80,10 +80,10 @@ from .discovery import (
     get_current_named_service_discovery,
     publish_registry_discovery,
 )
-from .client import NamedServiceClient
-from .instructions import NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS
-from .provider import NamedServiceProvider, named_service_provider
-from .registry import NamedServiceRegistry
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client import NamedServiceClient
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.instructions import NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.provider import NamedServiceProvider, named_service_provider
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.registry import NamedServiceRegistry
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.schema_projection import (
     SCHEMA_PROJECTION_CONTRACT,
     SCHEMA_VIEW_CATALOG,
@@ -99,7 +99,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.schema_proje
     project_schema_response,
     project_schema_response_async,
 )
-from .transports.api_client import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api_client import (
     ENDPOINT_TRANSPORT_BUNDLE_OPERATION,
     ENDPOINT_TRANSPORT_BUNDLE_REGISTRY,
     ENDPOINT_TRANSPORT_MODULE,
@@ -107,12 +107,12 @@ from .transports.api_client import (
     call_named_service_endpoint,
     call_named_service_endpoint_stream,
 )
-from .transports.api import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api import (
     NamedServiceApiTransport,
     dispatch_named_service_api_request,
     dispatch_named_service_api_stream_request,
 )
-from .types import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     NAMED_SERVICE_RESPONSE_SCHEMA,
     NAMED_SERVICE_REQUEST_SCHEMA,
     SOURCE_BUNDLE_ID_METADATA,

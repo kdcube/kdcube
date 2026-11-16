@@ -338,7 +338,7 @@ async def get_hybrid_search_backend(
         HybridSearchBackend instance
     """
     # Import here to avoid circular dependency
-    from .search_backends import get_search_backend
+    from kdcube_ai_app.apps.chat.sdk.tools.backends.web.search_backends import get_search_backend
 
     primary = await get_search_backend(primary_name)
     spare = await get_search_backend(spare_name)

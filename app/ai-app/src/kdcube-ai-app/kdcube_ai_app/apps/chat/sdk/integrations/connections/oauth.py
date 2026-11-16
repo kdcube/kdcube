@@ -16,9 +16,9 @@ from typing import Any, Dict, List, Mapping
 
 import httpx
 
-from .apps import ClientApp
-from .registry import ConnectionProvider, _entrypoint_bundle_id
-from .store import ConnectionStore
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.apps import ClientApp
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.registry import ConnectionProvider, _entrypoint_bundle_id
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.store import ConnectionStore
 
 # Hub-level config prefix for the shared OAuth callback (one redirect for all
 # providers/apps). NOT per-provider.
@@ -158,7 +158,7 @@ async def build_authorize_url(
         )
     # state carries provider + app_id so the callback knows which app's
     # credentials to use for the code exchange.
-    from .apps import oauth_state_secret as _state_secret
+    from kdcube_ai_app.apps.chat.sdk.integrations.connections.apps import oauth_state_secret as _state_secret
     state = await store.create_oauth_state_async(
         provider=provider_obj.provider,
         app_id=client_app.app_id,

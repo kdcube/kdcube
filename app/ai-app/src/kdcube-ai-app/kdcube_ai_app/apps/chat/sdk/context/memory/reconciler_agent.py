@@ -15,7 +15,7 @@ from kdcube_ai_app.infra.service_hub.inventory import (
     create_cached_system_message,
 )
 
-from .models import MemoryRecord, MemorySearchResult, normalize_status, normalize_terms, normalize_visibility
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import MemoryRecord, MemorySearchResult, normalize_status, normalize_terms, normalize_visibility
 
 
 MemoryReconciliationActionType = Literal["merge", "squash", "weaken", "retire", "no_op"]

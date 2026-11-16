@@ -11,7 +11,7 @@ from croniter import croniter
 
 from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
 from kdcube_ai_app.apps.chat.sdk.identity_authority import normalize_execution_authority
-from .async_storage import AsyncAutomationStorage, list_automation_user_ids
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.async_storage import AsyncAutomationStorage, list_automation_user_ids
 
 
 WORK_KIND_AUTOMATION_EXECUTION_DUE = "automation.execution.due"
@@ -47,7 +47,7 @@ def _storage_root(entrypoint: Any) -> str:
 def _operations() -> Any:
     if _automation_operations is not None:
         return _automation_operations
-    from . import operations
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations import operations
 
     return operations
 

@@ -10,7 +10,7 @@ from typing import Callable
 from fastapi import FastAPI
 
 from kdcube_ai_app.auth.AuthManager import AuthManager
-from .registry import router as registry_router
+from kdcube_ai_app.apps.knowledge_base.api.registry.registry import router as registry_router
 
 
 def mount_registry_routers(app: FastAPI,

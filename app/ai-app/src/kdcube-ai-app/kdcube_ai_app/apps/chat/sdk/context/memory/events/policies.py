@@ -16,7 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.rendering_common import (
     EVENT_RENDER_POLICY_META_KEY,
 )
-from .resolver import canonical_memory_ref, memory_id_from_ref, memory_ref
+from kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver import canonical_memory_ref, memory_id_from_ref, memory_ref
 
 
 MEMORY_CONTEXT_BLOCK_POLICY_ID = "memory.block_production.context_event"

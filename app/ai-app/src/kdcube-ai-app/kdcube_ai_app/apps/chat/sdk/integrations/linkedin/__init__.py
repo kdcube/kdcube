@@ -9,7 +9,7 @@ Two independent layers share this package:
 
 from __future__ import annotations
 
-from .named_service import (
+from kdcube_ai_app.apps.chat.sdk.integrations.linkedin.named_service import (
     ACTION_ADD_COMMENT,
     ACTION_DISCARD_UPLOAD,
     ACTION_PUBLISH_IMAGE_POST,
@@ -23,19 +23,19 @@ from .named_service import (
     make_linkedin_named_service_provider,
     parse_linkedin_ref,
 )
-from .tools import (
+from kdcube_ai_app.apps.chat.sdk.integrations.linkedin.tools import (
     LINKEDIN_POST_CLAIM,
     LINKEDIN_PROFILE_CLAIM,
     LINKEDIN_PROVIDER_ID,
     LinkedInTools,
 )
-from .delivery import (
+from kdcube_ai_app.apps.chat.sdk.integrations.linkedin.delivery import (
     LINKEDIN_POST_MAX_CHARS,
     format_post_text,
     strip_markdown,
     truncate_post_text,
 )
-from .accounts import (
+from kdcube_ai_app.apps.chat.sdk.integrations.linkedin.accounts import (
     DEFAULT_LINKEDIN_SCOPES,
     LINKEDIN_ASSETS_URL,
     LINKEDIN_AUTH_URL,

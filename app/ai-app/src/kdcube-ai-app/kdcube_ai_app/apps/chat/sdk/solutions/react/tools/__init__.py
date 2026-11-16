@@ -6,18 +6,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .read import TOOL_SPEC as READ_SPEC, handle_react_read
-    from .pull import TOOL_SPEC as PULL_SPEC, handle_react_pull
-    from .checkout import TOOL_SPEC as CHECKOUT_SPEC, handle_react_checkout
-    from .write import TOOL_SPEC as WRITE_SPEC, handle_react_write
-    from .patch import TOOL_SPEC as PATCH_SPEC, handle_react_patch
-    from .memsearch import TOOL_SPEC as MEMSEARCH_SPEC, handle_react_memsearch
-    from .hide import TOOL_SPEC as HIDE_SPEC, handle_react_hide
-    from .rg import TOOL_SPEC as RG_SPEC, handle_react_rg
-    from .plan import TOOL_SPEC as PLAN_SPEC, handle_react_plan
-    from .delegate import TOOL_SPEC as DELEGATE_SPEC, handle_react_delegate
-    from .contribute import TOOL_SPEC as CONTRIBUTE_SPEC, handle_react_contribute
-    from .external import TOOL_SPEC as EXTERNAL_SPEC, handle_external_tool
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.read import TOOL_SPEC as READ_SPEC, handle_react_read
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.pull import TOOL_SPEC as PULL_SPEC, handle_react_pull
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.checkout import TOOL_SPEC as CHECKOUT_SPEC, handle_react_checkout
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.write import TOOL_SPEC as WRITE_SPEC, handle_react_write
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.patch import TOOL_SPEC as PATCH_SPEC, handle_react_patch
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.memsearch import TOOL_SPEC as MEMSEARCH_SPEC, handle_react_memsearch
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.hide import TOOL_SPEC as HIDE_SPEC, handle_react_hide
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.rg import TOOL_SPEC as RG_SPEC, handle_react_rg
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.plan import TOOL_SPEC as PLAN_SPEC, handle_react_plan
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.delegate import TOOL_SPEC as DELEGATE_SPEC, handle_react_delegate
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.contribute import TOOL_SPEC as CONTRIBUTE_SPEC, handle_react_contribute
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.external import TOOL_SPEC as EXTERNAL_SPEC, handle_external_tool
 
 """
 Shared React tools package.

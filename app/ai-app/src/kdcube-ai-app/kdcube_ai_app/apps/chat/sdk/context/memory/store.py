@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional, Sequence
 
-from .models import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import (
     MemoryEvent,
     MemoryRecord,
     MemoryScope,
@@ -23,7 +23,7 @@ from .models import (
     normalize_visibility,
     resolve_collection_update,
 )
-from .scoring import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.scoring import (
     DEFAULT_MEMORY_SCORING,
     build_canonical_key,
     compute_importance_score,

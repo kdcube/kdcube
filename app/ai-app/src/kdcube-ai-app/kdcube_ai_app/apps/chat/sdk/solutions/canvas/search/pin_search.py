@@ -32,7 +32,7 @@ from typing import Any, Mapping, Optional
 from kdcube_ai_app.infra.index.sqlite import EmbedFn, VectorStore
 from kdcube_ai_app.storage.observed_file_locks import observed_file_lock_async
 
-from .pin_index import PinSearchIndex
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search.pin_index import PinSearchIndex
 
 DEFAULT_EMBEDDING_DIM = 1536
 

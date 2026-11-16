@@ -34,8 +34,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import
     TRANSPORT_LOCAL,
 )
 
-from .pin_search import CANVAS_PIN_SEARCH_FILTERS
-from ..instructions import CANVAS_NAMESPACE_INTRO
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search.pin_search import CANVAS_PIN_SEARCH_FILTERS
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.instructions import CANVAS_NAMESPACE_INTRO
 
 
 CANVAS_NAMESPACE = "cnv"

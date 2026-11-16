@@ -11,8 +11,8 @@ except Exception:
     from semantic_kernel.utils.function_decorator import kernel_function
 
 try:
-    from .async_storage import AsyncAutomationStorage
-    from .execution_artifacts import (
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.async_storage import AsyncAutomationStorage
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.execution_artifacts import (
         execution_artifacts,
         execution_completed_at,
         execution_id_from_artifact_ref,
@@ -30,7 +30,7 @@ except ImportError:
     )
 
 try:
-    from .common import bind_integrations, error, log_tool_error, log_tool_start, log_tool_success, ok, scope
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.common import bind_integrations, error, log_tool_error, log_tool_start, log_tool_success, ok, scope
 except ImportError:
     from kdcube_ai_app.apps.chat.sdk.solutions.automations.common import bind_integrations, error, log_tool_error, log_tool_start, log_tool_success, ok, scope
 

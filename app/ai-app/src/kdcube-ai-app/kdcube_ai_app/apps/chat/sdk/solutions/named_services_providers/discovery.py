@@ -11,8 +11,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .registry import NamedServiceRegistry
-from .types import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.registry import NamedServiceRegistry
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     NamedServiceProviderSpec,
     NamedServiceRequest,
     build_default_operations,

@@ -20,7 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.harness.workspace.references import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.named_service_search import NamedServiceSearchResultsWidget
 
-from .client_tools import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     denied_named_service_entries,
     named_service_namespace_client_tools_config,
     named_service_namespace_provider_configs,
@@ -29,9 +29,9 @@ from .client_tools import (
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.consent import (
     raise_named_service_consent_demand as _raise_named_service_consent_demand,
 )
-from .discovery import get_current_named_service_discovery
-from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
-from .types import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import get_current_named_service_discovery
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     OBJECT_ACTION,
     OBJECT_DELETE,
     OBJECT_GET,

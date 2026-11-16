@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-from .resolver import (
+from kdcube_ai_app.apps.chat.sdk.solutions.chat.events.resolver import (
     CONVERSATION_OBJECT_NAMESPACE,
     CONVERSATION_RESOLVER_NAME,
     conversation_id_from_ref,

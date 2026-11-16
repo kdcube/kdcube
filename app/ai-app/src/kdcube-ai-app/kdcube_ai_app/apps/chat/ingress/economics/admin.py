@@ -18,7 +18,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import (
 )
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import PlanChangeNotAllowed
 
-from .stripe_router import router, _get_control_plane_manager, _usd_from_cents
+from kdcube_ai_app.apps.chat.ingress.economics.stripe_router import router, _get_control_plane_manager, _usd_from_cents
 from kdcube_ai_app.infra.accounting.usage import llm_reference_service
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 

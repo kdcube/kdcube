@@ -46,8 +46,8 @@ from typing import Annotated, Any, Awaitable, Callable, Dict, Optional, Sequence
 from kdcube_ai_app.apps.chat.sdk.events import artifact_namespace_rehoster, event_source_declaration, event_source_reader
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events import structured_result_source_policies
 
-from .events.resolver import memory_id_from_ref, memory_ref
-from .events.policies import (  # noqa: F401 - discovered by event-source subsystem
+from kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver import memory_id_from_ref, memory_ref
+from kdcube_ai_app.apps.chat.sdk.context.memory.events.policies import (  # noqa: F401 - discovered by event-source subsystem
     MEMORY_CONTEXT_BLOCK_POLICY_ID,
     MEMORY_CONTEXT_COMPACTION_POLICY_ID,
     MEMORY_CONTEXT_RENDER_POLICY_ID,
@@ -56,8 +56,8 @@ from .events.policies import (  # noqa: F401 - discovered by event-source subsys
     memory_context_render_policy,
     memory_read_block_policy,
 )
-from .models import MemoryScope, MemorySearchRequest, MemorySignal, normalize_scope_filter, normalize_terms
-from .store import UserMemoryStore
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import MemoryScope, MemorySearchRequest, MemorySignal, normalize_scope_filter, normalize_terms
+from kdcube_ai_app.apps.chat.sdk.context.memory.store import UserMemoryStore
 
 try:
     from semantic_kernel.functions import kernel_function

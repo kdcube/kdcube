@@ -6,7 +6,7 @@ store; Redis may be layered above it for cache invalidation or short leases,
 but correctness must not depend on Redis.
 """
 
-from .models import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import (
     MemoryEvent,
     MemoryRecord,
     MemoryScope,
@@ -18,23 +18,23 @@ from .models import (
     normalize_scope_filter,
     normalize_terms,
 )
-from .scoring import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.scoring import (
     build_canonical_key,
     compute_confirmation_rate,
     compute_freshness_score,
     compute_memory_scores,
     compute_tier,
 )
-from .store import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.store import (
     MEMORY_SCOPE_PREF_CHANNEL,
     MEMORY_SCOPE_PREF_DEFAULT,
     MEMORY_SCOPE_PREF_FAMILY,
     UserMemoryStore,
     normalize_memory_scope_pref,
 )
-from .tools import UserMemoryTools, UserMemoryToolConfig, make_user_memory_tools
-from .instructions import MEMORY_REACT_ADDITIONAL_INSTRUCTIONS, resolve_memory_react_additional_instructions
-from .named_service import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.tools import UserMemoryTools, UserMemoryToolConfig, make_user_memory_tools
+from kdcube_ai_app.apps.chat.sdk.context.memory.instructions import MEMORY_REACT_ADDITIONAL_INSTRUCTIONS, resolve_memory_react_additional_instructions
+from kdcube_ai_app.apps.chat.sdk.context.memory.named_service import (
     KNOWN_MEMORY_KINDS,
     MEMORY_RECORD_SCHEMA,
     MEMORY_SEARCH_SCOPES,
@@ -45,7 +45,7 @@ from .named_service import (
     make_memory_named_service_provider,
     memory_named_service_spec,
 )
-from .events.resolver import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver import (
     MEMORY_OBJECT_NAMESPACE,
     MEMORY_RESOLVER_NAME,
     memory_id_from_ref,
@@ -53,7 +53,7 @@ from .events.resolver import (
     memory_ref_capabilities,
     resolve_memory_ref_action,
 )
-from .reconciler_agent import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.reconciler_agent import (
     MemoryReconciliationAction,
     MemoryReconciliationActionType,
     MemoryReconciliationCandidate,

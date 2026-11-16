@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 import httpx
 
-from ..registry import ConnectionProvider, connection_provider
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.registry import ConnectionProvider, connection_provider
 
 SLACK_AUTH_TEST_URL = "https://slack.com/api/auth.test"
 

@@ -30,7 +30,7 @@ except Exception:  # pragma: no cover - imported by narrow unit tests without fu
     run_claude_code_turn = None  # type: ignore[assignment]
     set_skills_descriptor = None  # type: ignore[assignment]
 
-from .mcp import (
+from kdcube_ai_app.apps.chat.sdk.integrations.email.mcp import (
     EMAIL_MCP_ALLOWED_TOOLS,
     EMAIL_MCP_SERVER_NAME,
     EmailMCPRunStore,

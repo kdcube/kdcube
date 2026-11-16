@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
-from .platform_env import build_external_runtime_base_env
+from kdcube_ai_app.infra.config.platform_env import build_external_runtime_base_env
 
 
 def _compact_bundle_spec(
