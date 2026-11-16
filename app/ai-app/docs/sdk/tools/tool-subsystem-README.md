@@ -353,6 +353,16 @@ bundles. For bundle-local tools, use `ref` entries rather than `module` entries
 so the runtime can keep the tool tied to the bundle root and rewrite paths for
 distributed isolated execution.
 
+SDK tool modules are loaded the same way. A `module` entry such as
+`kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.tools` is
+resolved to its file and loaded as a copy under a synthetic package
+(`dynpkg_<hash>.tools`). Inside that copy a relative import such as
+`from .client_tools import ...` executes `client_tools.py` a second time, with
+its own ContextVars, classes and registries, so state the canonical module holds
+is invisible to the tool. SDK code therefore imports by absolute name only
+(`kdcube_ai_app/apps/chat/sdk/tests/test_sdk_absolute_imports.py` enforces it);
+the absolute name resolves to the module already in `sys.modules`.
+
 ## Why `ref` works in iso-runtime and Docker
 
 `ToolSubsystem.export_runtime_globals()` exports:

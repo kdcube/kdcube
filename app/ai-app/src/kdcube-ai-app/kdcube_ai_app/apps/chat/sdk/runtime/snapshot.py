@@ -6,6 +6,7 @@
 from __future__ import annotations
 import os
 import gc, sys, types, base64, json
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 from contextvars import ContextVar
 import contextvars
@@ -15,6 +16,8 @@ from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.runtime.portable_spec import CommSpec, PortableSpec, ModelConfigSpec, IntegrationsSpec
 from kdcube_ai_app.infra.service_hub.inventory import Config, ModelServiceBase
+
+logger = logging.getLogger(__name__)
 
 
 def run_in_executor_with_ctx(loop, func, *a, **k):
@@ -61,8 +64,17 @@ def _encode_value(v: Any) -> Tuple[bool, Any]:
     if _is_json_primitive(v):
         return True, v
 
-    # Lists: keep encodable elements
-    if isinstance(v, list):
+    # Lists, tuples and sets: keep encodable elements. JSON has no tuple or set,
+    # so they travel as lists (a set sorted, for a stable snapshot). Dropping
+    # them silently emptied request-scoped policy maps such as an agent's
+    # per-account claim scope ({provider: {account: (claims,)}} became
+    # {provider: {}}).
+    if isinstance(v, (set, frozenset)):
+        try:
+            v = sorted(v)
+        except TypeError:
+            v = list(v)
+    if isinstance(v, (list, tuple)):
         out = []
         for item in v:
             ok_item, enc_item = _encode_value(item)
@@ -143,6 +155,13 @@ def snapshot_all_contextvars() -> dict:
         ok, encoded = _encode_value(val)
         if not ok:
             # Non-portable value (e.g. AccountingContext); skip this CV entirely.
+            # Values a child runtime needs travel in a dedicated snapshot
+            # (run_ctx, comm_ctx with the bundle call context, accounting).
+            logger.debug(
+                "[snapshot] ContextVar %s skipped: value of type %s is not portable",
+                getattr(cv, "name", "?"),
+                type(val).__name__,
+            )
             continue
 
         try:

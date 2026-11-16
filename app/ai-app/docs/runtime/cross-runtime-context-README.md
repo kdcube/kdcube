@@ -388,9 +388,22 @@ call — a `send`/`upsert` allowed for the agent works identically from
 generated code. A spec without this member leaves the child on the built-in
 read-only operation defaults.
 
-Per-user entry denials (the capability-picker selection) ride separately as
-part of the contextvars snapshot; the policy above is the configuration
-ceiling.
+The conversation's denials (the capability-picker selection) narrow that
+ceiling for one turn. `BaseWorkflow.apply_user_agent_selection` writes them at
+the start of each turn into the bundle call context, under
+`named_service_denials`:
+
+```json
+{"named_service_denials": {"namespaces": ["mail"], "entries": {"docs": ["object.schema"]}}}
+```
+
+`client_tools.denied_named_service_namespaces()` and
+`denied_named_service_entries(namespace)` read them back, so a tools module
+loaded as a dynamic copy, a subprocess and an ISO runtime all see the same
+denials as the host. They are not carried by the generic ContextVar snapshot:
+that snapshot finds ContextVars through the garbage collector, which does not
+track a ContextVar whose default is `None`, so it is not a carrier for values a
+child runtime needs.
 
 Provider calls from isolated runtimes execute through the Data Bus relay. The
 provider request and its platform-owned admission selector travel to the
