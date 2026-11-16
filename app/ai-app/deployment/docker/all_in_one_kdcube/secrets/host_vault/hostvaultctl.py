@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 
 from kdcube_ai_app.infra.secrets.host_vault.identity import DeploymentKey, HostIssuingCA, TrustRegistry
-from kdcube_ai_app.infra.secrets.host_vault.keys import FileRootKeyProvider
+from kdcube_ai_app.infra.secrets.host_vault.keys import load_root_key_provider
 from kdcube_ai_app.infra.secrets.host_vault.storage import FileDurableSecretStore
 
 
@@ -74,7 +74,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     _write_private(home / "tls" / "server.key", key_pem)
     (home / "tls" / "server.crt").write_bytes(cert_pem)
     _write_private(home / "ca" / "ca.key", ca.key_pem)
-    key_id = FileRootKeyProvider(home / "root-keys").rotate()
+    key_id = load_root_key_provider(home).rotate()
     TrustRegistry(home / "trust.json", ca=ca)
     (home / "store").mkdir(parents=True, exist_ok=True)
     os.chmod(home / "store", 0o700)
@@ -118,7 +118,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_rotate_root_key(args: argparse.Namespace) -> int:
     home = _home(args)
-    keys = FileRootKeyProvider(home / "root-keys")
+    keys = load_root_key_provider(home)
     key_id = keys.rotate()
     rewrapped = FileDurableSecretStore(home / "store", keys).rewrap_all()
     print(json.dumps({"root_key": key_id, "rewrapped": rewrapped}))
