@@ -18,15 +18,15 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import (
     discover_react_event_policies,
 )
 
-from .client_tools import named_service_namespace_provider_configs_from_config
-from .event_source import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import named_service_namespace_provider_configs_from_config
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.event_source import (
     NAMED_SERVICE_BLOCK_PRODUCTION_POLICY_ID,
     NAMED_SERVICE_EVENT_SOURCE_PREFIX,
     named_service_event_source_id,
     produce_named_service_blocks,
     resolve_named_service_event_source,
 )
-from .timeline_projection import apply_named_service_block_render_projection
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.timeline_projection import apply_named_service_block_render_projection
 
 
 @block_production_policy(event_policy_id=NAMED_SERVICE_BLOCK_PRODUCTION_POLICY_ID)

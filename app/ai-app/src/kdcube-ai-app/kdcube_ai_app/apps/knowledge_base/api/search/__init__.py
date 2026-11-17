@@ -10,7 +10,7 @@ from typing import Callable
 from fastapi import FastAPI
 
 from kdcube_ai_app.auth.AuthManager import AuthManager
-from .search import router as search_router
+from kdcube_ai_app.apps.knowledge_base.api.search.search import router as search_router
 
 
 def mount_search_routers(app: FastAPI,

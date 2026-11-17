@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable, Mapping
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_user_identity
 from kdcube_ai_app.apps.chat.sdk.runtime.harness.workspace.references import qualify_conversation_ref
 
-from .accounts import (
+from kdcube_ai_app.apps.chat.sdk.integrations.email.accounts import (
     EmailAccountStore,
     fetch_email_attachment,
     fetch_email_message,

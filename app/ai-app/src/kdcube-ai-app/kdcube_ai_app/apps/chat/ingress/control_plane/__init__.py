@@ -9,11 +9,11 @@ from typing import Callable
 
 from fastapi import FastAPI
 
-from .control_plane import router as control_plane_router
-from .conversations_browser import router as conversations_browser_router
-from .config import router as config_router
-from .redis_browser import router as redis_browser_router
-from .storage import router as storage_router
+from kdcube_ai_app.apps.chat.ingress.control_plane.control_plane import router as control_plane_router
+from kdcube_ai_app.apps.chat.ingress.control_plane.conversations_browser import router as conversations_browser_router
+from kdcube_ai_app.apps.chat.ingress.control_plane.config import router as config_router
+from kdcube_ai_app.apps.chat.ingress.control_plane.redis_browser import router as redis_browser_router
+from kdcube_ai_app.apps.chat.ingress.control_plane.storage import router as storage_router
 
 
 def mount_control_plane_router(app: FastAPI):

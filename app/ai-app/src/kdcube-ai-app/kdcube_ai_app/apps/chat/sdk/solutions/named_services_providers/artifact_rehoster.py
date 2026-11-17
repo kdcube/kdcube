@@ -20,15 +20,15 @@ from kdcube_ai_app.apps.chat.sdk.runtime.harness.workspace.references import (
     qualify_conversation_ref,
 )
 
-from .client_tools import named_service_namespace_provider_configs_from_config
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import named_service_namespace_provider_configs_from_config
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.consent import (
     raise_named_service_consent_demand,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission import (
     NamedServiceAdmission,
 )
-from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint_stream
-from .types import OBJECT_GET, NamedServiceRequest
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api_client import NamedServiceEndpoint, call_named_service_endpoint_stream
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import OBJECT_GET, NamedServiceRequest
 
 LOGGER = logging.getLogger("kdcube.sdk.named_services.artifact_rehoster")
 

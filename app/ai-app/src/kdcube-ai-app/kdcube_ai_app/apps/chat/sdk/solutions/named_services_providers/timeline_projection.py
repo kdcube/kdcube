@@ -25,14 +25,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission im
     NamedServiceAdmission,
 )
 
-from .client_tools import named_service_namespace_provider_configs_from_config
-from .event_source import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import named_service_namespace_provider_configs_from_config
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.event_source import (
     NAMED_SERVICE_BLOCK_PRODUCTION_POLICY_ID,
     NAMED_SERVICE_EVENT_SOURCE_PREFIX,
     named_service_event_source_id,
 )
-from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
-from .types import BLOCK_RENDER, NamedServiceRequest
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import BLOCK_RENDER, NamedServiceRequest
 
 
 LOGGER = logging.getLogger(__name__)

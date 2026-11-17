@@ -27,11 +27,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission im
     NamedServiceAdmissionDecision,
 )
 
-from ..client import NamedServiceClient
-from ..discovery import ConfiguredNamedServiceDiscovery, get_current_named_service_discovery
-from ..provider import NamedServiceProvider
-from ..registry import NamedServiceRegistry
-from ..types import NamedServiceRequest, NamedServiceResponse, NamedServiceStreamResult
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client import NamedServiceClient
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import ConfiguredNamedServiceDiscovery, get_current_named_service_discovery
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.provider import NamedServiceProvider
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.registry import NamedServiceRegistry
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceRequest, NamedServiceResponse, NamedServiceStreamResult
 
 LOGGER = logging.getLogger("kdcube.sdk.named_services.endpoint")
 

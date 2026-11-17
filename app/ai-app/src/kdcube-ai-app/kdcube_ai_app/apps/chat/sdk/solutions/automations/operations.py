@@ -19,8 +19,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
 from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
-from .async_storage import AsyncAutomationStorage
-from .execution_artifacts import (
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.async_storage import AsyncAutomationStorage
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.execution_artifacts import (
     artifact_ref_for_execution_artifact,
     downloadable_execution_artifacts,
     execution_id_from_artifact_ref,

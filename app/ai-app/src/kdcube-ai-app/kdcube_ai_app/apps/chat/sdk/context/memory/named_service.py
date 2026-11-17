@@ -22,8 +22,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     named_service_provider,
 )
 
-from .instructions import MEMORY_NAMESPACE_INTRO
-from .events.resolver import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.instructions import MEMORY_NAMESPACE_INTRO
+from kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver import (
     MEMORY_OBJECT_NAMESPACE,
     MEMORY_RESOLVER_NAME,
     memory_id_from_ref,
@@ -32,7 +32,7 @@ from .events.resolver import (
     memory_ref_capabilities,
     resolve_memory_ref_action,
 )
-from .models import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import (
     MemoryEvent,
     MemoryRecord,
     MemoryScope,
@@ -45,8 +45,8 @@ from .models import (
     normalize_term,
     normalize_terms,
 )
-from .scoring import DEFAULT_MEMORY_SCORING
-from .store import UserMemoryStore
+from kdcube_ai_app.apps.chat.sdk.context.memory.scoring import DEFAULT_MEMORY_SCORING
+from kdcube_ai_app.apps.chat.sdk.context.memory.store import UserMemoryStore
 
 
 PROVIDER_ID = MEMORY_RESOLVER_NAME

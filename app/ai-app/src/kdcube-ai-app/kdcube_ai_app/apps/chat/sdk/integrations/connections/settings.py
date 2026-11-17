@@ -22,8 +22,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.bundle_registry import (
     register_config,
     resolve_config,
 )
-from .registry import ConnectionProvider, catalog as _provider_catalog, resolve as _resolve_provider
-from .apps import (
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.registry import ConnectionProvider, catalog as _provider_catalog, resolve as _resolve_provider
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.apps import (
     AmbiguousClientApp,
     ClientApp,
     client_app_secret,
@@ -31,8 +31,8 @@ from .apps import (
     oauth_state_secret,
     resolve_client_app,
 )
-from .oauth import build_authorize_url, callback_url, exchange_code
-from .store import ConnectionStore
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.oauth import build_authorize_url, callback_url, exchange_code
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.store import ConnectionStore
 from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import integration_definition_value
 
 BUNDLE_ID = ""
@@ -343,7 +343,7 @@ _OAUTH_ERROR_HINTS: Dict[str, str] = {
 def _state_peek_provider(state: str) -> str:
     """Best-effort provider id from the (unverified) state — display/notify only."""
     try:
-        from .store import _unb64url_json  # local: avoid widening module surface
+        from kdcube_ai_app.apps.chat.sdk.integrations.connections.store import _unb64url_json  # local: avoid widening module surface
 
         peek = _unb64url_json(str(state).rsplit(".", 1)[0])
         return str(peek.get("provider") or "").strip()
@@ -438,7 +438,7 @@ async def callback(
 
     # Peek the provider from the (unverified) state to resolve its secret, then
     # verify the signature with that provider's state secret on consume.
-    from .store import _unb64url_json  # local: avoid widening module surface
+    from kdcube_ai_app.apps.chat.sdk.integrations.connections.store import _unb64url_json  # local: avoid widening module surface
 
     try:
         peek = _unb64url_json(str(state).rsplit(".", 1)[0])

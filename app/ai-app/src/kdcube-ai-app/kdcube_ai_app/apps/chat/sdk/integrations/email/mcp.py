@@ -383,7 +383,7 @@ def _parse_jsonish(value: Any) -> Any:
 
 
 def _email_accounts_api():
-    from .accounts import (
+    from kdcube_ai_app.apps.chat.sdk.integrations.email.accounts import (
         EmailAccountStore,
         fetch_email_attachment,
         fetch_email_message,

@@ -1,4 +1,4 @@
-from .resolver import (
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver import (
     CallableCanvasObjectResolver,
     CanvasArtifactResolver,
     CanvasObjectResolver,
@@ -12,17 +12,17 @@ from .resolver import (
     search_canvas_cards,
     build_default_canvas_resolver_registry,
 )
-from .defaults import (
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import (
     DEFAULT_CANVAS_EVENT_SOURCE_SPECS,
     default_canvas_event_source_specs,
 )
-from .focus_policies import (
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.focus_policies import (
     canvas_focus_announce_policy,
     canvas_focus_projection_policy,
     produce_canvas_focus_announce_blocks,
     project_canvas_focus_blocks,
 )
-from .policies import (
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.policies import (
     append_canvas_tool_fact_block,
     canvas_announce_policy,
     canvas_patch_block_policy,

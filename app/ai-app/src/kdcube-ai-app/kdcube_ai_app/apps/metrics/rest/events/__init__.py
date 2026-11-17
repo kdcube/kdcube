@@ -7,7 +7,7 @@ File: metrics/rest/events/__init__.py
 """
 from fastapi import FastAPI
 
-from .events import (
+from kdcube_ai_app.apps.metrics.rest.events.events import (
     router as events_router,
 )
 

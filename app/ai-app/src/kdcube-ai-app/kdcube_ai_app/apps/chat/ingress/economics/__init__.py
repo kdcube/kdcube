@@ -8,11 +8,11 @@ File: api/economics/__init__.py
 
 from fastapi import FastAPI
 
-from .stripe_router import router as _state_router
-from .checkout import checkout_router
-from .webhooks import webhook_router
-from .admin import admin_router
-from .me import me_router
+from kdcube_ai_app.apps.chat.ingress.economics.stripe_router import router as _state_router
+from kdcube_ai_app.apps.chat.ingress.economics.checkout import checkout_router
+from kdcube_ai_app.apps.chat.ingress.economics.webhooks import webhook_router
+from kdcube_ai_app.apps.chat.ingress.economics.admin import admin_router
+from kdcube_ai_app.apps.chat.ingress.economics.me import me_router
 
 
 def mount_economics_router(app: FastAPI):

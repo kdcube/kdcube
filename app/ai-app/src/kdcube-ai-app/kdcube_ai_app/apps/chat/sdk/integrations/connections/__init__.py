@@ -7,7 +7,7 @@ See docs/sdk/integrations/connections-README.md for the contract.
 
 from __future__ import annotations
 
-from .registry import (
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.registry import (
     ConnectionProvider,
     catalog,
     connection_provider,
@@ -15,8 +15,8 @@ from .registry import (
     register,
     resolve,
 )
-from .store import ConnectionStore
-from .apps import (
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.store import ConnectionStore
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.apps import (
     ClientApp,
     AmbiguousClientApp,
     list_client_apps,
@@ -24,14 +24,14 @@ from .apps import (
     client_app_secret,
     oauth_state_secret,
 )
-from .oauth import (
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.oauth import (
     ProviderHttpError,
     build_authorize_url,
     callback_url,
     exchange_code,
     refresh_access_token,
 )
-from .settings import (
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.settings import (
     configure_connections,
     status,
     start_oauth,
@@ -45,7 +45,7 @@ from .settings import (
 )
 
 # Register built-in providers (Slack, …).
-from . import providers as _providers  # noqa: F401
+from kdcube_ai_app.apps.chat.sdk.integrations.connections import providers as _providers  # noqa: F401
 
 __all__ = [
     # registry

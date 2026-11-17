@@ -13,7 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import StripeEconomicsWe
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 
-from .stripe_router import router, _get_control_plane_manager
+from kdcube_ai_app.apps.chat.ingress.economics.stripe_router import router, _get_control_plane_manager
 
 logger = logging.getLogger(__name__)
 

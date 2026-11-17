@@ -7,8 +7,8 @@ File: api/conversations/__init__.py
 """
 from fastapi import FastAPI
 
-from .conversations import router as conversations_router
-from .search import router as conversations_search_router
+from kdcube_ai_app.apps.chat.ingress.conversations.conversations import router as conversations_router
+from kdcube_ai_app.apps.chat.ingress.conversations.search import router as conversations_search_router
 
 
 def mount_conversations_router(app: FastAPI):

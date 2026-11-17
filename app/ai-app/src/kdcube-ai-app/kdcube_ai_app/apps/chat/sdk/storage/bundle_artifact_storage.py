@@ -3,6 +3,6 @@
 
 """Neutral import surface for bundle artifact storage."""
 
-from .ai_bundle_storage import AIBundleStorage, BundleArtifactStorage
+from kdcube_ai_app.apps.chat.sdk.storage.ai_bundle_storage import AIBundleStorage, BundleArtifactStorage
 
 __all__ = ["BundleArtifactStorage", "AIBundleStorage"]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from .async_storage import AsyncAutomationStorage, list_automation_user_ids
-from .execution_artifacts import (
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.async_storage import AsyncAutomationStorage, list_automation_user_ids
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.execution_artifacts import (
     artifact_ref_for_execution_artifact,
     downloadable_execution_artifacts,
     execution_artifacts,
@@ -11,12 +11,12 @@ from .execution_artifacts import (
     materialize_execution_artifact_for_current_turn,
     read_execution_artifact_for_download,
 )
-from .executions_storage import AutomationExecutionsStorage
-from .storage import AUTOMATION_STATUSES, AutomationStorage
-from .due import WORK_KIND_AUTOMATION_EXECUTION_DUE, configure_due_automations, enqueue_due_automations, handle_job
-from .operations import WORK_KIND_AUTOMATION_RUN_NOW, configure_automation_operations
-from .system_jobs import enqueue_job_as_identity
-from .common import (
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.executions_storage import AutomationExecutionsStorage
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.storage import AUTOMATION_STATUSES, AutomationStorage
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.due import WORK_KIND_AUTOMATION_EXECUTION_DUE, configure_due_automations, enqueue_due_automations, handle_job
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.operations import WORK_KIND_AUTOMATION_RUN_NOW, configure_automation_operations
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.system_jobs import enqueue_job_as_identity
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.common import (
     extract_automation_execution_context,
     extract_automation_execution_context_from_scope,
 )

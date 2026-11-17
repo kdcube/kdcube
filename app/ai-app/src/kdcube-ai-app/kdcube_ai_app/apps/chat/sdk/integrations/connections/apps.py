@@ -34,7 +34,7 @@ try:
 except Exception:
     get_secret = None  # type: ignore[assignment]
 
-from .registry import DEFAULT_BUNDLE_ID, _entrypoint_bundle_id
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.registry import DEFAULT_BUNDLE_ID, _entrypoint_bundle_id
 
 # Where deploy config / secrets for client apps live.
 PROVIDERS_CONFIG_PREFIX = "connections.providers"

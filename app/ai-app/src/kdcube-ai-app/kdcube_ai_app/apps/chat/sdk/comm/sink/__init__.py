@@ -1,4 +1,4 @@
-from .telemetry import (
+from kdcube_ai_app.apps.chat.sdk.comm.sink.telemetry import (
     STATS_COMM_DATA_KEYS,
     STATS_COMM_EVENT_SELECTOR,
     StatsTelemetrySink,

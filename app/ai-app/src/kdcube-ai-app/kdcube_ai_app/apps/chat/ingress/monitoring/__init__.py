@@ -9,7 +9,7 @@ from typing import Callable
 
 from fastapi import FastAPI
 
-from .monitoring import router as monitoring_router
+from kdcube_ai_app.apps.chat.ingress.monitoring.monitoring import router as monitoring_router
 
 
 def mount_monitoring_routers(app: FastAPI):

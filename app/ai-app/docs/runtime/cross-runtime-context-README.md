@@ -388,9 +388,22 @@ call — a `send`/`upsert` allowed for the agent works identically from
 generated code. A spec without this member leaves the child on the built-in
 read-only operation defaults.
 
-Per-user entry denials (the capability-picker selection) ride separately as
-part of the contextvars snapshot; the policy above is the configuration
-ceiling.
+The conversation's denials (the capability-picker selection) narrow that
+ceiling for one turn. `BaseWorkflow.apply_user_agent_selection` writes them at
+the start of each turn into the bundle call context, under
+`named_service_denials`:
+
+```json
+{"named_service_denials": {"namespaces": ["mail"], "entries": {"docs": ["object.schema"]}}}
+```
+
+`client_tools.denied_named_service_namespaces()` and
+`denied_named_service_entries(namespace)` read them back, so a tools module
+loaded as a dynamic copy, a subprocess and an ISO runtime all see the same
+denials as the host. They are not carried by the generic ContextVar snapshot:
+that snapshot finds ContextVars through the garbage collector, which does not
+track a ContextVar whose default is `None`, so it is not a carrier for values a
+child runtime needs.
 
 Provider calls from isolated runtimes execute through the Data Bus relay. The
 provider request and its platform-owned admission selector travel to the
@@ -424,13 +437,33 @@ Bad values:
 If a later cron/job/request needs the value, store it in durable bundle state
 and re-bind it when that later invocation starts.
 
+What a child receives is the call context live at the moment the portable spec
+is built. `ToolSubsystem.bind_portable_runtime_context` rebinds the request
+from `registry["comm_context"]`, but lays the live call context over the one
+stored on that request object: a value the turn wrote after the request object
+was built (the conversation's `named_service_denials`), or while another
+request object was bound (a subagent, an inline-file scope), still reaches the
+child.
+
+### The generic ContextVar snapshot never overrides a pocket
+
+Besides the dedicated pockets (`run_ctx`, `comm_ctx`, accounting), the spec
+carries a best-effort generic snapshot (`cv_snapshot`) of other ContextVars the
+garbage collector can find. Its values are stored as they are, JSON-safe. The
+child restores the generic snapshot first and the dedicated pockets after it,
+so a pocket always has the last word on the ContextVars it owns. Before this
+order and the matching decoder (`bootstrap._decode_value`), every dict-valued
+ContextVar was set to `None` in the child after its pocket had restored it: the
+bundle call context, the named-service discovery context, the Connection Hub
+account scope.
+
 ## Runtime Guarantees By Boundary
 
 | Boundary | Guaranteed |
 | --- | --- |
 | Same async task | Current ContextVars are visible during awaits. |
 | In-process tool | Tool module sees the same restored request and bundle call context after SDK binding. |
-| Local subprocess tool | `PORTABLE_SPEC_JSON` restores `run_ctx`, `comm_ctx`, and accounting; Redis/comm/model services are rebuilt from config. |
+| Local subprocess tool | `PORTABLE_SPEC_JSON` restores the generic ContextVar snapshot, then `run_ctx`, `comm_ctx`, and accounting (the pockets win); Redis/comm/model services are rebuilt from config. |
 | Docker/Fargate supervisor | Same portable context restore, plus descriptor-backed settings/secrets for trusted supervisor tools. |
 | Docker/Fargate executor | Minimal safe env and supervisor socket only; executor asks supervisor for approved tool calls. |
 | Peer bundle local operation | Platform local caller builds a target request context for the target bundle and binds it around the call. |
