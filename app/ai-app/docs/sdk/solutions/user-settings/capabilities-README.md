@@ -4,7 +4,7 @@ title: "Agent Capability Control And Selection"
 summary: "How descriptor authority defines the capability ceiling, Agent Card selections define user defaults, and conversations choose within that live range."
 status: current
 tags: ["sdk", "solutions", "capabilities", "agent-selection", "control-card", "connection-hub", "picker", "widget"]
-updated_at: 2026-09-23
+updated_at: 2026-11-17
 keywords:
   [
     "agent_capabilities",
@@ -42,8 +42,8 @@ the next agent turn.
 
 This page owns the KDCube capability-projection and picker contract. Connection
 Hub owns Card persistence, revisioning, composition, drift, enforcement, and
-the administrator Card workflow. The KDCube host owns the privileged
-write-through into the active application descriptor. The canonical Card
+the administrator Card workflow; an administrator's Control edit lives only in
+the Card Connection Hub stores. The canonical Card
 contract is
 [Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md),
 and the complete administrator/user/conversation/Slack verification is
@@ -263,27 +263,18 @@ containers. See
 [Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md)
 for that Card read-model contract.
 
-A platform administrator's Control Card save writes through to the exact
-application and agent entry in descriptor-owned bundle properties before the
-live Card update is reported successful. It carries the reviewed defaults,
-resource authority, named-service operations and bounded metadata under
-`agent_capability_control_overrides`. Changing the source descriptor and then
-synchronizing revises the same Control projection in the other direction.
-The active descriptor remains the outer ceiling in both cases.
-
-The concrete write path is:
-
-1. Connection Hub's `DelegatedAccessPanel.tsx` calls `mergeBundleProps()` in
-   `src/api/client.ts` for the exact application and agent.
-2. The administrator-only request reaches KDCube
-   `apps/chat/proc/rest/integrations/integrations.py::set_bundle_props`.
-3. KDCube persists the merge through
-   `infra/plugin/bundle_store.py::_put_bundle_props_locked`, which owns the
-   authoritative descriptor-backed application properties.
-
-Only after that request succeeds does Connection Hub submit the corresponding
-revision-checked Control Card update. A descriptor-write refusal therefore
-leaves the live Card unchanged.
+The descriptor is the outer ceiling and the seed of a new Control Card, and
+nothing else. A platform administrator's Control Card save is one
+revision-checked Card update that Connection Hub stores; it writes nothing to
+the application descriptor or its bundle properties. That stored Card is the
+only place an administrator's narrowing lives, and every later descriptor
+synchronization keeps it within the refreshed ceiling. The SDK sends the
+descriptor's own authority and defaults on every synchronization and ignores
+any `agent_capability_control_overrides` entry an older write-through left in
+bundle properties, so such an entry can neither seed nor narrow a Control
+Card. Connection Hub's
+[Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md)
+owns the save and refresh rules.
 
 Both Card editors group child tools and operations beneath their tool group,
 MCP server, named service, or resource, and show declared descriptions in the

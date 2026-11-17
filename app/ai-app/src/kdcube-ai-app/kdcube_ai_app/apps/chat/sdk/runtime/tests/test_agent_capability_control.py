@@ -19,8 +19,6 @@ from connection_hub.delegated_credentials.application_resources import (
 )
 
 from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
-    CONTROL_OVERRIDE_SCHEMA,
-    CONTROL_OVERRIDES_PROPERTY,
     annotate_capability_states,
     capability_preferences_from_projection,
     conversation_capability_projections,
@@ -205,7 +203,8 @@ def _props() -> dict:
     }
 
 
-def _override_props() -> dict:
+def _legacy_override_props() -> dict:
+    """Bundle props as a Control Save wrote them before W757 (2026-10-12)."""
     resource = application_resource(
         tenant=TENANT,
         project=PROJECT,
@@ -213,9 +212,9 @@ def _override_props() -> dict:
         agent=AGENT,
     )
     props = _props()
-    props[CONTROL_OVERRIDES_PROPERTY] = {
+    props["agent_capability_control_overrides"] = {
         AGENT: [{
-            "schema": CONTROL_OVERRIDE_SCHEMA,
+            "schema": "kdcube.agent_capability_control_override.v1",
             "capability_defaults": {
                 "schema": AGENT_CAPABILITY_POLICY_SCHEMA,
                 "resource": resource,
@@ -412,10 +411,14 @@ def test_consumer_descriptor_carries_standard_card_requests_without_provider_cat
     }
 
 
-def test_control_override_is_descriptor_owned_and_bounded_to_native_authority() -> None:
+def test_legacy_control_override_in_bundle_props_changes_nothing_the_hub_receives() -> None:
+    """The Control Card in Connection Hub is the only administrator override.
+
+    A props entry left from the old write-through must neither narrow the
+    Control (it intersected an administrator's later Save) nor seed it."""
     baseline = _payload()
     payload = descriptor_capability_payload(
-        bundle_props=_override_props(),
+        bundle_props=_legacy_override_props(),
         catalog=_catalog(),
         tenant=TENANT,
         project=PROJECT,
@@ -423,37 +426,9 @@ def test_control_override_is_descriptor_owned_and_bounded_to_native_authority() 
         agent_id=AGENT,
     )
 
-    assert payload["descriptor_revision"] != baseline["descriptor_revision"]
-    assert payload["descriptor_payload"]["standard_authority_overridden"] is True
-    defaults = payload["capability_defaults"]["capabilities"]
-    assert defaults["instruction_profiles"] == ["compact"]
-    assert defaults["models"] == ["anthropic/claude-haiku-4-5"]
-    assert defaults["resource_families"] == ["user_external_mcp"]
-    assert defaults["tools"] == ["web/search"]
-    assert "web/not-declared" not in defaults["tools"]
-    assert payload["resource_grants"] == {
-        NAMED_SERVICES_RESOURCE: ["named_services:use", "work:observe"],
-    }
-    assert payload["resource_operations"] == {
-        NAMED_SERVICES_RESOURCE: ["named_services_search"],
-    }
-    assert payload["named_service_operations"] == {
-        NAMED_SERVICES_RESOURCE: {"work": ["object.search"]},
-    }
-    assert payload["properties"] == {
-        "kdcube.application_operations": {
-            "schema": "connection_hub.application_operations.v1",
-            "operations": ["work.search"],
-        },
-        "kdcube.conversation_targets": [
-            application_resource(
-                tenant=TENANT,
-                project=PROJECT,
-                application="workspace@1-0",
-                agent="*",
-            ),
-        ],
-    }
+    assert payload == baseline
+    assert "standard_authority_overridden" not in payload["descriptor_payload"]
+    assert "properties" not in payload
 
 
 def test_resource_family_metadata_carries_custom_connector_limits() -> None:
@@ -906,50 +881,42 @@ async def test_sync_without_a_saved_preference_uses_the_descriptor_default() -> 
 
 
 @pytest.mark.asyncio
-async def test_sync_rebuilds_agent_defaults_from_the_saved_control_override() -> None:
-    calls = []
-    owner = SimpleNamespace(
-        bundle_props=_override_props(),
-        _agent_selection_identity=lambda: {
-            "tenant": TENANT,
-            "project": PROJECT,
-            "user_id": "user-a",
-            "bundle_id": APPLICATION,
-        },
-    )
+async def test_sync_sends_the_same_request_with_or_without_a_legacy_props_override() -> None:
+    """The default selection and the standard part come from the descriptor,
+    never from a props override (the Hub-stored Control Card narrows them)."""
 
-    async def _call(call):
-        calls.append(call)
-        payload = call.request["payload"]
-        selection = payload["selected_capabilities"]
-        return BundleNamedServiceResult(
-            value=NamedServiceResponse.ok_response(
-                object={
-                    "ok": True,
-                    "authority": payload["capability_authority"],
-                    "selection": selection,
-                    "projection": selection,
-                    "states": {},
-                }
+    async def _sync_with(bundle_props: dict) -> dict:
+        calls = []
+        owner = SimpleNamespace(
+            bundle_props=bundle_props,
+            _agent_selection_identity=lambda: {
+                "tenant": TENANT,
+                "project": PROJECT,
+                "user_id": "user-a",
+                "bundle_id": APPLICATION,
+            },
+        )
+
+        async def _call(call):
+            calls.append(call)
+            selection = call.request["payload"]["selected_capabilities"]
+            return BundleNamedServiceResult(
+                value=NamedServiceResponse.ok_response(
+                    object={
+                        "ok": True,
+                        "authority": call.request["payload"]["capability_authority"],
+                        "selection": selection,
+                        "projection": selection,
+                        "states": {},
+                    }
+                )
             )
-        )
 
-    with bind_bundle_named_service_caller(_call):
-        result = await sync_agent_capability_projection(
-            owner,
-            catalog=_catalog(),
-            agent_id=AGENT,
-        )
+        with bind_bundle_named_service_caller(_call):
+            await sync_agent_capability_projection(owner, catalog=_catalog(), agent_id=AGENT)
+        return calls[0].request["payload"]
 
-    payload = calls[0].request["payload"]
-    assert payload["selected_capabilities"] == payload["capability_defaults"]
-    assert payload["selected_resource_grants"] == payload["resource_grants"]
-    assert payload["selected_resource_operations"] == payload["resource_operations"]
-    assert (
-        payload["selected_named_service_operations"]
-        == payload["named_service_operations"]
-    )
-    assert result["projection"] == payload["capability_defaults"]
+    assert await _sync_with(_legacy_override_props()) == await _sync_with(_props())
 
 
 def _namespace_operation_catalog() -> dict:
