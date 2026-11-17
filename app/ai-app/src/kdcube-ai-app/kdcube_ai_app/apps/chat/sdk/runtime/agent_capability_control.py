@@ -1027,11 +1027,20 @@ def disabled_from_projection(
             for entry in _realm_operation_entries(raw)
             if _text(entry.get("name"))
         )
+        selected_operations = selected.get(NAMED_SERVICE_OPERATIONS, set())
+        # W38: the bare `object.action` is the action call itself. A Card that
+        # selects exact actions never holds it, so it stays callable while the
+        # namespace selects any `object.action.<name>`; the actions it does not
+        # select stay denied by name.
+        action_selected = any(
+            str(key).startswith(_member(namespace, "object.action."))
+            for key in selected_operations
+        )
         denied = sorted(
             operation
             for operation in operations
-            if _member(namespace, operation)
-            not in selected.get(NAMED_SERVICE_OPERATIONS, set())
+            if _member(namespace, operation) not in selected_operations
+            and not (operation == "object.action" and action_selected)
         )
         if denied:
             denied_namespaces[namespace] = denied

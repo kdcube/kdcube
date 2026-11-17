@@ -1028,3 +1028,28 @@ def test_a_granted_action_carries_the_claims_that_action_needs() -> None:
         "object.action.upload_file",
         "object.list",
     ]
+
+
+def test_selected_exact_actions_keep_the_action_call_and_deny_the_rest():
+    """W38 live 2026-11-17: a Card selects exact actions and never the bare
+    `object.action`; with the parent in the descriptor the projection denied it,
+    which hid object_action although actions were selected."""
+    catalog = {"named_services": [{
+        "namespace": "docs",
+        "operations": ["object.get", "object.action", "object.action.add_row", "object.action.insert_page_break"],
+    }]}
+
+    def projection(*operations):
+        return {
+            "resource": application_resource(tenant=TENANT, project=PROJECT, application=APPLICATION, agent=AGENT),
+            "schema": "connection_hub.agent_capability_policy.v1",
+            "capabilities": {
+                "named_services": ["docs"],
+                "named_service_operations": [f"docs/{operation}" for operation in operations],
+            },
+        }
+
+    denied = disabled_from_projection(catalog, projection("object.get", "object.action.add_row"))["named_services"]["docs"]
+    assert "object.action" not in denied
+    assert "object.action.insert_page_break" in denied
+    assert "object.action" in disabled_from_projection(catalog, projection("object.get"))["named_services"]["docs"]
