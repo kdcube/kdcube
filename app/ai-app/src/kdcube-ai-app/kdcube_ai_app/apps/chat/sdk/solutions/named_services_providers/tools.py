@@ -713,6 +713,19 @@ async def _agent_grant_admission(
         missing_claims = [str(c) for c in (state.get("missing_claims") or [])] or gate_claims
         not_granted = state.get("not_granted")
         if isinstance(not_granted, Mapping):
+            recovery = ((not_granted.get("ret") or {}).get("recovery") or {}) if isinstance(
+                not_granted.get("ret"), Mapping) else {}
+            if isinstance(recovery, Mapping) and recovery.get("request_user_consent") is False:
+                # W38: Connection Hub attributes the refusal to a card no user
+                # consent can change (the agent's Control). Announcing a consent
+                # demand would put an unsatisfiable "Review agent access" banner
+                # in the chat; the refusal goes back as the Hub wrote it.
+                LOGGER.warning(
+                    "Named-service agent gate: operation blocked by a card consent cannot change\n"
+                    "  namespace: %s\n  operation: %s\n  tool: %s\n  agent_client: %s",
+                    base_ns, operation, tool_name, client_id,
+                )
+                return None, dict(not_granted)
             # Claims are held; only the card's own boundary excludes the
             # operation. The demand names it, and approval grants that one.
             from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.mcp_consent import (
