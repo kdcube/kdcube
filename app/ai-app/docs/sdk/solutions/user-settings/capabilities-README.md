@@ -289,7 +289,7 @@ Descriptor, Agent Card, and conversation changes remain independent:
 | Descriptor removes a capability | The Control Card revision removes it; the next live intersection denies it without changing the credential. A retained Agent Card choice is shown as **Missing**. |
 | Descriptor adds a genuinely new capability | It becomes selectable in Agent Card and conversation pickers but remains off in existing selections until explicitly chosen. |
 | Descriptor restores a capability selected before its removal | Its preserved selection becomes effective again; scopes that had deselected it remain off. |
-| Administrator edits the Control Card | Connection Hub writes the revision-checked ceiling/default change into descriptor-owned application properties, then updates the Card. The saved descriptor value survives runtime reload. |
+| Administrator edits the Control Card | Connection Hub saves the change as one revision-checked Control Card update; the descriptor is not rewritten. A later descriptor refresh only narrows an administrator-edited Control, until **Return to descriptor** hands it back to the descriptor. |
 | User changes Agent Card defaults | A revision-checked Card update replaces the positive defaults. New conversations start from them; existing conversation selections do not change. |
 | User changes a chat picker | `agent_selection_update` replaces only that conversation's positive selection. It may select any current Control-allowed capability and never changes the Agent Card or another conversation. |
 | Labels or other metadata change | The picker can show the new presentation without treating it as authority. |
