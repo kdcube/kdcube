@@ -3060,14 +3060,13 @@ bundles:
                 # resolves these); the target apps ship built-in, so a fresh
                 # install demonstrates the delegated surface — consent-gated,
                 # dropping until the user connects accounts and grants this agent.
-                - name: memories
-                  kind: mcp
-                  server_id: memories
-                  url: "https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/user-memories@2026-06-26/public/mcp/memories"
-                  resource: "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*"
-                  transport: streamable_http
-                  delegated: true
-                  scopes: [memories:read]
+                # Memory comes through the `mem` namespace of the named-services
+                # door below, not user-memories' own MCP surface: one resident
+                # agent has one Card and one credential, so every resource on it
+                # shares one identity scope. user-memories' MCP runs under
+                # grantor_identity_family and the door under grantor, so the two
+                # together refuse every sync. `mem` keeps identity-family reads:
+                # the memory service resolves the family itself.
                 # PER-SERVICE SHAPE — the named-services bridge for ONE service
                 # (Slack on the user's connected account), scoped to its claims:
                 # the per-agent grant admits the agent into the KDCube namespace
@@ -3109,12 +3108,13 @@ bundles:
                   resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/named_services*"
                   transport: streamable_http
                   delegated: true
-                  scopes: [named_services:use, conv:read]
+                  scopes: [named_services:use, conv:read, memories:read]
                 - name: named_services_roster
                   kind: named_service
                   alias: named_services
                   namespaces:
                     conv:  { allowed: [provider.about, object.search, object.get] }
+                    mem:   { allowed: [provider.about, object.schema, object.search, object.list, object.get] }
       ui:
         main_view:
           src_folder: ui/scene
