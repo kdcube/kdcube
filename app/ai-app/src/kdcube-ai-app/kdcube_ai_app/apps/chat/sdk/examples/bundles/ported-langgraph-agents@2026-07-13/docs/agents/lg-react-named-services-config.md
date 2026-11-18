@@ -90,8 +90,10 @@ Properties:
 - A broad "the agent may work the named-service surface" posture, with the
   prompt teaching the realms and admin-side scope control → Shape B.
 - The shapes compose: a whole-surface connection can coexist with a dedicated
-  per-service connection to a DIFFERENT door (the deployment currently keeps
-  `memories` on user-memories' own MCP surface next to the Shape-B door).
+  per-service connection to a DIFFERENT door, as long as every resource on the
+  agent's Card shares one identity scope. user-memories' own MCP surface runs
+  under `grantor_identity_family`, so next to the Shape-B door memory goes
+  through the door's `mem` namespace (the deployment default).
 
 ## Keeping the three declarations honest
 
