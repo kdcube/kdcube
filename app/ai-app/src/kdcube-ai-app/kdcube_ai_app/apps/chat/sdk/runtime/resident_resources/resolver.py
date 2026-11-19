@@ -380,6 +380,12 @@ def _resolve_candidate(
             card_unavailable_reason=card_unavailable_reason,
             now_epoch=now_epoch,
         )
+    if (
+        reason is AvailabilityReason.AVAILABLE
+        and family is not None
+        and family.family_id in narrowing.disabled_families
+    ):
+        reason = AvailabilityReason.CONVERSATION_DISABLED
 
     tools = tuple(
         _resolve_tool(
@@ -434,7 +440,8 @@ def _resolve_candidate(
                 if card_applies
                 else None
             ),
-            "conversation_narrowed": candidate.resource_id in narrowing.disabled_resources,
+            "conversation_narrowed": candidate.resource_id in narrowing.disabled_resources
+            or (family is not None and family.family_id in narrowing.disabled_families),
             "resource_state": _resource_lifecycle_reason(candidate).value,
             "card_resource_state": (
                 grant.resource_state.value if grant is not None else ""
@@ -687,7 +694,16 @@ def conversation_narrowing_from_selection(
     if isinstance(resources, Mapping):
         for resource_id, value in resources.items():
             _apply(_clean(resource_id), value)
-    return ConversationNarrowing(disabled_resources=result)
+    families = raw.get("delegated_resource_families")
+    disabled_families = (
+        frozenset(_clean(item) for item in families if _clean(item))
+        if isinstance(families, (list, tuple, set))
+        else frozenset()
+    )
+    return ConversationNarrowing(
+        disabled_resources=result,
+        disabled_families=disabled_families,
+    )
 
 
 __all__ = [

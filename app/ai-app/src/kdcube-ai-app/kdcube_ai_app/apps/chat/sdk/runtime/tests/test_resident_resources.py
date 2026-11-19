@@ -973,3 +973,28 @@ def test_per_turn_service_loads_fresh_card_and_provider_facts_without_cache():
     assert second.resources[0].reason is AvailabilityReason.CARD_REVOKED
     assert second.resources[0].card_revision == 4
     assert second.resources[0].provider_revision == "provider-2"
+
+
+def test_a_conversation_that_turns_a_resource_family_off_loses_every_resource_it_admits():
+    """kdcube#270 F11: the picker's deny map names the family; the turn honours it."""
+
+    narrowing = conversation_narrowing_from_selection(
+        {"delegated_resource_families": ["user_external_mcp"]},
+        [_external()],
+    )
+    assert narrowing.disabled_families == frozenset({"user_external_mcp"})
+
+    off = _resolve(
+        [_external()],
+        card=_card(_grant(operations=("search", "delete"))),
+        conversation=narrowing,
+    )
+    assert off.resources[0].reason is AvailabilityReason.CONVERSATION_DISABLED
+    assert all(tool.available is False for tool in off.resources[0].tools)
+
+    on = _resolve(
+        [_external()],
+        card=_card(_grant(operations=("search", "delete"))),
+        conversation=conversation_narrowing_from_selection({}, [_external()]),
+    )
+    assert on.resources[0].reason is AvailabilityReason.AVAILABLE
