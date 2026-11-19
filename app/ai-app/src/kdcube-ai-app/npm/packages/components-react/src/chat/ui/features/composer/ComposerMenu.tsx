@@ -1689,7 +1689,7 @@ export function ComposerMenu({
   const capabilities = vm.capabilities
 
   const openExpandedOnHost = (
-    source: 'composer-expand' | 'chat-spotlight',
+    source: 'chat-spotlight',
     spotlightTools?: string[],
   ) => openCapabilitiesOnHost(
     {
@@ -1812,10 +1812,13 @@ export function ComposerMenu({
               </span>
               <CanvasExpandButton
                 onClick={() => {
-                  void openExpandedOnHost('composer-expand').then((acked) => {
-                    if (acked) close()
-                    else setView('modal')
-                  })
+                  // kdcube#270 F7/F12: expanding is the same conversation
+                  // picker with the same draft, never a second window. A
+                  // scene window is another frame: it cannot hold this
+                  // draft, and without the conversation it edits the Agent
+                  // Card defaults. The full-page picker for the Card stays
+                  // the widget's own button.
+                  setView('modal')
                 }}
                 title="Expand"
               />
