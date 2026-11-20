@@ -1594,6 +1594,7 @@ async def publish_agent_capability_control(
     catalog: Mapping[str, Any],
     agent_id: str,
     bundle_props: Mapping[str, Any] | None = None,
+    identity: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """W41: publish one agent's shared descriptor Control as the application's deployment.
 
@@ -1603,7 +1604,8 @@ async def publish_agent_capability_control(
     refused publication, which the caller logs.
     """
 
-    identity = agent_capability_identity(entrypoint)
+    # The deployment names its own scope; a request derives it from its context.
+    identity = identity or agent_capability_identity(entrypoint)
     tenant, project = _text(identity.get("tenant")), _text(identity.get("project"))
     application = _text(identity.get("bundle_id"))
     if not tenant or not project or not application or not agent_id:

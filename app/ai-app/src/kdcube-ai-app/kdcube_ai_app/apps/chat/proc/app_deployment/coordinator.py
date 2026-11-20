@@ -404,6 +404,19 @@ async def deploy_loaded_bundle_app_resources(
             logger=logger,
             reread_props=_reread_effective_props,
         )
+        # W41: the application's agents' shared descriptor Controls, published
+        # from the props re-read under this lock (never a user's sync).
+        from kdcube_ai_app.apps.chat.proc.app_deployment.descriptor_controls import (
+            publish_agent_descriptor_controls,
+        )
+
+        try:
+            await publish_agent_descriptor_controls(
+                workflow=workflow, tenant=tenant, project=project, bundle_id=bundle_id,
+                props=await _reread_effective_props(), redis=redis, pg_pool=pg_pool, logger=logger)
+        except Exception as exc:  # the Controls never block the app's deployment
+            logger.log(f"[bundle.deploy.descriptor-controls] skipped bundle={bundle_id}: {type(exc).__name__}",
+                       "WARNING")
 
     await run_once_for_shared_bundle_storage(
         storage_root=storage_root,
