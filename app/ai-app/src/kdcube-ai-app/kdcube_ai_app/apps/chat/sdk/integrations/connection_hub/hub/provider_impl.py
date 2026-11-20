@@ -315,6 +315,44 @@ class ConnectionHubProvider(ConnectionsProviderBase):
             # be able to tell it from "nothing to gate".
             return {"unavailable": exc.reason or "catalog_unavailable"}
 
+    async def publish_agent_capabilities(
+        self,
+        ctx: NamedServiceContext,
+        *,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """W41: the calling application's deployment publishes one agent's shared Control.
+
+        The platform binds the calling app (``source_bundle_id``); it must be
+        the descriptor's own application. No user is involved: the Control is
+        the application's, for every user of the agent.
+        """
+        application = str(payload.get("application") or "").strip()
+        source_bundle_id = str(
+            dict(ctx.metadata or {}).get(SOURCE_BUNDLE_ID_METADATA) or ""
+        ).strip()
+        if not source_bundle_id or source_bundle_id != application:
+            return {
+                "ok": False,
+                "error": "agent_capability_source_mismatch",
+                "message": "The descriptor application must match the platform-bound source bundle.",
+                "status": 403,
+            }
+        if self._automation_access_factory is None:
+            return {"ok": False, "error": "agent_capability_service_unavailable", "status": 503}
+        service = await self._automation_access()
+        if service is None:
+            return {"ok": False, "error": "agent_capability_service_unavailable", "status": 503}
+        accepted_keys = (
+            "application", "agent_id", "descriptor_revision", "descriptor_payload", "capability_authority",
+            "capability_metadata", "capability_catalog", "selected_capabilities", "conversation_target_resources",
+            "resource_grants", "resource_operations", "named_service_operations", "properties", "issuer_label",
+            "manage_url",
+        )
+        descriptor = {key: payload[key] for key in accepted_keys if key in payload}
+        result = await service.publish_agent_descriptor_control({"bundle_id": source_bundle_id}, **descriptor)
+        return dict(result or {})
+
     async def sync_agent_capabilities(
         self,
         ctx: NamedServiceContext,
@@ -336,7 +374,8 @@ class ConnectionHubProvider(ConnectionsProviderBase):
                 "status": 403,
             }
         user_id = self._user_id(ctx)
-        if not user_id:
+        if not user_id or user_id.startswith("application-authority:"):
+            # W41: an application's synthetic holder is never a person.
             return {
                 "ok": False,
                 "error": "delegated_access_requires_authenticated_user",
