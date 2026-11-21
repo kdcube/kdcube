@@ -1,13 +1,13 @@
-aiohttp==3.12.15
+aiohttp==3.14.5
 fastapi==0.116.1
 # langchain-openai==0.3.28
 langchain==1.2.0
 langchain-community==0.4.1
 langchain-openai==1.1.6
-langchain-core==1.2.6
+langchain-core==1.8.4
 # langgraph==0.6.1
 # langmem>=0.0.4,<0.1.0
-langgraph==1.0.5
+langgraph==1.0.10
 # Pin the split-out prebuilt/checkpoint packages: unpinned, the container resolved a
 # newer langgraph-prebuilt whose tool_node imports ExecutionInfo/ServerInfo from a
 # newer langgraph.runtime than core 1.0.5 ships -> ImportError on create_react_agent.
@@ -24,7 +24,7 @@ langgraph-checkpoint==3.0.1
 langgraph-checkpoint-postgres==3.0.5
 langmem==0.0.30
 dramatiq==1.18.0
-PyJWT[crypto]==2.10.1
+PyJWT[crypto]==2.15.1
 # Standards-compliant WebAuthn parsing and signature/attestation verification.
 webauthn==2.8.0
 pydantic==2.13.4
@@ -121,7 +121,7 @@ stripe==14.3.0
 # v2 serves both 2026-07-28 stateless clients and legacy initialize clients.
 # This set is tested with FastAPI 0.116.1 and the Starlette version it resolves.
 sse-starlette==3.0.3
-httpx2==2.9.1
+httpx2==2.12.0
 mcp==2.0.0
 
 # faiss vector backend for the generic hybrid index (infra/index/faiss); used by any bundle.

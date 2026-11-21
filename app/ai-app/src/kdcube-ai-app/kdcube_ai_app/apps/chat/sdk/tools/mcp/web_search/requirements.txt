@@ -5,7 +5,7 @@
 # environment this pipeline runs in inside KDCube; deps the platform
 # leaves unpinned stay unpinned here.
 mcp==2.0.0
-aiohttp==3.12.15
+aiohttp==3.14.5
 # aiohttp needs it to decode brotli-compressed (content-encoding: br)
 # responses, which common sites serve
 brotli
@@ -16,7 +16,7 @@ requests==2.32.5
 beautifulsoup4
 Pillow
 redis==6.2.0
-langchain-core==1.2.6
+langchain-core==1.8.4
 langchain-openai==1.1.6
 connection-hub>=2026.09.02.0000
 certifi

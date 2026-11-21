@@ -3,7 +3,7 @@
 -r ../../app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tools/mcp/web_search/requirements.txt
 app-foundation[mcp]>=2026.09.03.1835,<2027
 langchain==1.2.0
-langgraph==1.0.5
+langgraph==1.0.10
 langgraph-prebuilt==1.0.8
 langgraph-checkpoint-postgres==3.0.5
 psycopg[binary,pool]==3.3.4
