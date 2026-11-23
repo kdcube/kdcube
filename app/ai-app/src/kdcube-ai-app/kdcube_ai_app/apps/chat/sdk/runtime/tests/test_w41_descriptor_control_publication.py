@@ -133,3 +133,25 @@ async def test_the_deployment_publication_uses_the_props_it_was_given() -> None:
     assert answer["ok"] is True
     assert [c["operation"] for c in calls] == [PUBLISH]
     assert calls[0]["payload"]["application"] == APPLICATION and calls[0]["payload"]["agent_id"] == AGENT
+
+
+@pytest.mark.asyncio
+async def test_c2_an_authority_that_moves_during_the_publication_stops_the_retry(authority) -> None:
+    calls, call = _hub("agent_descriptor_control_not_published", "ok")
+    reads = {"n": 0}
+    original = authority["props"]
+
+    async def moving(**_kwargs):
+        reads["n"] += 1
+        return copy.deepcopy(original if reads["n"] == 1 else _override_props())
+
+    import kdcube_ai_app.infra.plugin.bundle_store as bundle_store
+    bundle_store.get_bundle_props_from_authority, saved = moving, bundle_store.get_bundle_props_from_authority
+    try:
+        with bind_bundle_named_service_caller(call):
+            with pytest.raises(AgentCapabilityControlUnavailable) as caught:
+                await sync_agent_capability_projection(_owner(), catalog=_catalog(), agent_id=AGENT)
+    finally:
+        bundle_store.get_bundle_props_from_authority = saved
+    assert [c["operation"] for c in calls] == [SYNC, PUBLISH]
+    assert caught.value.code == "agent_descriptor_control_not_published"

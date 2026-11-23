@@ -1492,7 +1492,12 @@ async def _sync_agent_capability_projection(
         if await _descriptor_matches_authority(entrypoint, payload, catalog=catalog, identity=identity):
             # The descriptor's own default seeds the Control, never this user's picks.
             published = await publish_agent_capability_control(entrypoint, catalog=catalog, agent_id=agent_id)
-            if published.get("ok") is True:
+            # Review C2: this publication ran outside the deployment's lock. If the
+            # authority moved meanwhile, this runtime is now the older one: stop
+            # here; the next sync of a current runtime (or the deployment)
+            # publishes the newer descriptor again.
+            if published.get("ok") is True and await _descriptor_matches_authority(
+                    entrypoint, payload, catalog=catalog, identity=identity):
                 response = await _call_connection_hub(entrypoint, "sync", payload, tenant=tenant, project=project)
     if not response.ok:
         _raise_sync_failure(response)
