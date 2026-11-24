@@ -1738,6 +1738,23 @@ def build_announce_delegation_lines(
     return lines
 
 
+_AUTHORITY_UPDATING = "agent_authority_updating"
+
+
+def build_announce_turn_tools_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[str]:
+    """`[TOOLS]` — W40: this turn could not name its conversation to Connection Hub,
+    so the connected-service tools are unavailable this turn; say why plainly."""
+    reason = str(getattr(runtime_ctx, "resident_turn_token_refusal", "") or "").strip() if runtime_ctx else ""
+    if not reason:
+        return []
+    if reason == _AUTHORITY_UPDATING:
+        why = ("the agent's permissions are being updated (up to about 2 minutes); "
+               "tell the user to try again shortly")
+    else:
+        why = f"this conversation's permissions are unavailable ({reason})"
+    return ["[TOOLS]", f"  connected-service tools are unavailable this turn: {why}."]
+
+
 def build_announce_cold_turn_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[str]:
     """`[CACHE]` — one small turn-local line when a selection change applied on
     a warm conversation: the context re-caches this turn, and the rebuild
@@ -1866,6 +1883,11 @@ def build_announce_text(
     if show_status_sections and reactivated_tool_lines:
         lines.append("")
         lines.extend(reactivated_tool_lines)
+
+    turn_tools_lines = build_announce_turn_tools_lines(runtime_ctx=runtime_ctx)
+    if show_status_sections and turn_tools_lines:
+        lines.append("")
+        lines.extend(turn_tools_lines)
 
     cold_turn_lines = build_announce_cold_turn_lines(runtime_ctx=runtime_ctx)
     if show_status_sections and cold_turn_lines:

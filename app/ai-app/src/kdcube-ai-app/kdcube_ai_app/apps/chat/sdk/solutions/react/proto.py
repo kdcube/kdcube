@@ -188,6 +188,9 @@ class RuntimeCtx:
     # premium is attributable as one component within the turn's spend sum.
     # Shape: {reason, reasons, deltas, prev_model?, new_model?, policy?, warm}.
     cold_turn_marker: Optional[Dict[str, Any]] = None
+    # W40: why this turn has no turn token (so no connected-service tools), for
+    # the [TOOLS] announce line; the code only, never a credential.
+    resident_turn_token_refusal: Optional[str] = None
     # ---- ReAct subagents (charter-scoped child conversations) ----
     # Spawner injected by the host workflow (runtime-only, never serialized).
     # Its presence makes `react.delegate` available to this agent's decision
@@ -276,6 +279,7 @@ class RuntimeCtx:
             "inactive_tools": copy.deepcopy(self.inactive_tools or []),
             "reactivated_tools": copy.deepcopy(self.reactivated_tools or []),
             "cold_turn_marker": copy.deepcopy(self.cold_turn_marker) if self.cold_turn_marker else None,
+            "resident_turn_token_refusal": self.resident_turn_token_refusal,
             "subagent_depth": int(self.subagent_depth or 0),
             "subagent_parent": copy.deepcopy(self.subagent_parent) if self.subagent_parent else None,
             "subagent_defaults": copy.deepcopy(self.subagent_defaults) if self.subagent_defaults else None,
