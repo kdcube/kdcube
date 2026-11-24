@@ -403,3 +403,50 @@ def test_connection_allowed_tools_reads_wildcards_as_unenumerable() -> None:
     assert mcp_bridge.connection_allowed_tools(_PRESS) == ["search", "get_post", "commit_entry"]
     assert mcp_bridge.connection_allowed_tools({"allowed": ["*"]}) == []
     assert mcp_bridge.connection_allowed_tools({}) == []
+
+
+# ── W40: a fixed-header runtime gets a per_call turn token ───────────────────
+
+_DELEGATED = [{"kind": "mcp", "server_id": "hub", "url": "https://hub/mcp", "delegated": True},
+              {"kind": "mcp", "server_id": "plain", "url": "https://plain/mcp"}]
+
+
+def _w40_world(monkeypatch, answer):
+    from types import SimpleNamespace
+
+    from kdcube_ai_app.apps.chat.sdk.runtime import agent_capability_control
+
+    seen = {}
+
+    async def _resolver(connections, **kwargs):
+        seen["servers"] = [conn["server_id"] for conn in connections]
+        return {conn["server_id"]: {"url": conn["url"], "headers": {"Authorization": "Bearer card"}}
+                for conn in connections}
+
+    async def _token(entrypoint, **kwargs):
+        seen["request"] = kwargs
+        return answer
+
+    monkeypatch.setattr(mcp_bridge, "resolve_mcp_server_map", _resolver)
+    monkeypatch.setattr(agent_capability_control, "request_agent_turn_token", _token)
+    entrypoint = SimpleNamespace(comm=SimpleNamespace(user_id="u1", conversation={"conversation_id": "c1",
+                                                                                    "turn_id": "t1"}))
+    return entrypoint, seen
+
+
+def test_w40_delegated_servers_carry_a_per_call_turn_token(monkeypatch) -> None:
+    entrypoint, seen = _w40_world(monkeypatch, {"ok": True, "turn_token": "ts1.per.call"})
+    server_map = asyncio.run(mcp_bridge.resolve_turn_mcp(entrypoint, list(_DELEGATED), agent_id="lg-react",
+                                                         application="app@1-0", user_sub="u1"))
+    assert server_map["hub"]["headers"] == {"Authorization": "Bearer card", "x-connection-hub-turn": "ts1.per.call"}
+    assert "x-connection-hub-turn" not in server_map["plain"]["headers"]
+    assert seen["request"] == {"agent_id": "lg-react", "conversation_id": "c1", "turn_id": "t1", "mode": "per_call"}
+
+
+def test_w40_a_refused_turn_token_keeps_the_delegated_servers_out_of_the_turn(monkeypatch) -> None:
+    entrypoint, seen = _w40_world(monkeypatch, {"ok": False, "error": "agent_authority_updating"})
+    drops = {}
+    server_map = asyncio.run(mcp_bridge.resolve_turn_mcp(entrypoint, list(_DELEGATED), agent_id="lg-react",
+                                                         application="app@1-0", user_sub="u1", drop_sink=drops))
+    assert list(server_map) == ["plain"] and seen["servers"] == ["plain"]
+    assert drops == {"hub": mcp_bridge.DROP_TURN_TOKEN_UNAVAILABLE}

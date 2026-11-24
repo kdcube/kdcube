@@ -82,6 +82,40 @@ def current_turn_user_sub(entrypoint: Any) -> str:
         return ""
 
 
+def current_turn_conversation(entrypoint: Any) -> tuple[str, str]:
+    """This turn's ``(conversation_id, turn_id)`` from the bound communicator; empty outside a turn."""
+    try:
+        conversation = getattr(entrypoint.comm, "conversation", None) or {}
+    except Exception:
+        return "", ""
+    if not isinstance(conversation, Mapping):
+        return "", ""
+    return (str(conversation.get("conversation_id") or "").strip(), str(conversation.get("turn_id") or "").strip())
+
+
+TURN_TOKEN_HEADER = "x-connection-hub-turn"
+DROP_TURN_TOKEN_UNAVAILABLE = "turn_token_unavailable"
+
+
+async def _per_call_turn_token(entrypoint: Any, *, agent_id: str) -> tuple[str, str]:
+    """W40: a turn token for a runtime whose headers are fixed for the turn.
+
+    Mode ``per_call``: valid up to the turn cap and never renewed; the guard
+    checks on every call that this turn is still alive. Returns ``(token,
+    refusal)``; a turn outside any conversation needs none.
+    """
+    conversation_id, turn_id = current_turn_conversation(entrypoint)
+    if not conversation_id or not turn_id:
+        return "", ""
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import request_agent_turn_token
+
+    answer = await request_agent_turn_token(entrypoint, agent_id=agent_id, conversation_id=conversation_id,
+                                            turn_id=turn_id, mode="per_call")
+    if answer.get("ok"):
+        return str(answer["turn_token"]), ""
+    return "", str(answer.get("error") or DROP_TURN_TOKEN_UNAVAILABLE)
+
+
 def agent_grant_bearer_provider(entrypoint: Any, agent_client_id: str):
     """A bearer provider that reads THIS agent's consented per-agent grant token
     from the Connection Hub named service (`agent_grant.get_token`) for the turn's
@@ -216,13 +250,32 @@ async def resolve_turn_mcp(
     consent-shaped absence; the map simply omits the connection."""
     client_id = delegated_client_id_for_agent(application, agent_id)
     sub = user_sub if user_sub is not None else current_turn_user_sub(entrypoint)
-    return await resolve_mcp_server_map(
+    delegated = {str(conn.get("server_id") or conn.get("name") or "").strip()
+                 for conn in connections or [] if isinstance(conn, Mapping) and conn.get("delegated")}
+    turn_token, refusal = ("", "")
+    if delegated:
+        turn_token, refusal = await _per_call_turn_token(entrypoint, agent_id=agent_id)
+    if refusal:
+        # W40: without the turn token the guard would apply the Card's defaults,
+        # not this conversation's choice; the delegated servers stay out of this turn.
+        connections = [conn for conn in connections or []
+                       if not (isinstance(conn, Mapping) and conn.get("delegated"))]
+        if drop_sink is not None:
+            for server_id in delegated:
+                if server_id:
+                    drop_sink[server_id] = DROP_TURN_TOKEN_UNAVAILABLE
+    server_map = await resolve_mcp_server_map(
         connections or [],
         user_sub=sub,
         client_id=client_id,
         bearer_provider=agent_grant_bearer_provider(entrypoint, client_id),
         drop_sink=drop_sink,
     )
+    if turn_token:
+        for server_id, entry in server_map.items():
+            if server_id in delegated and isinstance(entry, dict):
+                entry["headers"] = {**dict(entry.get("headers") or {}), TURN_TOKEN_HEADER: turn_token}
+    return server_map
 
 
 def claude_code_mcp_servers(
