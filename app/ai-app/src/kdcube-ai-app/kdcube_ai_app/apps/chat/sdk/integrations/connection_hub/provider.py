@@ -487,6 +487,60 @@ class ConnectionsProviderBase(NamedServiceProvider):
             "status": 501,
         }
 
+    # ── W40: conversation slices (local-only; the host binds user and app) ───
+
+    _SLICE_OPERATIONS = {
+        "turn": ("application", "agent_id", "conversation_id", "turn_id"),
+        "conversation": ("application", "agent_id", "conversation_id"),
+        "promote": ("application", "agent_id", "turn_token"),
+        "conversation_delete": ("conversation_id", "phase"),
+    }
+
+    async def _slice_operation(self, ctx: NamedServiceContext, request: NamedServiceRequest,
+                               kind: str) -> NamedServiceResponse:
+        payload = dict(request.payload or {})
+        missing = [key for key in self._SLICE_OPERATIONS[kind] if not str(payload.get(key) or "").strip()]
+        if missing:
+            return self._error("connections_agent_capability_args_required",
+                               f"Required conversation fields are missing: {', '.join(missing)}", status=400)
+        try:
+            result = dict(await self.conversation_slice_call(ctx, kind=kind, payload=payload) or {})
+        except Exception:
+            result = {"ok": False, "error": "connections_conversation_slice_failed", "retryable": True, "status": 503}
+        if result.get("ok") is not True:
+            from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
+
+            failure = capability_sync_failure(result, code="connections_conversation_slice_failed")
+            return NamedServiceResponse.error_response(code=failure["error"], message=failure["error"],
+                                                       status=failure["status"], details=failure,
+                                                       provider=self.provider_identity(), namespace=NAMESPACE)
+        return NamedServiceResponse.ok_response(provider=self.provider_identity(), namespace=NAMESPACE, object=result)
+
+    async def agent_capability_turn(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
+        """W40: the token naming this turn's conversation."""
+        return await self._slice_operation(ctx, request, "turn")
+
+    async def agent_capability_conversation(self, ctx: NamedServiceContext,
+                                            request: NamedServiceRequest) -> NamedServiceResponse:
+        """W40: the conversation picker's write (now, or deferred by the cache policy)."""
+        return await self._slice_operation(ctx, request, "conversation")
+
+    async def agent_capability_promote(self, ctx: NamedServiceContext,
+                                       request: NamedServiceRequest) -> NamedServiceResponse:
+        """W40 A2: apply the stored deferred change of the turn's conversation."""
+        return await self._slice_operation(ctx, request, "promote")
+
+    async def agent_capability_conversation_delete(self, ctx: NamedServiceContext,
+                                                   request: NamedServiceRequest) -> NamedServiceResponse:
+        """W40 A1: ``phase`` mark (before the messages) or remove (after them)."""
+        return await self._slice_operation(ctx, request, "conversation_delete")
+
+    async def conversation_slice_call(self, ctx: NamedServiceContext, *, kind: str,
+                                      payload: Mapping[str, Any]) -> dict[str, Any]:
+        """W40: only the Connection Hub host keeps conversation slices."""
+        del ctx, kind, payload
+        return {"ok": False, "error": "conversation_slices_not_supported", "status": 501}
+
     async def publish_agent_capabilities(
         self,
         ctx: NamedServiceContext,

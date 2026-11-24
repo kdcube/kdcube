@@ -315,6 +315,57 @@ class ConnectionHubProvider(ConnectionsProviderBase):
             # be able to tell it from "nothing to gate".
             return {"unavailable": exc.reason or "catalog_unavailable"}
 
+    async def conversation_slice_call(
+        self,
+        ctx: NamedServiceContext,
+        *,
+        kind: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """W40: a conversation-slice request of the calling application, for its signed-in user.
+
+        The application named in the request must be the platform-bound
+        calling app; the user is the host's binding, never an application
+        holder. The runtime supplies no selection of authority except the
+        picker's own conversation choice.
+        """
+        source_bundle_id = str(dict(ctx.metadata or {}).get(SOURCE_BUNDLE_ID_METADATA) or "").strip()
+        application = str(payload.get("application") or "").strip()
+        if kind != "conversation_delete" and (not source_bundle_id or source_bundle_id != application):
+            return {"ok": False, "error": "agent_capability_source_mismatch", "status": 403}
+        user_id = self._user_id(ctx)
+        if not user_id or user_id.startswith("application-authority:"):
+            return {"ok": False, "error": "delegated_access_requires_authenticated_user", "status": 401}
+        service = await self._automation_access() if self._automation_access_factory is not None else None
+        if service is None:
+            return {"ok": False, "error": "agent_capability_service_unavailable", "status": 503}
+        user = {"user_id": user_id}
+        if kind == "turn":
+            return await service.begin_agent_turn(
+                user, application=application, agent_id=str(payload["agent_id"]),
+                conversation_id=str(payload["conversation_id"]), turn_id=str(payload["turn_id"]),
+                turn_token=str(payload.get("turn_token") or ""))
+        if kind == "conversation":
+            selection = payload.get("selection")
+            if not isinstance(selection, Mapping):
+                return {"ok": False, "error": "connections_agent_capability_args_required", "status": 400}
+            expected = payload.get("expected_slice_revision")
+            return await service.update_conversation_selection(
+                user, application=application, agent_id=str(payload["agent_id"]),
+                conversation_id=str(payload["conversation_id"]), selection=dict(selection),
+                expected_slice_revision=int(expected) if expected is not None else None,
+                deferred=payload.get("deferred") is True)
+        if kind == "promote":
+            return await service.promote_conversation_pending(
+                user, application=application, agent_id=str(payload["agent_id"]),
+                turn_token=str(payload["turn_token"]))
+        phase = str(payload.get("phase") or "")
+        if phase == "mark":
+            return await service.mark_conversation_deleting(user, conversation_id=str(payload["conversation_id"]))
+        if phase == "remove":
+            return await service.remove_conversation_slices(user, conversation_id=str(payload["conversation_id"]))
+        return {"ok": False, "error": "conversation_delete_phase_invalid", "status": 400}
+
     async def publish_agent_capabilities(
         self,
         ctx: NamedServiceContext,
