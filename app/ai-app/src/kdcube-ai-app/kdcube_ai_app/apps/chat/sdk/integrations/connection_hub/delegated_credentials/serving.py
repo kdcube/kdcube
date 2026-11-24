@@ -108,13 +108,37 @@ def delegated_card_store(*, tenant: str, project: str) -> Any | None:
     return BundleStorageDelegatedCardStore(root)
 
 
+GRANTOR_AUTHORITY_SECRET_PATH = "connections.delegated_credentials.grantor_authority_secret"
+
+
+async def _kdcube_turn_secret() -> str:
+    """W40: the Hub's grantor-authority secret, read only to derive the turn-token key."""
+    from kdcube_ai_app.apps.chat.sdk.config import get_secret
+
+    app_id = connection_hub_app_id()
+    if not app_id:
+        return ""
+    return str(await get_secret(f"b:{GRANTOR_AUTHORITY_SECRET_PATH}", bundle_id=app_id) or "")
+
+
 async def install_delegated_serving_resolvers(
     app: Any,
     *,
     redis: Any,
     tenant: str,
     project: str,
+    pg_pool: Any = None,
 ) -> bool:
+    registry = None
+    if pg_pool is not None and redis is not None:
+        # W40: the guard checks a per_call token's turn against KDCube's records.
+        from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.conversation_registry import (
+            KDCubeConversationRegistry,
+        )
+
+        registry = KDCubeConversationRegistry(conv_index=ConvIndex(pool=pg_pool), redis=redis,
+                                              tenant=tenant, project=project)
     return await _core.install_delegated_serving_resolvers(
         app,
         redis=redis,
@@ -123,6 +147,8 @@ async def install_delegated_serving_resolvers(
         app_id_resolver=connection_hub_app_id,
         storage_root_resolver=_kdcube_storage_root_resolver,
         bundle_props_loader=_kdcube_bundle_props_loader,
+        turn_secret_reader=_kdcube_turn_secret,
+        conversation_registry=registry,
     )
 
 

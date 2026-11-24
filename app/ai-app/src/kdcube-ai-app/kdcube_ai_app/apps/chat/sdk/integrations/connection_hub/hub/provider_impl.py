@@ -344,7 +344,8 @@ class ConnectionHubProvider(ConnectionsProviderBase):
             return await service.begin_agent_turn(
                 user, application=application, agent_id=str(payload["agent_id"]),
                 conversation_id=str(payload["conversation_id"]), turn_id=str(payload["turn_id"]),
-                turn_token=str(payload.get("turn_token") or ""))
+                turn_token=str(payload.get("turn_token") or ""),
+                mode=str(payload.get("mode") or "renew"))
         if kind == "conversation":
             selection = payload.get("selection")
             if not isinstance(selection, Mapping):

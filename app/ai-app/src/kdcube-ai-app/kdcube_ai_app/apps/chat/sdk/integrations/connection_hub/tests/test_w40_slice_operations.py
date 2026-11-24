@@ -46,7 +46,7 @@ async def test_the_turn_operation_reaches_the_hub_for_the_calling_app_and_user()
                                                             conversation_id="c1", turn_id="t1"))
     assert response.ok, response
     assert service.calls == [("begin_agent_turn", {"user_id": "user-1"}, {
-        "application": APP, "agent_id": "main", "conversation_id": "c1", "turn_id": "t1", "turn_token": ""})]
+        "application": APP, "agent_id": "main", "conversation_id": "c1", "turn_id": "t1", "turn_token": "", "mode": "renew"})]
 
 
 @pytest.mark.asyncio

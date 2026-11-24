@@ -691,7 +691,7 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
     from connection_hub.delegated_credentials.slices.guard import narrow_live_composition_for_turn
 
     composition = await narrow_live_composition_for_turn(
-        composition, card_store=card_store, turn_token=_request_turn_token(request))
+        composition, card_store=card_store, turn_token=_request_turn_token(request), resolvers=resolvers)
     _store_live_card_composition(request, composition)
     card = composition.effective_card
     LOGGER.info(

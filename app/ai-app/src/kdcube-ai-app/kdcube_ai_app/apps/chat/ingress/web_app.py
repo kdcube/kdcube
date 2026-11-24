@@ -332,6 +332,7 @@ async def lifespan(app: FastAPI):
             redis=getattr(app.state, "redis_async", None),
             tenant=settings.TENANT,
             project=settings.PROJECT,
+            pg_pool=getattr(app.state, "pg_pool", None),
         )
     except Exception as e:
         logger.warning("Failed to install delegated serving resolvers: %s", e)
