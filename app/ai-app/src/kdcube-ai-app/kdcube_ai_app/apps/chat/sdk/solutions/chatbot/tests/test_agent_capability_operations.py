@@ -117,6 +117,19 @@ class _CapabilityStore:
         }
 
 
+@pytest.fixture(autouse=True)
+def _hub_slice_writes(monkeypatch):
+    """W40: a conversation's capability write goes to its Hub slice first; recorded here."""
+    writes: list[dict[str, Any]] = []
+
+    async def _write(_entrypoint: Any, **kwargs: Any):
+        writes.append(copy.deepcopy(kwargs))
+        return {"ok": True, "slice_revision": len(writes)}
+
+    monkeypatch.setattr(capability_control, "write_conversation_capabilities", _write)
+    return writes
+
+
 def _owner(
     *,
     pg_pool: Any,
@@ -640,3 +653,46 @@ async def test_capability_update_without_conversation_replaces_agent_card_defaul
         CATALOG,
         calls[1]["selected_capabilities"],
     ) == {}
+
+
+
+@pytest.mark.asyncio
+async def test_w40_the_conversation_write_reaches_the_hub_slice_with_kdcubes_selection(
+        monkeypatch, _hub_slice_writes) -> None:
+    authority = _authority()
+    events: list[str] = []
+    capability_store = _CapabilityStore(events, authority)
+
+    async def _sync(_entrypoint: Any, **kwargs: Any):
+        return {"authority": authority, "projection": authority, "selection": authority, "states": {}}
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    owner = _owner(pg_pool=object(), store=_Store(events), capability_store=capability_store)
+    result = await BaseEntrypoint.agent_selection_update(
+        owner, data={"data": {"agent": "main", "conversation_id": "conv-a", "disabled": {"tools": {"web": True}}}})
+
+    assert result["ok"] is True
+    assert [w["conversation_id"] for w in _hub_slice_writes] == ["conv-a"]
+    assert _hub_slice_writes[0]["selected_capabilities"] == capability_store.set_calls[0]["projection"]
+
+
+@pytest.mark.asyncio
+async def test_w40_a_hub_refusal_leaves_the_conversation_record_unchanged(monkeypatch) -> None:
+    authority = _authority()
+    events: list[str] = []
+    capability_store = _CapabilityStore(events, authority)
+
+    async def _sync(_entrypoint: Any, **kwargs: Any):
+        return {"authority": authority, "projection": authority, "selection": authority, "states": {}}
+
+    async def _refused(_entrypoint: Any, **kwargs: Any):
+        raise capability_control.AgentCapabilityControlUnavailable("agent_authority_updating", retryable=True)
+
+    monkeypatch.setattr(capability_control, "sync_agent_capability_projection", _sync)
+    monkeypatch.setattr(capability_control, "write_conversation_capabilities", _refused)
+    owner = _owner(pg_pool=object(), store=_Store(events), capability_store=capability_store)
+    result = await BaseEntrypoint.agent_selection_update(
+        owner, data={"data": {"agent": "main", "conversation_id": "conv-a", "disabled": {"tools": {"web": True}}}})
+
+    assert result["ok"] is False and result["error"] == "agent_authority_updating" and result["retryable"] is True
+    assert capability_store.set_calls == [] and "conversation-write" not in events

@@ -1451,6 +1451,16 @@ class BaseEntrypoint:
                     )
                 if conversation_id:
                     assert capability_store is not None
+                    # W40: the conversation's slice in Connection Hub is the authority
+                    # the guard applies; write it first, so a refusal (for example
+                    # agent_authority_updating) leaves both records unchanged.
+                    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                        write_conversation_capabilities,
+                    )
+
+                    await write_conversation_capabilities(
+                        self, agent_id=agent_id, conversation_id=conversation_id,
+                        selected_capabilities=selected_capabilities)
                     conversation_selection = await capability_store.set_projection(
                         user_id=identity["user_id"],
                         bundle_id=identity["bundle_id"],

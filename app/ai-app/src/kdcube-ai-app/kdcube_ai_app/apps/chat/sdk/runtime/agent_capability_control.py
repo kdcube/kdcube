@@ -1550,7 +1550,9 @@ async def _call_connection_hub(
     )
     from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceResponse
 
-    operation = {"publish": AGENT_CAPABILITY_PUBLISH, "turn": AGENT_CAPABILITY_TURN}.get(kind, AGENT_CAPABILITY_SYNC)
+    operation = {"publish": AGENT_CAPABILITY_PUBLISH, "turn": AGENT_CAPABILITY_TURN,
+                 # W40: the conversation picker's write (a local provider operation).
+                 "conversation": "agent_capability.conversation"}.get(kind, AGENT_CAPABILITY_SYNC)
     try:
         result = await call_bundle_named_service(
             bundle_id=connection_hub_bundle_id_from_entrypoint(entrypoint),
@@ -1597,6 +1599,37 @@ async def request_agent_turn_token(
     answer = dict(getattr(response, "object", None) or {})
     token = _text(answer.get("turn_token"))
     return {"ok": True, "turn_token": token} if token else {"ok": False, "error": "agent_turn_token_unavailable"}
+
+
+async def write_conversation_capabilities(
+    entrypoint: Any,
+    *,
+    agent_id: str,
+    conversation_id: str,
+    selected_capabilities: Mapping[str, Any],
+) -> dict[str, Any]:
+    """W40: the conversation picker's capability selection, written to the conversation's slice.
+
+    The Hub converts KDCube's capability selection within the live shared
+    Control and applies it from the next call. Raises
+    ``AgentCapabilityControlUnavailable`` with the Hub's code on a refusal
+    (``agent_authority_updating`` while the agent's permissions are being
+    updated), so the picker reports it and nothing else is written.
+    """
+    identity = agent_capability_identity(entrypoint)
+    tenant, project = _text(identity.get("tenant")), _text(identity.get("project"))
+    application = _text(identity.get("bundle_id"))
+    if not tenant or not project or not application or not agent_id or not conversation_id:
+        raise AgentCapabilityControlUnavailable("agent_capability_identity_missing", retryable=False, status=400)
+    payload = {"application": application, "agent_id": agent_id, "conversation_id": conversation_id,
+               "selected_capabilities": copy.deepcopy(dict(selected_capabilities or {}))}
+    response = await _call_connection_hub(entrypoint, "conversation", payload, tenant=tenant, project=project)
+    if not response.ok:
+        details = dict(getattr(response.error, "details", {}) or {})
+        raise AgentCapabilityControlUnavailable(
+            _error_code(response) or "conversation_selection_unavailable",
+            retryable=bool(details.get("retryable", True)), status=int(response.status or 503))
+    return dict(getattr(response, "object", None) or {})
 
 
 class TurnTokenProvider:
@@ -1701,6 +1734,7 @@ __all__ = [
     "AgentCapabilityControlUnavailable",
     "TurnTokenProvider",
     "request_agent_turn_token",
+    "write_conversation_capabilities",
     "agent_card_revision",
     "capability_preferences_from_projection",
     "agent_capability_identity",
