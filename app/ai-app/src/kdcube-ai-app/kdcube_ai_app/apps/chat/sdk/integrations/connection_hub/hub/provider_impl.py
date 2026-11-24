@@ -348,18 +348,17 @@ class ConnectionHubProvider(ConnectionsProviderBase):
                 mode=str(payload.get("mode") or "renew"))
         if kind == "conversation":
             selection = payload.get("selection")
-            if not isinstance(selection, Mapping):
+            capabilities = payload.get("selected_capabilities")
+            if not isinstance(selection, Mapping) and not isinstance(capabilities, Mapping):
                 return {"ok": False, "error": "connections_agent_capability_args_required", "status": 400}
             expected = payload.get("expected_slice_revision")
             return await service.update_conversation_selection(
                 user, application=application, agent_id=str(payload["agent_id"]),
-                conversation_id=str(payload["conversation_id"]), selection=dict(selection),
-                expected_slice_revision=int(expected) if expected is not None else None,
-                deferred=payload.get("deferred") is True)
-        if kind == "promote":
-            return await service.promote_conversation_pending(
-                user, application=application, agent_id=str(payload["agent_id"]),
-                turn_token=str(payload["turn_token"]))
+                conversation_id=str(payload["conversation_id"]),
+                selection=dict(selection) if isinstance(selection, Mapping) else None,
+                # KDCube's capability selection; the Hub converts it within the shared Control.
+                selected_capabilities=dict(capabilities) if isinstance(capabilities, Mapping) else None,
+                expected_slice_revision=int(expected) if expected is not None else None)
         phase = str(payload.get("phase") or "")
         if phase == "mark":
             return await service.mark_conversation_deleting(user, conversation_id=str(payload["conversation_id"]))

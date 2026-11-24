@@ -492,7 +492,6 @@ class ConnectionsProviderBase(NamedServiceProvider):
     _SLICE_OPERATIONS = {
         "turn": ("application", "agent_id", "conversation_id", "turn_id"),
         "conversation": ("application", "agent_id", "conversation_id"),
-        "promote": ("application", "agent_id", "turn_token"),
         "conversation_delete": ("conversation_id", "phase"),
     }
 
@@ -522,13 +521,8 @@ class ConnectionsProviderBase(NamedServiceProvider):
 
     async def agent_capability_conversation(self, ctx: NamedServiceContext,
                                             request: NamedServiceRequest) -> NamedServiceResponse:
-        """W40: the conversation picker's write (now, or deferred by the cache policy)."""
+        """W40: the conversation picker's write; it applies from the next call."""
         return await self._slice_operation(ctx, request, "conversation")
-
-    async def agent_capability_promote(self, ctx: NamedServiceContext,
-                                       request: NamedServiceRequest) -> NamedServiceResponse:
-        """W40 A2: apply the stored deferred change of the turn's conversation."""
-        return await self._slice_operation(ctx, request, "promote")
 
     async def agent_capability_conversation_delete(self, ctx: NamedServiceContext,
                                                    request: NamedServiceRequest) -> NamedServiceResponse:

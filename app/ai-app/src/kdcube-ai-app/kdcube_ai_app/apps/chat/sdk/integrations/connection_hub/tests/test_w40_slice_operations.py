@@ -63,20 +63,17 @@ async def test_another_app_or_an_application_holder_is_refused(context, code):
 
 
 @pytest.mark.asyncio
-async def test_picker_promote_and_delete_phases_route_to_their_hub_methods():
+async def test_picker_and_delete_phases_route_to_their_hub_methods():
     provider, service = _provider()
     await provider.dispatch(_context(), _request("agent_capability.conversation", application=APP, agent_id="main",
                                                  conversation_id="c1", selection={"resource_families": []},
-                                                 deferred=True, expected_slice_revision=3))
-    await provider.dispatch(_context(), _request("agent_capability.promote", application=APP, agent_id="main",
-                                                 turn_token="ts1.x.y"))
+                                                 expected_slice_revision=3))
     for phase in ("mark", "remove"):
         await provider.dispatch(_context(), _request("agent_capability.conversation_delete", conversation_id="c1",
                                                      phase=phase))
     assert [name for name, _, _ in service.calls] == [
-        "update_conversation_selection", "promote_conversation_pending", "mark_conversation_deleting",
-        "remove_conversation_slices"]
-    assert service.calls[0][2]["deferred"] is True and service.calls[0][2]["expected_slice_revision"] == 3
+        "update_conversation_selection", "mark_conversation_deleting", "remove_conversation_slices"]
+    assert service.calls[0][2]["expected_slice_revision"] == 3 and "deferred" not in service.calls[0][2]
     bad = await provider.dispatch(_context(), _request("agent_capability.conversation_delete", conversation_id="c1",
                                                        phase="later"))
     assert bad.ok is False and bad.error.code == "conversation_delete_phase_invalid"
