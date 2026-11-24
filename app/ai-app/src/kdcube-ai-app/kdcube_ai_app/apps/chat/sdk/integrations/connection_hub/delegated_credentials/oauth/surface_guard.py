@@ -160,6 +160,35 @@ def _extract_bearer(request: Request) -> str:
     return ""
 
 
+TURN_TOKEN_HEADER = "x-connection-hub-turn"
+
+
+def _request_turn_token(request: Any) -> str:
+    """W40: the turn token the SDK gateway attaches to a resident agent's call."""
+    headers = getattr(request, "headers", None)
+    try:
+        return str((headers or {}).get(TURN_TOKEN_HEADER) or "").strip()
+    except Exception:
+        return ""
+
+
+def _live_grant_refusal(reason: str) -> JSONResponse:
+    """A live-grant denial; the authority-update window answers one plain, retryable reason (W40)."""
+    from connection_hub.delegated_credentials.live_grant import (
+        AUTHORITY_UPDATE_RETRY_SECONDS, authority_update_reason,
+    )
+
+    updating = authority_update_reason(reason)
+    if updating is not None:
+        return _json_response(
+            503, "temporarily_unavailable",
+            f"The agent's permissions are being updated (up to about {AUTHORITY_UPDATE_RETRY_SECONDS // 60} "
+            "minutes); this tool is unavailable for now. Try again later.",
+            headers={"Retry-After": str(AUTHORITY_UPDATE_RETRY_SECONDS)}, reason=updating)
+    return _json_response(503, "temporarily_unavailable", "Current delegated authorization state is unavailable",
+                          reason=f"live_grant_{reason}")
+
+
 def _json_response(
     status_code: int,
     error: str,
@@ -655,6 +684,14 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
     if composition is None:
         LOGGER.info("[connection-hub.oauth.guard] registry card %s gone — binding treated as revoked", access_id)
         return None
+    # W40: a resident agent's call in a conversation names it by the turn
+    # token; the Effective Card is narrowed by that conversation's slice (and a
+    # call outside any conversation by the Card's defaults). Every refusal is a
+    # LiveGrantCardError: the call is denied, never widened.
+    from connection_hub.delegated_credentials.slices.guard import narrow_live_composition_for_turn
+
+    composition = await narrow_live_composition_for_turn(
+        composition, card_store=card_store, turn_token=_request_turn_token(request))
     _store_live_card_composition(request, composition)
     card = composition.effective_card
     LOGGER.info(
@@ -1238,12 +1275,7 @@ async def _authorize_delegated_managed_request(
             effective_resource,
         )
         return (
-            _json_response(
-                503,
-                "temporarily_unavailable",
-                "Current delegated authorization state is unavailable",
-                reason=f"live_grant_{exc.reason}",
-            ),
+            _live_grant_refusal(exc.reason),
             user,
             CredentialEnvelope(),
             {},
