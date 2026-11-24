@@ -475,6 +475,8 @@ export interface AgentCapabilitiesState {
   dirty: boolean
   saving: boolean
   saveError: string | null
+  /** W40: the save is waiting because the agent's permissions are being updated. */
+  authorityUpdating: boolean
 }
 
 export const initialCapabilitiesState: AgentCapabilitiesState = {
@@ -495,6 +497,7 @@ export const initialCapabilitiesState: AgentCapabilitiesState = {
   dirty: false,
   saving: false,
   saveError: null,
+  authorityUpdating: false,
 }
 
 // ── pure selection logic ─────────────────────────────────────────────────────

@@ -475,6 +475,11 @@ export interface AgentSelectionWriteOptions {
   conversationId?: string | null
   /** Persist the user's standing per-class policy alongside. */
   cachePolicy?: Record<string, string>
+  /** W40: called each time the write waits because the agent's permissions
+   *  are being updated (`agent_authority_updating`), so the picker can say so. */
+  onAuthorityUpdating?: (retryInMs: number) => void
+  /** W40: how long to keep retrying an `agent_authority_updating` refusal. */
+  authorityUpdateBudgetMs?: number
 }
 
 /** The agent's configured inventory + the caller's saved selection (deny-list). */
@@ -520,6 +525,9 @@ export async function submitAgentSelectionUpdate(
   const { model, instructions, presentation, ...disabled } = patch
   const hasCapabilityPatch = Object.keys(disabled).length > 0
   const apply = options.apply && options.apply !== 'now' ? options.apply : undefined
+  const deadline = Date.now() + (options.authorityUpdateBudgetMs ?? AUTHORITY_UPDATE_BUDGET_MS)
+  let delay = 2000
+  for (;;) {
   const response = await fetch(operationsUrl(runtime, 'agent_selection_update', runtime.bundleId, tenant, project), {
     method: 'POST',
     credentials: runtime.credentials,
@@ -540,14 +548,30 @@ export async function submitAgentSelectionUpdate(
   })
   const payload = await response.json().catch(() => null)
   const body = unwrapOperationBody(payload, 'agent_selection_update') as AgentSelectionUpdateResponse | null
+  const code = body && typeof body === 'object' ? String((body as { error?: unknown }).error || '') : ''
+  if (code === AUTHORITY_UPDATING && Date.now() + delay < deadline) {
+    // The agent's permissions are being updated by a transaction (at most about
+    // two minutes after a crash); the same write is retried, never widened.
+    options.onAuthorityUpdating?.(delay)
+    await new Promise((resolve) => setTimeout(resolve, delay))
+    delay = Math.min(delay * 2, 15000)
+    continue
+  }
   if (!response.ok || !body || body.ok === false) {
     const detail = body && typeof body === 'object'
       ? String(body.message || body.error || response.statusText)
       : response.statusText
-    throw new Error(`agent_selection_update failed (${response.status}): ${detail}`)
+    const error = new Error(`agent_selection_update failed (${response.status}): ${detail}`) as Error & { code?: string }
+    error.code = code || undefined
+    throw error
   }
   return body
+  }
 }
+
+/** W40: Connection Hub's one reason for "the agent's permissions are being updated". */
+export const AUTHORITY_UPDATING = 'agent_authority_updating'
+const AUTHORITY_UPDATE_BUDGET_MS = 120000
 
 function base64ToBlob(value: string, mime: string): Blob {
   const binary = window.atob(value)

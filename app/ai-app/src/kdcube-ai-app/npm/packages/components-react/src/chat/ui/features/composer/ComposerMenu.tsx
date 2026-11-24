@@ -1611,7 +1611,9 @@ export function useCapabilityPickerBody({
       <span className="k-menu-savebar-copy" role="status">
         {capabilities.saveError
           ? 'Changes couldn’t be saved.'
-          : capabilities.saving
+          : capabilities.authorityUpdating
+            ? 'The agent’s permissions are being updated. Applying your change…'
+            : capabilities.saving
             ? 'Saving changes…'
             : capabilities.dirty
               ? 'Unsaved changes'

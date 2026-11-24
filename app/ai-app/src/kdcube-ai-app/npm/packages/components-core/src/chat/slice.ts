@@ -447,6 +447,12 @@ const slice = createSlice({
     },
     capabilitiesSaving(state, action: PayloadAction<boolean>) {
       state.capabilities.saving = action.payload
+      if (!action.payload) state.capabilities.authorityUpdating = false
+    },
+    /** W40: the save waits and retries while the agent's permissions are being updated. */
+    capabilitiesAuthorityUpdating(state) {
+      state.capabilities.saving = true
+      state.capabilities.authorityUpdating = true
     },
     /** Reconcile with the server's clamped record after a save round-trips. */
     capabilitiesSelectionSaved(
@@ -480,10 +486,12 @@ const slice = createSlice({
       }
       state.capabilities.dirty = false
       state.capabilities.saving = false
+      state.capabilities.authorityUpdating = false
       state.capabilities.saveError = null
     },
     capabilitiesSaveError(state, action: PayloadAction<string>) {
       state.capabilities.saving = false
+      state.capabilities.authorityUpdating = false
       state.capabilities.saveError = action.payload
     },
 
