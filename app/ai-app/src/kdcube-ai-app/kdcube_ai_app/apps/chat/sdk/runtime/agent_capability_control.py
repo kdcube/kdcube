@@ -1543,14 +1543,14 @@ def _raise_sync_failure(response: Any) -> None:
 async def _call_connection_hub(
     entrypoint: Any, kind: str, payload: Mapping[str, Any], *, tenant: str, project: str,
 ) -> Any:
-    from connection_hub.contract import AGENT_CAPABILITY_PUBLISH, AGENT_CAPABILITY_SYNC, NAMESPACE
+    from connection_hub.contract import AGENT_CAPABILITY_PUBLISH, AGENT_CAPABILITY_SYNC, AGENT_CAPABILITY_TURN, NAMESPACE
     from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_named_service
     from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.connection_edges import (
         connection_hub_bundle_id_from_entrypoint,
     )
     from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceResponse
 
-    operation = AGENT_CAPABILITY_PUBLISH if kind == "publish" else AGENT_CAPABILITY_SYNC
+    operation = {"publish": AGENT_CAPABILITY_PUBLISH, "turn": AGENT_CAPABILITY_TURN}.get(kind, AGENT_CAPABILITY_SYNC)
     try:
         result = await call_bundle_named_service(
             bundle_id=connection_hub_bundle_id_from_entrypoint(entrypoint),
@@ -1561,6 +1561,72 @@ async def _call_connection_hub(
         return NamedServiceResponse.coerce(result.value)
     except Exception:
         raise AgentCapabilityControlUnavailable("agent_capability_transport_unavailable") from None
+
+
+async def request_agent_turn_token(
+    entrypoint: Any,
+    *,
+    agent_id: str,
+    conversation_id: str,
+    turn_id: str,
+    mode: str = "renew",
+    turn_token: str = "",
+) -> dict[str, Any]:
+    """W40: the token naming this turn's conversation, from Connection Hub.
+
+    The Hub finds the signed-in user's Agent Card and seeds the slice itself;
+    this names only the turn. Never raises: ``{"ok": False, "error": ...}``
+    when the Hub refuses or cannot be reached.
+    """
+    identity = agent_capability_identity(entrypoint)
+    tenant, project = _text(identity.get("tenant")), _text(identity.get("project"))
+    application = _text(identity.get("bundle_id"))
+    if not tenant or not project or not application or not agent_id or not conversation_id or not turn_id:
+        return {"ok": False, "error": "agent_capability_identity_missing"}
+    payload = {"application": application, "agent_id": agent_id, "conversation_id": conversation_id,
+               "turn_id": turn_id, "mode": mode}
+    if turn_token:
+        payload["turn_token"] = turn_token
+    try:
+        response = await _call_connection_hub(entrypoint, "turn", payload, tenant=tenant, project=project)
+    except AgentCapabilityControlUnavailable as exc:
+        return {"ok": False, "error": exc.code, "retryable": True}
+    if not response.ok:
+        return {"ok": False, "error": _error_code(response) or "agent_turn_token_unavailable",
+                "retryable": bool(dict(getattr(response.error, "details", {}) or {}).get("retryable"))}
+    answer = dict(getattr(response, "object", None) or {})
+    token = _text(answer.get("turn_token"))
+    return {"ok": True, "turn_token": token} if token else {"ok": False, "error": "agent_turn_token_unavailable"}
+
+
+class TurnTokenProvider:
+    """One turn's token, kept in the host and renewed before it lapses (mode ``renew``).
+
+    Never serialized: it lives in the closure the gateway headers provider
+    calls per request, like the Card bearer.
+    """
+
+    RENEW_BEFORE_SECONDS = 120
+    TOKEN_SECONDS = 600
+
+    def __init__(self, entrypoint: Any, *, agent_id: str, conversation_id: str, turn_id: str, token: str,
+                 clock: Any = None) -> None:
+        import time
+
+        self._entrypoint, self._agent_id = entrypoint, agent_id
+        self._conversation_id, self._turn_id, self._token = conversation_id, turn_id, token
+        self._clock = clock or time.monotonic
+        self._issued_at = self._clock()
+
+    async def __call__(self) -> str:
+        if self._clock() - self._issued_at >= self.TOKEN_SECONDS - self.RENEW_BEFORE_SECONDS:
+            renewed = await request_agent_turn_token(
+                self._entrypoint, agent_id=self._agent_id, conversation_id=self._conversation_id,
+                turn_id=self._turn_id, turn_token=self._token)
+            if renewed.get("ok"):
+                self._token, self._issued_at = renewed["turn_token"], self._clock()
+        # A refused renewal keeps the current token: the guard refuses it once it lapses.
+        return self._token
 
 
 def _merge_props(entrypoint: Any, base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
@@ -1633,6 +1699,8 @@ async def publish_agent_capability_control(
 
 __all__ = [
     "AgentCapabilityControlUnavailable",
+    "TurnTokenProvider",
+    "request_agent_turn_token",
     "agent_card_revision",
     "capability_preferences_from_projection",
     "agent_capability_identity",

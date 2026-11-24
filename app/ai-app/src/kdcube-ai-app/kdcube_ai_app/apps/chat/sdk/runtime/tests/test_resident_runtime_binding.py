@@ -719,3 +719,56 @@ def test_turn_context_binding_feeds_react_service_resolution_without_fetching_to
         "type": "trusted_process"
     }
     assert calls == []
+
+
+def _w40_plan():
+    return gateway_runtime_plan(
+        _inventory(_resource("urn:external:a", _tool("ch_remote_mcp_aaaaaaaaaaaaaaaa__search_bbbbbbbbbbbbbbbb",
+                                                     "search"))),
+        meta_tools_by_access_id={ACCESS: (_meta(),)},
+    )
+
+
+def test_w40_every_gateway_call_carries_this_turns_token():
+    async def _bearer(connection, user_subject):
+        return "card-token"
+
+    async def _turn():
+        return "ts1.turn.token"
+
+    provider = _w40_plan().auth_headers_provider(user_subject="user-a", bearer_provider=_bearer,
+                                                 turn_token_provider=_turn)
+    headers = asyncio.run(provider(GATEWAY_SERVER))
+    assert headers == {"Authorization": "Bearer card-token", "x-connection-hub-turn": "ts1.turn.token"}
+    assert "ts1.turn.token" not in repr(provider)
+
+
+def test_w40_a_lost_turn_token_refuses_the_call_instead_of_using_the_card_defaults():
+    async def _bearer(connection, user_subject):
+        return "card-token"
+
+    async def _lost():
+        raise RuntimeError("hub unreachable")
+
+    provider = _w40_plan().auth_headers_provider(user_subject="user-a", bearer_provider=_bearer,
+                                                 turn_token_provider=_lost)
+    with pytest.raises(RuntimeError, match="gateway_runtime_turn_token_unavailable"):
+        asyncio.run(provider(GATEWAY_SERVER))
+
+
+def test_w40_the_turn_token_is_renewed_before_it_lapses(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.runtime import agent_capability_control as control
+
+    clock, calls = {"now": 0.0}, []
+
+    async def _renew(entrypoint, **kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "turn_token": "ts1.renewed"}
+
+    monkeypatch.setattr(control, "request_agent_turn_token", _renew)
+    provider = control.TurnTokenProvider(object(), agent_id="main", conversation_id="c1", turn_id="t1",
+                                         token="ts1.first", clock=lambda: clock["now"])
+    assert asyncio.run(provider()) == "ts1.first" and calls == []
+    clock["now"] = 481.0  # within two minutes of the ten-minute lifetime
+    assert asyncio.run(provider()) == "ts1.renewed"
+    assert calls == [{"agent_id": "main", "conversation_id": "c1", "turn_id": "t1", "turn_token": "ts1.first"}]

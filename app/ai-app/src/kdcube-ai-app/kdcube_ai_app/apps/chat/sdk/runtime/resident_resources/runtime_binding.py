@@ -198,7 +198,7 @@ class GatewayRuntimeHeadersProvider:
     serializable runtime globals.
     """
 
-    __slots__ = ("_bearer_provider", "_connections", "_user_subject")
+    __slots__ = ("_bearer_provider", "_connections", "_user_subject", "_turn_token_provider")
 
     def __init__(
         self,
@@ -206,6 +206,7 @@ class GatewayRuntimeHeadersProvider:
         *,
         user_subject: str,
         bearer_provider: GatewayBearerProvider,
+        turn_token_provider: Callable[[], Awaitable[str]] | None = None,
     ) -> None:
         subject = str(user_subject or "").strip()
         if not subject or not callable(bearer_provider):
@@ -216,6 +217,8 @@ class GatewayRuntimeHeadersProvider:
         self._connections = _connection_index(rows)
         self._user_subject = subject
         self._bearer_provider = bearer_provider
+        # W40: the turn token naming this conversation, renewed by its provider.
+        self._turn_token_provider = turn_token_provider
 
     def __repr__(self) -> str:
         return (
@@ -246,7 +249,22 @@ class GatewayRuntimeHeadersProvider:
             raise RuntimeError(
                 "gateway_runtime_authorization_unavailable"
             ) from None
-        return {"Authorization": f"Bearer {token}"}
+        headers = {"Authorization": f"Bearer {token}"}
+        if self._turn_token_provider is not None:
+            try:
+                turn_token = str(await self._turn_token_provider() or "").strip()
+            except Exception:
+                turn_token = ""
+            if not turn_token or len(turn_token) > 4096 or "\r" in turn_token or "\n" in turn_token:
+                # Without it the guard would apply the Card's defaults, not this
+                # conversation's choice: refuse the call instead.
+                raise RuntimeError("gateway_runtime_turn_token_unavailable")
+            headers[TURN_TOKEN_HEADER] = turn_token
+        return headers
+
+
+# W40: the header the delegated guard reads (surface_guard.TURN_TOKEN_HEADER).
+TURN_TOKEN_HEADER = "x-connection-hub-turn"
 
 
 @dataclass(frozen=True)
@@ -282,11 +300,13 @@ class GatewayRuntimePlan:
         *,
         user_subject: str,
         bearer_provider: GatewayBearerProvider,
+        turn_token_provider: Callable[[], Awaitable[str]] | None = None,
     ) -> GatewayRuntimeHeadersProvider:
         return GatewayRuntimeHeadersProvider(
             self.connections,
             user_subject=user_subject,
             bearer_provider=bearer_provider,
+            turn_token_provider=turn_token_provider,
         )
 
 
@@ -586,6 +606,7 @@ def bind_gateway_runtime_context(
     *,
     user_subject: str,
     bearer_provider: GatewayBearerProvider,
+    turn_token_provider: Callable[[], Awaitable[str]] | None = None,
 ) -> None:
     """Bind a credential-free plan and its per-call resolver to one turn.
 
@@ -598,6 +619,7 @@ def bind_gateway_runtime_context(
     provider = plan.auth_headers_provider(
         user_subject=user_subject,
         bearer_provider=bearer_provider,
+        turn_token_provider=turn_token_provider,
     )
     setattr(runtime_context, "resident_gateway_runtime_plan", plan)
     setattr(runtime_context, "resident_mcp_auth_headers_provider", provider)

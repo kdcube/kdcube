@@ -2795,6 +2795,7 @@ class BaseWorkflow():
             "resident_mcp_auth_headers_provider",
             "resident_requestable_resources",
             "resident_requestable_discovery",
+            "resident_turn_token_refusal",
         ):
             try:
                 setattr(runtime_ctx, name, None)
@@ -2899,11 +2900,36 @@ class BaseWorkflow():
                     level="WARNING",
                 )
                 return safe_tool_config
+            # W40: a turn in a conversation names it to the Hub; the guard then
+            # applies this conversation's choice. Without a token the gateway
+            # tools stay unavailable for this turn (never the Card's defaults).
+            turn_token_provider = None
+            conversation_id = str(getattr(runtime_ctx, "conversation_id", "") or "").strip()
+            turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
+            if conversation_id and turn_id:
+                from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                    TurnTokenProvider, request_agent_turn_token,
+                )
+
+                answer = await request_agent_turn_token(self, agent_id=agent_id, conversation_id=conversation_id,
+                                                        turn_id=turn_id)
+                if not answer.get("ok"):
+                    BaseWorkflow._clear_resident_runtime_projection(self)
+                    runtime_ctx.resident_turn_token_refusal = str(answer.get("error") or "")
+                    self.logger.log(
+                        "[resident_resources] turn token unavailable "
+                        f"reason={runtime_ctx.resident_turn_token_refusal}; Gateway tools stay unavailable",
+                        level="WARNING",
+                    )
+                    return safe_tool_config
+                turn_token_provider = TurnTokenProvider(self, agent_id=agent_id, conversation_id=conversation_id,
+                                                        turn_id=turn_id, token=answer["turn_token"])
             bind_gateway_runtime_context(
                 runtime_ctx,
                 projection.gateway_plan,
                 user_subject=str(getattr(runtime_ctx, "user_id", "") or ""),
                 bearer_provider=bearer_provider,
+                turn_token_provider=turn_token_provider,
             )
             return projection.gateway_plan.native_tool_config(safe_tool_config)
         except Exception:
