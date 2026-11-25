@@ -104,10 +104,14 @@ async def _per_call_turn_token(entrypoint: Any, *, agent_id: str) -> tuple[str, 
     checks on every call that this turn is still alive. Returns ``(token,
     refusal)``; a turn outside any conversation needs none.
     """
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+        request_agent_turn_token, turn_is_automation_execution,
+    )
+
     conversation_id, turn_id = current_turn_conversation(entrypoint)
-    if not conversation_id or not turn_id:
+    if not conversation_id or not turn_id or turn_is_automation_execution():
+        # An automation run has no conversation choice: Agent Card defaults.
         return "", ""
-    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import request_agent_turn_token
 
     answer = await request_agent_turn_token(entrypoint, agent_id=agent_id, conversation_id=conversation_id,
                                             turn_id=turn_id, mode="per_call")

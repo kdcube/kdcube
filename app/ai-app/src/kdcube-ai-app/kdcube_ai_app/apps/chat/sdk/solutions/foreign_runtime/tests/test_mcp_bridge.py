@@ -450,3 +450,16 @@ def test_w40_a_refused_turn_token_keeps_the_delegated_servers_out_of_the_turn(mo
                                                          application="app@1-0", user_sub="u1", drop_sink=drops))
     assert list(server_map) == ["plain"] and seen["servers"] == ["plain"]
     assert drops == {"hub": mcp_bridge.DROP_TURN_TOKEN_UNAVAILABLE}
+
+
+def test_w40_an_automation_run_asks_no_turn_token_and_keeps_its_delegated_servers(monkeypatch) -> None:
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_call_context
+
+    entrypoint, seen = _w40_world(monkeypatch, {"ok": False, "error": "conversation_not_owned"})
+    with bind_current_bundle_call_context({"kind": "automation_execution", "conversation_id": "automation_job_1"}):
+        server_map = asyncio.run(mcp_bridge.resolve_turn_mcp(entrypoint, list(_DELEGATED), agent_id="lg-react",
+                                                             application="app@1-0", user_sub="u1"))
+    # The Agent Card defaults apply: no token requested, no turn header, nothing dropped.
+    assert "request" not in seen
+    assert sorted(server_map) == ["hub", "plain"]
+    assert server_map["hub"]["headers"] == {"Authorization": "Bearer card"}

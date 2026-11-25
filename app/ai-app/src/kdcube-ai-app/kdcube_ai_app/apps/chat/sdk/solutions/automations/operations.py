@@ -1117,6 +1117,18 @@ async def _deliver_execution_to_telegram(
     }
 
 
+AUTOMATION_JOB_CONVERSATION_PREFIX = "automation_job_"
+
+
+def new_job_conversation_id() -> str:
+    """A fresh job conversation: every automation execution runs in its own."""
+    return f"{AUTOMATION_JOB_CONVERSATION_PREFIX}{uuid.uuid4().hex}"
+
+
+def is_job_conversation_id(conversation_id: str) -> bool:
+    return str(conversation_id or "").startswith(AUTOMATION_JOB_CONVERSATION_PREFIX)
+
+
 async def run_automation_execution(
     entrypoint: Any,
     *,
@@ -1128,6 +1140,16 @@ async def run_automation_execution(
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
+    if str(run_conversation_id or "").strip() and not is_job_conversation_id(run_conversation_id):
+        # W40: an automation runs only in its own fresh job conversation, never in
+        # a user's conversation, so its authority is the Agent Card defaults and
+        # never a conversation's choice taken over silently.
+        return {
+            "ok": False,
+            "error": {"code": "automation_conversation_not_a_job",
+                      "message": "An automation runs only in a fresh job conversation."},
+            "execution": None,
+        }
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
     automation = await storage.get_automation(automation_id)
     if not automation:
@@ -1182,7 +1204,7 @@ async def run_automation_execution(
             "answer": summary,
         }
 
-    run_conversation_id = str(run_conversation_id or "").strip() or f"automation_job_{uuid.uuid4().hex}"
+    run_conversation_id = str(run_conversation_id or "").strip() or new_job_conversation_id()
     if execution:
         execution = await storage.update_execution(
             execution_id=str(execution.get("id") or execution_id),
@@ -1394,7 +1416,13 @@ async def enqueue_automation_job(
             "error": {"code": "automation_not_found", "message": f"Automation {automation_id!r} was not found."},
             "execution": None,
         }
-    run_conversation_id = str(conversation_id or "").strip() or f"automation_job_{uuid.uuid4().hex}"
+    # W40: always a fresh job conversation; a passed id is only recorded, as
+    # run_automation_now does, so the job, the processor's conversation lock and
+    # the run name the same conversation.
+    run_conversation_id = new_job_conversation_id()
+    if str(conversation_id or "").strip():
+        source = {**dict(source or {}), "requested_conversation_id": str(conversation_id).strip(),
+                  "conversation_policy": "ignored_fresh_job_conversation"}
     execution = await storage.create_execution(
         automation_id=automation_id,
         status="queued",

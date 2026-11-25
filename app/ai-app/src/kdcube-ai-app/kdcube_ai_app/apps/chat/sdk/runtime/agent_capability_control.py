@@ -1632,6 +1632,27 @@ async def write_conversation_capabilities(
     return dict(getattr(response, "object", None) or {})
 
 
+AUTOMATION_EXECUTION_KIND = "automation_execution"
+
+
+def turn_is_automation_execution() -> bool:
+    """W40: this turn runs a saved automation (its own fresh job conversation, no picker).
+
+    The design (2026-11-20, section 1) gives such runs ``agent_card AND
+    control``: they request no turn token, so their gateway calls carry none
+    and Connection Hub narrows them to the Agent Card defaults.
+    ``run_automation_execution`` binds the call context for the whole run,
+    whatever the executor, and accepts only a fresh job conversation.
+    """
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_call_context
+
+        context = get_current_bundle_call_context() or {}
+    except Exception:
+        return False
+    return str(context.get("kind") or "") == AUTOMATION_EXECUTION_KIND
+
+
 class TurnTokenProvider:
     """One turn's token, kept in the host and renewed before it lapses (mode ``renew``).
 
@@ -1732,8 +1753,10 @@ async def publish_agent_capability_control(
 
 __all__ = [
     "AgentCapabilityControlUnavailable",
+    "AUTOMATION_EXECUTION_KIND",
     "TurnTokenProvider",
     "request_agent_turn_token",
+    "turn_is_automation_execution",
     "write_conversation_capabilities",
     "agent_card_revision",
     "capability_preferences_from_projection",

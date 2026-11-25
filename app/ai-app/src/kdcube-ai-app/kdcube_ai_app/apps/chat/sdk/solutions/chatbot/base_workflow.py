@@ -2903,13 +2903,16 @@ class BaseWorkflow():
             # W40: a turn in a conversation names it to the Hub; the guard then
             # applies this conversation's choice. Without a token the gateway
             # tools stay unavailable for this turn (never the Card's defaults).
+            # An automation run has no conversation choice: it requests no token
+            # and the Hub narrows its calls to the Agent Card defaults.
+            from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+                TurnTokenProvider, request_agent_turn_token, turn_is_automation_execution,
+            )
+
             turn_token_provider = None
             conversation_id = str(getattr(runtime_ctx, "conversation_id", "") or "").strip()
             turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
-            if conversation_id and turn_id:
-                from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
-                    TurnTokenProvider, request_agent_turn_token,
-                )
+            if conversation_id and turn_id and not turn_is_automation_execution():
 
                 answer = await request_agent_turn_token(self, agent_id=agent_id, conversation_id=conversation_id,
                                                         turn_id=turn_id)

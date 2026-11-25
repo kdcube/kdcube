@@ -772,3 +772,14 @@ def test_w40_the_turn_token_is_renewed_before_it_lapses(monkeypatch):
     clock["now"] = 481.0  # within two minutes of the ten-minute lifetime
     assert asyncio.run(provider()) == "ts1.renewed"
     assert calls == [{"agent_id": "main", "conversation_id": "c1", "turn_id": "t1", "turn_token": "ts1.first"}]
+
+
+def test_w40_an_automation_run_is_recognised_from_its_call_context():
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import turn_is_automation_execution
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_call_context
+
+    assert turn_is_automation_execution() is False
+    with bind_current_bundle_call_context({"kind": "automation_execution"}):
+        assert turn_is_automation_execution() is True
+    with bind_current_bundle_call_context({"kind": "chat"}):
+        assert turn_is_automation_execution() is False

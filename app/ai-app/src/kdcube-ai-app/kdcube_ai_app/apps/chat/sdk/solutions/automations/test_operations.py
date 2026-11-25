@@ -204,3 +204,50 @@ async def test_scheduled_execution_runs_one_shot_disabled_after_enqueue(tmp_path
     assert updated["status"] == "success"
     assert updated["summary"] == "One-shot execution completed."
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_w40_a_run_in_a_users_conversation_is_refused(tmp_path):
+    _configure(tmp_path)
+    storage = AutomationStorage(tmp_path, user_id="user-a")
+    automation = storage.create_automation(title="Inbox monitor", schedule_cron="*/10 * * * *")
+
+    result = await operations.run_automation_execution(
+        _entrypoint(), automation_id=automation["id"], trigger="manual", source={"surface": "test"},
+        run_conversation_id="conv-of-the-user", user_id="user-a")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "automation_conversation_not_a_job"
+    assert operations.is_job_conversation_id(operations.new_job_conversation_id())
+
+
+@pytest.mark.asyncio
+async def test_w40_enqueue_always_uses_a_fresh_job_conversation_and_records_a_passed_one(tmp_path, monkeypatch):
+    _configure(tmp_path)
+    storage = AutomationStorage(tmp_path, user_id="user-a")
+    automation = storage.create_automation(title="Inbox monitor", schedule_cron="*/10 * * * *")
+    sent = {}
+
+    class _Stream:
+        def __init__(self, redis, *, tenant, project):
+            pass
+
+        async def enqueue(self, **kwargs):
+            sent.update(kwargs)
+            return SimpleNamespace(enqueued=True, job_id=kwargs["job_id"], stream_key="s", stream_id="1-0",
+                                   reason="")
+
+    monkeypatch.setattr(operations, "RedisBackgroundJobStream", _Stream)
+    entrypoint = _entrypoint()
+    entrypoint.redis = object()
+
+    result = await operations.enqueue_automation_job(
+        entrypoint, work_kind=operations.WORK_KIND_AUTOMATION_RUN_NOW, automation_id=automation["id"],
+        trigger="manual", source={"surface": "test"}, conversation_id="conv-of-the-user", user_id="user-a")
+
+    assert result["ok"] is True
+    job_conversation = sent["metadata"]["conversation_id"]
+    # The job, the processor's conversation lock and the run name the same fresh job conversation.
+    assert operations.is_job_conversation_id(job_conversation)
+    assert sent["source"]["requested_conversation_id"] == "conv-of-the-user"
+    assert sent["source"]["conversation_policy"] == "ignored_fresh_job_conversation"
