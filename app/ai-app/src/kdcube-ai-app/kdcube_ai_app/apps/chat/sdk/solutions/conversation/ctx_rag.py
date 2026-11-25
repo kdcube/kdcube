@@ -3098,6 +3098,42 @@ class ContextRAGClient:
             "row": res.get("row"),
         }
 
+    async def register_conversation(
+            self,
+            *,
+            tenant: str,
+            project: str,
+            user_id: str,
+            conversation_id: str,
+            bundle_id: str,
+            user_type: str = "system",
+    ) -> Optional[dict]:
+        """W40: make a conversation known (owner, application) before its first turn.
+
+        Connection Hub seeds a conversation's capability slice only after the
+        registry shows the conversation owned by this user in this application;
+        the picker can write before the first message, so it registers the
+        conversation first. An existing state row is returned unchanged (its
+        state, turn and application are never overwritten).
+        """
+        row = await self.idx.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
+        if row:
+            return row
+        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        hosted_uri, _message_id, _rn = await self.store.put_message(
+            tenant=tenant, project=project, user=user_id, fingerprint=None,
+            conversation_id=conversation_id, turn_id="conv", role="artifact", text="",
+            id="conversation.state", bundle_id=bundle_id,
+            payload={"state": "idle", "updated_at": now_iso, "registered_by": "capability_selection"},
+            meta={"kind": "conversation.state"},
+            embedding=None, user_type=user_type,
+            msg_ts=now_iso.replace(":", "-"),
+        )
+        return await self.idx.register_conversation_state(
+            user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id,
+            hosted_uri=hosted_uri, now_ts=now_iso,
+        )
+
     async def delete_conversation(
             self,
             *,

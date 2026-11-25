@@ -130,6 +130,44 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_artifact_edges (
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_edge_from_id ON <SCHEMA>.conv_artifact_edges (from_id);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_edge_to_id   ON <SCHEMA>.conv_artifact_edges (to_id);
 
+-- W40: one conversation-state row per (user, conversation). The row registers a
+-- conversation (owner, application) for Connection Hub, and inserts use
+-- ON CONFLICT DO NOTHING against this index, so two first writers can no longer
+-- create two rows. Before the index exists, older duplicate state rows are
+-- removed (the newest is kept; readers already read only the newest), except a
+-- row an artifact edge references; if such a duplicate remains the index is not
+-- created and a warning names the schema, and inserts keep the old behaviour.
+DO $$
+BEGIN
+  IF to_regclass('<SCHEMA>.idx_<SCHEMA>_conv_state_one') IS NULL THEN
+    DELETE FROM <SCHEMA>.conv_messages d
+    USING (
+      SELECT id,
+             row_number() OVER (PARTITION BY user_id, conversation_id ORDER BY ts DESC, id DESC) AS rn
+      FROM <SCHEMA>.conv_messages
+      WHERE role = 'artifact' AND tags @> ARRAY['artifact:conversation.state']::text[]
+    ) ranked
+    WHERE d.id = ranked.id
+      AND ranked.rn > 1
+      AND NOT EXISTS (
+        SELECT 1 FROM <SCHEMA>.conv_artifact_edges e WHERE e.from_id = d.id OR e.to_id = d.id
+      );
+    IF EXISTS (
+      SELECT 1
+      FROM <SCHEMA>.conv_messages
+      WHERE role = 'artifact' AND tags @> ARRAY['artifact:conversation.state']::text[]
+      GROUP BY user_id, conversation_id
+      HAVING COUNT(*) > 1
+    ) THEN
+      RAISE WARNING 'conversation-state rows referenced by artifact edges are duplicated in schema <SCHEMA>; one-state-row index not created';
+    ELSE
+      CREATE UNIQUE INDEX idx_<SCHEMA>_conv_state_one
+        ON <SCHEMA>.conv_messages (user_id, conversation_id)
+        WHERE role = 'artifact' AND tags @> ARRAY['artifact:conversation.state']::text[];
+    END IF;
+  END IF;
+END $$;
+
 -- === tracks (first-class) ===
 -- === per-conversation tickets ===
 CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_track_tickets (

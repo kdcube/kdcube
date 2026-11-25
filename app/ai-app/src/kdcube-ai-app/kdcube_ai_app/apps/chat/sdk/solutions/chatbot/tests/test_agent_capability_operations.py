@@ -127,7 +127,16 @@ def _hub_slice_writes(monkeypatch):
         return {"ok": True, "slice_revision": len(writes)}
 
     monkeypatch.setattr(capability_control, "write_conversation_capabilities", _write)
+
+    monkeypatch.setattr(_registrations, "writes", writes)
     return writes
+
+
+_registrations = SimpleNamespace(writes=[])
+
+
+async def _registered(_identity: Any, conversation_id: str) -> None:
+    _registrations.writes.append({"registered": conversation_id})
 
 
 def _owner(
@@ -157,6 +166,7 @@ def _owner(
         _agent_capabilities_catalog_enriched=_catalog,
         _agent_selection_store=(lambda _identity: store),
         _agent_capability_selection_store=(lambda _identity: capability_store),
+        _register_conversation_for_capabilities=_registered,
     )
 
 
@@ -672,8 +682,10 @@ async def test_w40_the_conversation_write_reaches_the_hub_slice_with_kdcubes_sel
         owner, data={"data": {"agent": "main", "conversation_id": "conv-a", "disabled": {"tools": {"web": True}}}})
 
     assert result["ok"] is True
-    assert [w["conversation_id"] for w in _hub_slice_writes] == ["conv-a"]
-    assert _hub_slice_writes[0]["selected_capabilities"] == capability_store.set_calls[0]["projection"]
+    # Registered first, then the Hub slice is written.
+    assert _hub_slice_writes[0] == {"registered": "conv-a"}
+    assert [w["conversation_id"] for w in _hub_slice_writes[1:]] == ["conv-a"]
+    assert _hub_slice_writes[1]["selected_capabilities"] == capability_store.set_calls[0]["projection"]
 
 
 @pytest.mark.asyncio
@@ -696,3 +708,46 @@ async def test_w40_a_hub_refusal_leaves_the_conversation_record_unchanged(monkey
 
     assert result["ok"] is False and result["error"] == "agent_authority_updating" and result["retryable"] is True
     assert capability_store.set_calls == [] and "conversation-write" not in events
+
+
+
+class _RegistryClient:
+    def __init__(self, row: Any = None, fail: bool = False) -> None:
+        self.row, self.fail, self.calls = row, fail, []
+
+    async def register_conversation(self, **kwargs: Any):
+        self.calls.append(kwargs)
+        if self.fail:
+            raise RuntimeError("database down")
+        return self.row
+
+
+def _registry_owner(client: Any) -> Any:
+    owner = SimpleNamespace()
+
+    async def _client():
+        return client
+
+    owner.get_ctx_client = _client
+    return owner
+
+
+@pytest.mark.asyncio
+async def test_w40_registration_refuses_a_conversation_of_another_application() -> None:
+    identity = {"tenant": "t", "project": "p", "user_id": "u1", "bundle_id": "app@1-0"}
+    client = _RegistryClient(row={"bundle_id": "other@1-0"})
+    with pytest.raises(capability_control.AgentCapabilityControlUnavailable) as refused:
+        await BaseEntrypoint._register_conversation_for_capabilities(_registry_owner(client), identity, "c1")
+    assert refused.value.code == "conversation_application_mismatch"
+    assert client.calls[0]["user_id"] == "u1" and client.calls[0]["bundle_id"] == "app@1-0"
+
+
+@pytest.mark.asyncio
+async def test_w40_registration_fails_closed_without_the_registry() -> None:
+    identity = {"tenant": "t", "project": "p", "user_id": "u1", "bundle_id": "app@1-0"}
+    for owner in (_registry_owner(None), _registry_owner(_RegistryClient(fail=True))):
+        with pytest.raises(capability_control.AgentCapabilityControlUnavailable) as refused:
+            await BaseEntrypoint._register_conversation_for_capabilities(owner, identity, "c1")
+        assert refused.value.code == "conversation_registry_unavailable"
+    await BaseEntrypoint._register_conversation_for_capabilities(
+        _registry_owner(_RegistryClient(row={"bundle_id": "app@1-0"})), identity, "c1")

@@ -458,6 +458,41 @@ class BaseEntrypoint:
             "bundle_id": bundle_id,
         }
 
+    async def _register_conversation_for_capabilities(
+        self, identity: Mapping[str, str], conversation_id: str,
+    ) -> None:
+        """W40: register the conversation before Connection Hub is asked to seed its slice.
+
+        A pick can precede the first message; the Hub verifies the conversation
+        (owner, application) in KDCube's registry once, when the slice is first
+        seeded. An id this user already has in another application is refused.
+        """
+        from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
+            AgentCapabilityControlUnavailable,
+        )
+
+        client = await self.get_ctx_client()
+        if client is None:
+            raise AgentCapabilityControlUnavailable("conversation_registry_unavailable", retryable=True, status=503)
+        try:
+            row = await client.register_conversation(
+                tenant=str(identity.get("tenant") or ""),
+                project=str(identity.get("project") or ""),
+                user_id=str(identity.get("user_id") or ""),
+                conversation_id=conversation_id,
+                bundle_id=str(identity.get("bundle_id") or ""),
+            )
+        except Exception:
+            raise AgentCapabilityControlUnavailable(
+                "conversation_registry_unavailable", retryable=True, status=503,
+            ) from None
+        if not row:
+            raise AgentCapabilityControlUnavailable("conversation_registry_unavailable", retryable=True, status=503)
+        if str(row.get("bundle_id") or "") != str(identity.get("bundle_id") or ""):
+            raise AgentCapabilityControlUnavailable(
+                "conversation_application_mismatch", retryable=False, status=409,
+            )
+
     def _agent_selection_store(self, identity: Mapping[str, str]):
         from kdcube_ai_app.apps.chat.sdk.solutions.user_settings import UserAgentSelectionStore
 
@@ -1458,6 +1493,7 @@ class BaseEntrypoint:
                         write_conversation_capabilities,
                     )
 
+                    await self._register_conversation_for_capabilities(identity, conversation_id)
                     await write_conversation_capabilities(
                         self, agent_id=agent_id, conversation_id=conversation_id,
                         selected_capabilities=selected_capabilities)

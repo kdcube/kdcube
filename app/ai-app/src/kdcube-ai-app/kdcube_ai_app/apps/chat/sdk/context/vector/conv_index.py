@@ -314,6 +314,43 @@ class ConvIndex:
 
         return int(row["n"] or 0)
 
+    async def _insert_state_row(
+            self, con: Any, *, user_id: str, conversation_id: str, hosted_uri: str,
+            bundle_id: str, ts: Any, tags: List[str],
+    ) -> Optional[Any]:
+        """Insert the conversation-state row unless one exists; None when another writer has it.
+
+        No agent_id: the row is a per-conversation singleton (CAS-updated by every
+        turn regardless of agent), not an agent's output. ``ON CONFLICT DO
+        NOTHING`` names no target, so it relies on the partial unique index
+        ``idx_<schema>_conv_state_one`` (one state row per user and
+        conversation); a schema without it keeps the old behaviour.
+        """
+        q_ins = f"""
+          INSERT INTO {self.schema}.conv_messages
+            (user_id, conversation_id, role, text, hosted_uri, bundle_id, ts, ttl_days, user_type, tags)
+          VALUES ($1,$2,'artifact','', $3, $4, $5, 3650, 'system', $6)
+          ON CONFLICT DO NOTHING
+          RETURNING id, tags
+        """
+        return await con.fetchrow(q_ins, user_id, conversation_id, hosted_uri, bundle_id, ts, tags)
+
+    async def register_conversation_state(
+            self, *, user_id: str, conversation_id: str, bundle_id: str, hosted_uri: str, now_ts: str,
+    ) -> Optional[Dict[str, Any]]:
+        """W40: register a conversation (its idle state row) before its first turn; never overwrite one.
+
+        Returns the conversation's state row: the new one, or the one that already
+        existed (another turn or picker write registered it first).
+        """
+        tags = list(dict.fromkeys(_base_state_tags() + [_state_tag("idle")]))
+        async with self._pool.acquire() as con:
+            await self._insert_state_row(
+                con, user_id=user_id, conversation_id=conversation_id, hosted_uri=hosted_uri,
+                bundle_id=bundle_id, ts=_coerce_ts(now_ts), tags=tags,
+            )
+        return await self.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
+
     # conv_index.py (where your try_set_conversation_state_cas lives)
     async def try_set_conversation_state_cas(
             self,
@@ -354,22 +391,21 @@ class ConvIndex:
         row = await self.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
         async with self._pool.acquire() as con:
             if row is None:
-                # INSERT
-                # No agent_id: this is a per-conversation singleton (CAS-updated by
-                # every turn regardless of agent), not an agent's output. Owning it to
-                # the first agent would freeze a stale id; the column stays NULL.
+                # INSERT; a concurrent first writer wins through the one-state-row
+                # index (W40), and this writer then takes the CAS update below.
                 tags = list(dict.fromkeys(
                     base_tags + [new_state_tag] + ([turn_tag] if turn_tag else [])
                 ))
-                q_ins = f"""
-                  INSERT INTO {self.schema}.conv_messages
-                    (user_id, conversation_id, role, text, hosted_uri, bundle_id, ts, ttl_days, user_type, tags)
-                  VALUES ($1,$2,'artifact','', $3, $4, $5, 3650, 'system', $6)
-                  RETURNING id, tags
-                """
-                rec = await con.fetchrow(q_ins, user_id, conversation_id, hosted_uri, bundle_id, _coerce_ts(now_ts), tags)
-                st, cur_turn = _parse_tags(rec["tags"])
-                return {"ok": True, "row": {"id": rec["id"], "tags": rec["tags"]}, "state": st, "current_turn_id": cur_turn}
+                rec = await self._insert_state_row(
+                    con, user_id=user_id, conversation_id=conversation_id, hosted_uri=hosted_uri,
+                    bundle_id=bundle_id, ts=_coerce_ts(now_ts), tags=tags,
+                )
+                if rec is not None:
+                    st, cur_turn = _parse_tags(rec["tags"])
+                    return {"ok": True, "row": {"id": rec["id"], "tags": rec["tags"]}, "state": st, "current_turn_id": cur_turn}
+                row = await self.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
+                if row is None:
+                    return {"ok": False, "row": None, "state": None, "current_turn_id": None}
 
             # 2) UPDATE with CAS; replace any old conv.state:* and conv.turn:* with new
             q_upd = f"""
@@ -2099,6 +2135,10 @@ class ConvIndex:
               {' '.join(extra)}
               AND {since_cond}
             GROUP BY m.conversation_id
+            -- W40: a conversation registered by a capability pick before its
+            -- first message has only its state row; it is not listed until then.
+            HAVING bool_or(NOT (m.role = 'artifact'
+                                AND m.tags @> ARRAY['artifact:conversation.state']::text[]))
           ),
           starts AS (
             SELECT m.conversation_id, MIN(m.ts) AS started_at
