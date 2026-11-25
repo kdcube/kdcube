@@ -325,6 +325,13 @@ class ConvIndex:
         NOTHING`` names no target, so it relies on the partial unique index
         ``idx_<schema>_conv_state_one`` (one state row per user and
         conversation); a schema without it keeps the old behaviour.
+
+        An untargeted ``DO NOTHING`` swallows ANY unique violation, and the
+        caller then takes the CAS path as if another writer had won. That is
+        sound only while the state index is the sole unique key on
+        ``conv_messages`` besides its serial ``id``. A new unique index on this
+        table must name this conflict target (``ON CONFLICT (user_id,
+        conversation_id) WHERE ...``) instead.
         """
         q_ins = f"""
           INSERT INTO {self.schema}.conv_messages
