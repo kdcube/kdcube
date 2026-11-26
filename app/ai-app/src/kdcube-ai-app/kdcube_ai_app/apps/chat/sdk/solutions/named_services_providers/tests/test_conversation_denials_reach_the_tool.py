@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""W39 (kdcube#270 D6): a conversation's named-service denials reach the tool.
+"""A conversation's named-service denials reach the tool.
 
 The tool subsystem loads ``named_services_providers/tools.py`` as a dynamic copy
 (``runtime/tool_subsystem.py::_load_tools_module``, synthetic package

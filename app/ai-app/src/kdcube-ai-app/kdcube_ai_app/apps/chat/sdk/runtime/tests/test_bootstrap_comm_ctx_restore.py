@@ -387,7 +387,7 @@ class TestToolSubsystemPortableContext:
         assert comm_ctx["REQUEST_CONTEXT"]["user"]["user_id"] == "user-1"
         assert comm_ctx["NAMED_SERVICE_DISCOVERY"] == {}
 
-    # W39 live check, 2026-11-16: a conversation denial written during the turn did not reach the
+    # A conversation denial written during the turn did not reach the
     # isolated runtime; the supervisor let docs object.list through to Connection Hub. The portable
     # spec rebinds the request from registry["comm_context"], whose bundle_call_context is the copy
     # taken when the request object was built, not the call context the turn has written since.
@@ -424,7 +424,7 @@ class TestToolSubsystemPortableContext:
         assert self._denials_in_spec(spec) == {"namespaces": ["slack"], "entries": {"docs": ["object.list"]}}
 
 
-# W39 live check, 2026-11-16: a conversation denial reached the supervisor in the comm_ctx pocket and was
+# A conversation denial reached the supervisor in the comm_ctx pocket and was
 # erased right after. The generic ContextVar snapshot stores each value as is (snapshot._encode_value), while
 # bootstrap's decoder expected a {"kind", "data"} envelope and returned its missing "data": every dict-valued
 # ContextVar (the bundle call context, the named-service discovery context, the Connection Hub account scope)

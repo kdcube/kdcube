@@ -4,8 +4,8 @@
 The tool subsystem loads SDK tool modules as dynamic copies inside a synthetic
 package (``runtime/dynamic_module_loader.py``). A relative import in such a copy
 executes the imported module a second time, with its own ContextVars, classes
-and registries, so state written by the canonical module is invisible to it
-(kdcube#270 D6, W39). App bundles are the opposite case: they must use
+and registries, so state written by the canonical module is invisible to it.
+App bundles are the opposite case: they must use
 package-relative imports, and the bundle import contract checks them.
 """
 

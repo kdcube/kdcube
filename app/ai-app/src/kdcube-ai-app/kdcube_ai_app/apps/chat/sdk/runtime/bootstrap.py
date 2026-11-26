@@ -416,7 +416,7 @@ def bootstrap_bind_all(spec_json: str, *,
 
     # 2) Best-effort generic ContextVar snapshot first. The dedicated pockets
     #    below (run_ctx, accounting, comm_ctx) restore after it, so they keep
-    #    the last word on the ContextVars they own (W39).
+    #    the last word on the ContextVars they own.
     if spec.cv_snapshot:
         try:
             for e in (spec.cv_snapshot or {}).get("entries", []):
@@ -549,7 +549,7 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
 
     # 2) Best-effort generic ContextVar snapshot first. The dedicated pockets
     #    below (run_ctx, accounting, comm_ctx) restore after it, so they keep
-    #    the last word on the ContextVars they own (W39).
+    #    the last word on the ContextVars they own.
     if spec.cv_snapshot:
         # Preload declaring modules to improve attr-based resolution
         try:

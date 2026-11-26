@@ -358,8 +358,8 @@ class ToolSubsystem:
                 )
 
                 # The request object keeps the call context it was built with;
-                # the turn may have written more since (conversation denials,
-                # W39), and possibly while another request object was bound.
+                # the turn may have written more since (conversation
+                # denials), and possibly while another request object was bound.
                 # The live call context wins, so the child sees what this turn
                 # enforces.
                 stored = getattr(comm_context, "bundle_call_context", None)
