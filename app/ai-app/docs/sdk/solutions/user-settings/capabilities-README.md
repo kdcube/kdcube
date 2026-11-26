@@ -4,7 +4,7 @@ title: "Agent Capability Control And Selection"
 summary: "How descriptor authority defines the capability ceiling, Agent Card selections define user defaults, and conversations choose within that live range."
 status: current
 tags: ["sdk", "solutions", "capabilities", "agent-selection", "control-card", "connection-hub", "picker", "widget"]
-updated_at: 2026-09-23
+updated_at: 2026-11-26
 keywords:
   [
     "agent_capabilities",
@@ -127,6 +127,59 @@ Platform system tools are outside this user-selectable boundary. Every
 descriptor capability is inside it. If the current Control authority or the
 required conversation selection cannot be resolved, selectable capabilities
 close for the turn; preference-store availability never widens that result.
+
+## Conversation choices are enforced in Connection Hub
+
+KDCube applies a conversation's selection to what the model is shown. The
+same selection is also kept in Connection Hub, as that conversation's
+**slice** of the Agent Card, so a governed call made in the conversation is
+checked against `slice ∩ Agent Card ∩ Control` at the operation boundary, not
+only hidden from the model. See
+[Delegated Access Cards, conversation slices](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md#conversation-slices).
+
+- **Turn token.** At turn start the runtime asks Connection Hub, with the
+  Agent Card bearer, for a token naming the conversation and turn
+  (`agent_capability.turn`). Every governed call of the turn presents it
+  beside the Card bearer. The token is not a bearer of its own; it lives about
+  ten minutes, is renewed only while the processor still runs that turn, and
+  never past a two-hour cap.
+- **Seeding.** A conversation's slice is created once, from the Agent Card's
+  defaults within the current Control, after Connection Hub checks in KDCube's
+  conversation registry that the signed-in user owns the conversation in this
+  application. A picker change before the first turn seeds it the same way.
+  A conversation with no slice yet, including one that existed before slices
+  were introduced, starts from the Card defaults; a permission it had turned
+  on beyond them is ticked again in its picker.
+- **Picker.** A picker change writes KDCube's selection and the slice; it
+  applies from the next call. While the agent's permissions are being updated
+  the write answers `agent_authority_updating` and is retried.
+- **Consent in a conversation** adds the granted permission to that
+  conversation's slice and to the Agent Card defaults in one Card transaction:
+  it works in this conversation at once and is the default for new ones; other
+  existing conversations do not get it.
+- **Calls outside a conversation.** A call with no turn token, such as an
+  automation run, uses the Agent Card's defaults, never every permission the
+  Card was ever granted. Automation runs always start in a new job
+  conversation of their own and request no turn token.
+- **A deleted conversation's id used again** never inherits the deleted
+  conversation's slice: the slice records the conversation's deletion epoch
+  (the start of its latest completed deletion, 0 when never deleted), the
+  runtime names the current epoch with each token request and picker write,
+  and a different epoch seeds the slice again from the Card defaults. A
+  conversation being deleted gets no token and no picker write
+  ([Conversation Retention](../../../runtime/harness/timeline/conversation-retention-README.md#deleting-a-conversation)).
+
+### Agent Card defaults and granted permissions
+
+The Agent Card holds two things for the user: its **defaults** (the positive
+selection new conversations and automation runs start from) and its
+**grants** (every permission the user has given the agent, which the
+conversations choose within). Saving the Agent Card in its editor or the
+full-page picker changes the defaults and keeps what was granted, so a
+conversation that chose a permission keeps it after the user unticks it on
+the Card. **Save and revoke unticked** in the Connection Hub editor also
+withdraws every unticked permission from the grants: every conversation of
+that agent loses it at once.
 
 ## Authority is data, presentation is metadata
 
@@ -275,8 +328,9 @@ Descriptor, Agent Card, and conversation changes remain independent:
 | Descriptor adds a genuinely new capability | It becomes selectable in Agent Card and conversation pickers but remains off in existing selections until explicitly chosen. |
 | Descriptor restores a capability selected before its removal | Its preserved selection becomes effective again; scopes that had deselected it remain off. |
 | Administrator edits the Control Card | Connection Hub writes the revision-checked ceiling/default change into descriptor-owned application properties, then updates the Card. The saved descriptor value survives runtime reload. |
-| User changes Agent Card defaults | A revision-checked Card update replaces the positive defaults. New conversations start from them; existing conversation selections do not change. |
-| User changes a chat picker | `agent_selection_update` replaces only that conversation's positive selection. It may select any current Control-allowed capability and never changes the Agent Card or another conversation. |
+| User changes Agent Card defaults | A revision-checked Card update replaces the positive defaults and keeps the granted permissions. New conversations and automation runs start from the defaults; existing conversation selections do not change. |
+| User saves and revokes unticked | The unticked permissions leave the Card's grants; every conversation of the agent loses them at once. |
+| User changes a chat picker | `agent_selection_update` replaces only that conversation's positive selection, in KDCube and in its Connection Hub slice, from the next call. It may select any current Control-allowed capability and never changes the Agent Card or another conversation. |
 | Labels or other metadata change | The picker can show the new presentation without treating it as authority. |
 
 The remint rule depends on the authorization representation. A static or

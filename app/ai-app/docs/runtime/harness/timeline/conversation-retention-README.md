@@ -3,8 +3,8 @@ id: repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-ret
 title: "Conversation Retention: Hot Index and Cold Tier"
 summary: "Conversation index rows older than the hot window move to a verified cold tier in bundle storage, embeddings included; date-filtered reads reach them by time, and explicit deletions remove a scope from both tiers with an audit row."
 tags: ["runtime", "conversation", "retention", "storage", "postgres"]
-updated_at: 2026-10-05
-keywords: ["conv_messages", "cold tier", "hot_days", "conv_archive_batches", "conv_archive_deletions", "ConversationRetention", "ConversationColdArchive", "conversation-archive"]
+updated_at: 2026-11-26
+keywords: ["conv_messages", "cold tier", "hot_days", "conv_archive_batches", "conv_archive_deletions", "ConversationRetention", "ConversationColdArchive", "conversation-archive", "conversation delete", "conversation-deletion-resume", "conversation_turn_running", "deletion epoch"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/harness/timeline/conversation-artifacts-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/hosting/files-storage-system-README.md
@@ -130,6 +130,44 @@ in `conv_archive_deletions`, written before anything is deleted with the
 actor, the time and the scope, and finished `completed` with its counts or
 `failed` with the error. Bodies are deleted before the records that point at
 them, so running a failed deletion again finds every body it left behind.
+
+## Deleting a conversation
+
+A person deletes a conversation with
+`DELETE /api/cb/conversations/{tenant}/{project}/{conversation_id}`. The
+deletion ledger is what the rest of the platform reads to know a conversation
+is going away: an **open** deletion is a whole-conversation row (no `tags_all`)
+in state `started` or `failed`.
+
+| Situation | Answer |
+| --- | --- |
+| A turn of the conversation is running | `409 conversation_turn_running`: the delete holds the processor's conversation lock, so it waits for no turn and interrupts none. Delete after the answer. |
+| The conversation is already being deleted (another request, or the resume job) | `409 conversation_delete_in_progress`. |
+| Deleted | `200` with the counts; the conversation's status event says `deleted`. |
+| Recorded but not finished (for example the cold tier failed midway) | `202 {"status": "accepted", "deletion_id": ...}`: the conversation is already gone for the person, and its data is removed automatically. |
+
+While a deletion is open the conversation is **hidden and frozen**: it is left
+out of the conversation list, search and feedback listings, every read by its
+id answers `404`, and no agent turn or capability change can start in it
+(Connection Hub's registry check reports no such conversation). Deleting it
+again finishes the open deletion, even when no messages are left.
+
+A message already queued for the conversation is **dropped** with a
+`conversation_deleted` error when it was sent before the deletion finished,
+including one sent from another tab while the deletion ran; it is never run as
+a new conversation. A message sent after the deletion finished starts a new
+conversation under that id, which shares nothing with the deleted one: its
+agent permissions start from the Agent Card defaults, because the deletion
+epoch (the start of its latest completed deletion) changed.
+
+The admin app's system cron `conversation-deletion-resume` runs every ten
+minutes, independent of the archive switch. It runs each open deletion again
+with the scope recorded on its latest row, oldest first, holding the
+conversation's lock; it skips a conversation whose lock is held, takes the
+retention lock only when it is free (a deletion a person waits for goes
+first), stops when the cold tier is unavailable, and logs a warning after five
+failed attempts. A completed whole-conversation deletion closes the earlier
+open rows of that conversation it covered (`finished by <deletion_id>`).
 
 Reads and deletions follow the ledger: only batches it records as `pruned`
 are cold data. A part left in storage by an interrupted archive or
