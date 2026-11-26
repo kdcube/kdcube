@@ -204,7 +204,7 @@ def _props() -> dict:
 
 
 def _legacy_override_props() -> dict:
-    """Bundle props as a Control Save wrote them before W757 (2026-10-12)."""
+    """Bundle props as a Control Save wrote them in earlier releases."""
     resource = application_resource(
         tenant=TENANT,
         project=PROJECT,
@@ -1031,7 +1031,7 @@ def test_a_granted_action_carries_the_claims_that_action_needs() -> None:
 
 
 def test_selected_exact_actions_keep_the_action_call_and_deny_the_rest():
-    """W38 live 2026-11-17: a Card selects exact actions and never the bare
+    """A Card selects exact actions and never the bare
     `object.action`; with the parent in the descriptor the projection denied it,
     which hid object_action although actions were selected."""
     catalog = {"named_services": [{

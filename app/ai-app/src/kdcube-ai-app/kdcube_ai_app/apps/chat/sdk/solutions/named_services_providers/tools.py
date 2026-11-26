@@ -388,7 +388,7 @@ def _operation_allowed(namespace: str, operation: str) -> bool:
     allowed = _allowed_values(policy.get("allowed_operations"), _DEFAULT_READ_OPERATIONS)
     if "*" in allowed or operation in allowed:
         return True
-    # W38: a namespace that lists exact actions without the parent still takes
+    # A namespace that lists exact actions without the parent still takes
     # the action call; `_descriptor_action_list` then admits only those actions.
     return operation == OBJECT_ACTION and any(
         value.startswith(f"{OBJECT_ACTION}.") for value in allowed
@@ -396,7 +396,7 @@ def _operation_allowed(namespace: str, operation: str) -> bool:
 
 
 def _descriptor_action_list(namespace: str) -> frozenset[str] | None:
-    """W38: the actions an agent's configuration lists for a namespace.
+    """The actions an agent's configuration lists for a namespace.
 
     ``None`` when the configuration allows every action: ``*`` or the parent
     ``object.action``, with or without exact actions beside it. Otherwise the
@@ -716,7 +716,7 @@ async def _agent_grant_admission(
             recovery = ((not_granted.get("ret") or {}).get("recovery") or {}) if isinstance(
                 not_granted.get("ret"), Mapping) else {}
             if isinstance(recovery, Mapping) and recovery.get("request_user_consent") is False:
-                # W38: Connection Hub attributes the refusal to a card no user
+                # Connection Hub attributes the refusal to a card no user
                 # consent can change (the agent's Control). Announcing a consent
                 # demand would put an unsatisfiable "Review agent access" banner
                 # in the chat; the refusal goes back as the Hub wrote it.
@@ -898,7 +898,7 @@ async def _call(
         )
     listed_actions = _descriptor_action_list(base_ns) if operation == OBJECT_ACTION else None
     if action and listed_actions is not None and str(action).strip() not in listed_actions:
-        # W38: the agent's configuration lists its actions; this one is not among
+        # The agent's configuration lists its actions; this one is not among
         # them, so the fix is the app admin's, not the user's toggle.
         return _error(
             "named_service_action_not_allowed_for_client",

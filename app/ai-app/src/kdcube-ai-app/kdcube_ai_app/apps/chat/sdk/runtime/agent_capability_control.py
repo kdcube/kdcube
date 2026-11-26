@@ -821,7 +821,7 @@ def descriptor_capability_payload(
     standard_authority = _descriptor_standard_authority(catalog)
     # The descriptor is the ceiling and the first-Card seed, nothing more. An
     # administrator's narrowing lives only in the Control Card Connection Hub
-    # stores; bundle props carry no Control override (W38, after W757).
+    # stores; bundle props carry no Control override.
     capability_defaults = selected_capabilities_from_disabled(
         authority=authority,
         catalog=catalog,
@@ -1028,7 +1028,7 @@ def disabled_from_projection(
             if _text(entry.get("name"))
         )
         selected_operations = selected.get(NAMED_SERVICE_OPERATIONS, set())
-        # W38: the bare `object.action` is the action call itself. A Card that
+        # The bare `object.action` is the action call itself. A Card that
         # selects exact actions never holds it, so it stays callable while the
         # namespace selects any `object.action.<name>`; the actions it does not
         # select stay denied by name.

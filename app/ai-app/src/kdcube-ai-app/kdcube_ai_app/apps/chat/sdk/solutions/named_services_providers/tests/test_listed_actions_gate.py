@@ -1,4 +1,4 @@
-"""W38: the dispatch gate reads an agent's action list by the one ceiling rule.
+"""The dispatch gate reads an agent's action list by the one ceiling rule.
 
 | allowed for a namespace         | action call                         |
 | object.action (± a list)        | every action                        |

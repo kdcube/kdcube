@@ -393,7 +393,7 @@ async def test_a_boundary_refusal_asks_for_the_operation_it_was_refused(
 
 @pytest.mark.asyncio
 async def test_a_refusal_the_control_card_holds_raises_no_consent_demand(monkeypatch):
-    """W38 live 2026-11-17: Connection Hub attributed the refusal to the agent's
+    """Connection Hub attributed the refusal to the agent's
     Control (`request_user_consent: false`), yet the gate announced a consent
     demand and the chat showed an unsatisfiable "Review agent access" banner."""
     import kdcube_ai_app.apps.chat.sdk.infra.bundle_operations as bundle_operations
