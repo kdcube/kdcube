@@ -1985,6 +1985,9 @@ class ContextRAGClient:
                 "turns": data["turns"],  # keep dict for now (turn_id -> {...})
             })
 
+        hidden = await self._conversations_being_deleted(user_id, [c["conversation_id"] for c in conv_list])
+        if hidden:
+            conv_list = [c for c in conv_list if c["conversation_id"] not in hidden]
         conv_list.sort(key=lambda x: (x.get("last_activity_at") or ""), reverse=True)
 
         # ------- pagination over conversations -------
@@ -2212,6 +2215,13 @@ class ContextRAGClient:
         )
         return {"mode": "update", "id": int(existing["id"]), "message_id": message_id, "hosted_uri": hosted_uri}
 
+    async def _conversations_being_deleted(self, user_id: str, conversation_ids: Sequence[str]) -> set:
+        """Conversations with an open deletion: hidden from listings until the deletion finishes."""
+        checker = getattr(self.idx, "conversations_being_deleted", None)
+        if checker is None or not conversation_ids:
+            return set()
+        return await checker(user_id=user_id, conversation_ids=list(conversation_ids))
+
     async def list_conversations(
             self,
             user_id: str,
@@ -2294,6 +2304,9 @@ class ContextRAGClient:
             by_conv[cid] = item
 
         items = list(by_conv.values())
+        hidden = await self._conversations_being_deleted(user_id, [i["conversation_id"] for i in items])
+        if hidden:
+            items = [i for i in items if i["conversation_id"] not in hidden]
         if started_after is not None:
             try:
                 cutoff = ts_key(started_after)

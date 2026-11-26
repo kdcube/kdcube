@@ -713,3 +713,38 @@ async def test_no_turn_starts_while_the_conversation_is_being_deleted(monkeypatc
                                             session=session)
     assert seen == [None]
     assert key not in _router_state.redis.values
+
+
+
+class _DeletingIndex:
+    def __init__(self, deleting):
+        self.deleting = set(deleting)
+
+    async def open_conversation_deletion(self, *, user_id, conversation_id):
+        return {"deletion_id": "del_1", "state": "started"} if conversation_id in self.deleting else None
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_being_deleted_is_gone_for_readers_and_writers(monkeypatch, _router_state):
+    """Status, details, fetch, feedback and the other by-id routes answer 404 while a deletion is open."""
+    from fastapi import HTTPException
+
+    _scoped_registry(monkeypatch)
+    _router_state.browser.idx = _DeletingIndex({"conv-1"})
+    with pytest.raises(HTTPException) as gone:
+        await conversations._ensure_conversation_in_scope_or_404("tenant-a", "project-a", user_id="user-1",
+                                                                 conversation_id="conv-1")
+    assert gone.value.status_code == 404
+    _router_state.browser.idx = _DeletingIndex(set())
+    assert await conversations._ensure_conversation_in_scope_or_404(
+        "tenant-a", "project-a", user_id="user-1", conversation_id="conv-1") == ["bundle.from.db"]
+
+
+@pytest.mark.asyncio
+async def test_deleting_again_reaches_a_conversation_being_deleted(monkeypatch, _router_state):
+    _scoped_registry(monkeypatch)
+    _router_state.browser.idx = _DeletingIndex({"conv-1"})
+    session = SimpleNamespace(user_id="user-1", session_id="s", user_type="standard", fingerprint="fp")
+    await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
+                                            session=session)
+    assert any(name == "delete_conversation" for name, _ in _router_state.browser.calls)

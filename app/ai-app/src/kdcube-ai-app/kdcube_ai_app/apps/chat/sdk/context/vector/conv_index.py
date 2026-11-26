@@ -79,7 +79,7 @@ def conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str) 
             f" AND (NOT ({a}.scope ? 'bundle_ids') OR jsonb_array_length({a}.scope->'bundle_ids') > 0)")
 
 
-def open_conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str) -> str:
+def open_conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str, match: str = "=") -> str:
     """SQL for "this conversation has an open deletion".
 
     A ledger row (``conv_archive_deletions``) is an open whole-conversation
@@ -252,6 +252,20 @@ class ConvIndex:
         async with self._pool.acquire() as con:
             row = await con.fetchrow(q, user_id, conversation_id, since)
         return dict(row) if row else None
+
+    async def conversations_being_deleted(self, *, user_id: str, conversation_ids: Sequence[str]) -> set[str]:
+        """The given conversations of this user that have an open deletion (hidden from every listing)."""
+        ids = sorted({str(c) for c in conversation_ids if str(c or "").strip()})
+        if not ids:
+            return set()
+        q = f"""
+          SELECT DISTINCT d.scope->>'conversation_id' AS conversation_id
+          FROM {self.schema}.conv_archive_deletions d
+          WHERE {open_conversation_deletion_sql("d", "$1", "ANY($2::text[])", match="=")}
+        """
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, user_id, ids)
+        return {str(r["conversation_id"]) for r in rows}
 
     async def get_conversation_state_row(
             self,

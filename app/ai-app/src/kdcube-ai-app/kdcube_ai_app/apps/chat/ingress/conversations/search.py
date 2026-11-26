@@ -416,6 +416,15 @@ async def search_conversations(
             detail="query is required unless from_ts/to_ts is provided (temporal browse)",
         )
 
+    browser = getattr(state, "conversation_browser", None)
+    hidden_checker = getattr(browser, "_conversations_being_deleted", None)
+    if hidden_checker is not None and result.hits:
+        hidden = await hidden_checker(session.user_id, [str(h.get("conversation_id") or "") for h in result.hits
+                                                        if isinstance(h, dict)])
+        if hidden:
+            result.hits = [h for h in result.hits
+                           if not (isinstance(h, dict) and str(h.get("conversation_id") or "") in hidden)]
+
     conversations = await _conversation_infos(
         state,
         user_id=session.user_id,

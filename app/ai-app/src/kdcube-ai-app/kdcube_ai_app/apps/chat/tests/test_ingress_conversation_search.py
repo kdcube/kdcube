@@ -344,3 +344,17 @@ def test_title_enrichment_failure_does_not_fail_search(harness):
     assert resp.json()["conversations"] == {
         "conv-hit": {"title": None, "last_activity_at": None},
     }
+
+
+def test_hits_in_a_conversation_being_deleted_are_left_out(harness):
+    asked = []
+
+    async def being_deleted(user_id, conversation_ids):
+        asked.append((user_id, list(conversation_ids)))
+        return {"conv-hit"}
+
+    harness.browser._conversations_being_deleted = being_deleted
+    resp = harness.client.post(SEARCH_URL, json={"query": "acme invoice", "targets": ["user", "assistant"]})
+    assert resp.status_code == 200
+    assert resp.json()["hits"] == []
+    assert asked == [("user-1", ["conv-hit"])]

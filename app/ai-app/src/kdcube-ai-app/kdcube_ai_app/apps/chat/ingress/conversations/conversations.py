@@ -207,6 +207,7 @@ async def _ensure_conversation_in_scope_or_404(
     user_id: str,
     conversation_id: str,
     bundle_id: Optional[str] = None,
+    allow_deleting: bool = False,
 ) -> List[str]:
     allowed_bundle_ids = await _resolve_allowed_bundle_ids_or_404(tenant, project, bundle_id)
     details = await router.state.conversation_browser.get_conversation_details(
@@ -217,7 +218,18 @@ async def _ensure_conversation_in_scope_or_404(
     )
     if not (details or {}).get("turns"):
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if not allow_deleting and await _conversation_being_deleted(user_id=user_id, conversation_id=conversation_id):
+        # A conversation being deleted is gone for every reader and writer.
+        raise HTTPException(status_code=404, detail="Conversation not found")
     return allowed_bundle_ids
+
+
+async def _conversation_being_deleted(*, user_id: str, conversation_id: str) -> bool:
+    index = getattr(router.state.conversation_browser, "idx", None)
+    checker = getattr(index, "open_conversation_deletion", None)
+    if checker is None:
+        return False
+    return bool(await checker(user_id=user_id, conversation_id=conversation_id))
 
 @router.get("/{tenant}/{project}", response_model=ConversationListResponse)
 async def list_conversations(
@@ -423,6 +435,8 @@ async def delete_conversation(
         project,
         user_id=session.user_id,
         conversation_id=conversation_id,
+        # Deleting again finishes a deletion that did not complete.
+        allow_deleting=True,
     )
 
     # Resolve user_type as the string used when writing messages (e.g. "standard")

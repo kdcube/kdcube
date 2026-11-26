@@ -112,3 +112,15 @@ async def test_a_message_sent_before_a_completed_deletion_belongs_to_the_deleted
     opened = await _ledger(index, state="failed")
     found = await index.conversation_deletion_since(user_id="u1", conversation_id="c1", since=after)
     assert found and found["deletion_id"] == opened
+
+
+@pytest.mark.asyncio
+async def test_the_listing_check_finds_only_open_whole_conversation_deletions(index) -> None:
+    await _ledger(index, state="started", conversation="c1")
+    await _ledger(index, state="failed", conversation="c2")
+    await _ledger(index, state="completed", conversation="c3")
+    await _ledger(index, state="started", conversation="c4", tags_all=["turn:t1"])
+    await _ledger(index, state="started", user="u2", conversation="c5")
+    found = await index.conversations_being_deleted(user_id="u1", conversation_ids=["c1", "c2", "c3", "c4", "c5", "c6"])
+    assert found == {"c1", "c2"}
+    assert await index.conversations_being_deleted(user_id="u1", conversation_ids=[]) == set()
