@@ -316,52 +316,6 @@ class ConvIndex:
             row = await con.fetchrow(q, *args)
         return dict(row) if row else None
 
-    async def delete_conversation(
-            self,
-            *,
-            user_id: str,
-            conversation_id: str,
-            bundle_id: Optional[str] = None,
-            bundle_ids: Optional[Sequence[str]] = None,
-    ) -> int:
-        """
-        Delete all conv_messages rows (and their edges) for a given user+conversation.
-
-        Returns:
-            Number of conv_messages rows deleted.
-        """
-        args: List[Any] = [user_id, conversation_id]
-        bundle_scope = self._bundle_scope_clause(
-            args,
-            bundle_id=bundle_id,
-            bundle_ids=bundle_ids,
-        )
-
-        q = f"""
-            WITH target AS (
-              SELECT id
-              FROM {self.schema}.conv_messages
-              WHERE user_id = $1
-                AND conversation_id = $2
-                {f"AND {bundle_scope}" if bundle_scope else ""}
-            ),
-            del_edges AS (
-              DELETE FROM {self.schema}.conv_artifact_edges
-              WHERE from_id IN (SELECT id FROM target)
-                 OR to_id   IN (SELECT id FROM target)
-            ),
-            deleted AS (
-              DELETE FROM {self.schema}.conv_messages
-              WHERE id IN (SELECT id FROM target)
-              RETURNING id
-            )
-            SELECT COUNT(*) AS n
-            FROM deleted
-        """
-        async with self._pool.acquire() as con:
-            row = await con.fetchrow(q, *args)
-        return int(row["n"] or 0)
-
     async def delete_turn(
             self,
             *,
