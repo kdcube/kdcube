@@ -196,3 +196,21 @@ async def test_the_deletion_status_names_an_open_deletion_and_the_latest_complet
     opened = await _ledger(index, state="started")
     status = await index.conversation_deletion_status(user_id="u1", conversation_id="c1")
     assert status["open_deletion_id"] == opened and status["epoch"] == newer_epoch
+
+
+
+@pytest.mark.asyncio
+async def test_a_message_sent_while_the_deletion_ran_is_dropped_too(index) -> None:
+    """Sent after the deletion started but before it finished: still meant for the deleted conversation."""
+    from datetime import datetime, timezone
+
+    deletion_id = await _ledger(index, state="completed")
+    async with index._pool.acquire() as con:
+        await con.execute(
+            f"UPDATE {index.schema}.conv_archive_deletions SET created_at = '2026-11-26T12:00:00Z',"
+            " completed_at = '2026-11-26T12:05:00Z' WHERE deletion_id = $1", deletion_id)
+    during = datetime(2026, 11, 26, 12, 2, tzinfo=timezone.utc)
+    after = datetime(2026, 11, 26, 12, 6, tzinfo=timezone.utc)
+    found = await index.conversation_deletion_since(user_id="u1", conversation_id="c1", since=during)
+    assert found and found["deletion_id"] == deletion_id
+    assert await index.conversation_deletion_since(user_id="u1", conversation_id="c1", since=after) is None

@@ -237,15 +237,18 @@ class ConvIndex:
         """The deletion that removes a message sent at ``since`` from this conversation, or None.
 
         That is an open whole-conversation deletion, or a completed one that
-        started at or after ``since``: a message sent before such a deletion
-        belongs to the deleted conversation and must not bring it back. A
-        message sent after a completed deletion starts a new conversation.
+        finished at or after ``since``: a message sent before the deletion
+        finished was meant for the deleted conversation, even when it was sent
+        while the deletion ran, and must not bring it back. A message sent
+        after a completed deletion starts a new conversation.
         """
         q = f"""
           SELECT deletion_id, state, created_at
           FROM {self.schema}.conv_archive_deletions d
           WHERE {conversation_deletion_sql("d", "$1", "$2")}
-            AND (d.state IN ('started', 'failed') OR ($3::timestamptz IS NOT NULL AND d.created_at >= $3::timestamptz))
+            AND (d.state IN ('started', 'failed')
+                 OR ($3::timestamptz IS NOT NULL AND d.state = 'completed'
+                     AND COALESCE(d.completed_at, d.created_at) >= $3::timestamptz))
           ORDER BY created_at DESC
           LIMIT 1
         """
