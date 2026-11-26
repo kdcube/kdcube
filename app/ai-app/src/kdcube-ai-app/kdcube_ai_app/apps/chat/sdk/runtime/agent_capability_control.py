@@ -1069,6 +1069,16 @@ def selected_capabilities_from_disabled(
         and ApplicationResource.parse(target).application not in denied_targets
     }
 
+    # A conversation may turn a delegated resource family
+    # (the user's own MCP connectors) off; the deny map names it by id.
+    denied_families = set(_strings(disabled.get("delegated_resource_families")))
+    if denied_families:
+        selected[RESOURCE_FAMILIES] = {
+            family
+            for family in selected.get(RESOURCE_FAMILIES, set())
+            if family not in denied_families
+        }
+
     subagents = catalog.get("subagents")
     default_on = not isinstance(subagents, Mapping) or subagents.get("default_on") is not False
     explicitly_disabled = disabled.get("subagents") if "subagents" in disabled else None

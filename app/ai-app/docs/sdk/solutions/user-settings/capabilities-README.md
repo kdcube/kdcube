@@ -210,7 +210,7 @@ The descriptor can offer these user-selectable families:
 | App resources | resource or operation | Rejected at the governed resource operation boundary. |
 | Skills | concrete skill id | Removed from every skill consumer. |
 | Conversation targets | exact application resource | Rejected before conversation storage is read. |
-| Delegated resource families | family id | Not projected to the resident caller. |
+| Delegated resource families | family id | Not projected to the resident caller; every resource the family admits (for example the user's own MCP connectors) is disabled for that conversation. The picker shows each family under **Your connected resources**. |
 | Subagents | one `enabled` capability | Spawner, tool, and guidance are not installed. |
 
 ## Creation, edits, and descriptor changes

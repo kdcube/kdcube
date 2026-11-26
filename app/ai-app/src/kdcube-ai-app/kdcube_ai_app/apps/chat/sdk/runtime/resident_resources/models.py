@@ -227,6 +227,10 @@ class ConversationNarrowing:
     """
 
     disabled_resources: Mapping[str, tuple[str, ...] | None] = field(default_factory=dict)
+    # Delegated resource families this conversation turned
+    # off (for example the user's own MCP connectors); every resource the
+    # family admits is disabled in this conversation.
+    disabled_families: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

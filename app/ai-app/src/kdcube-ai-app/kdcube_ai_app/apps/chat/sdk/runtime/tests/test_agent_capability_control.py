@@ -1061,3 +1061,20 @@ def test_a_granted_action_carries_the_claims_that_action_needs() -> None:
         "object.action.upload_file",
         "object.list",
     ]
+
+
+def test_a_saved_conversation_can_turn_the_users_own_connectors_off_and_on() -> None:
+    """The deny map's family id leaves the conversation selection."""
+
+    authority = _payload()["capability_authority"]
+    on = selected_capabilities_from_disabled(authority=authority, catalog=_catalog(), disabled={})
+    assert "user_external_mcp" in on["capabilities"].get("resource_families", [])
+
+    off = selected_capabilities_from_disabled(
+        authority=authority,
+        catalog=_catalog(),
+        disabled={"delegated_resource_families": ["user_external_mcp"]},
+    )
+    assert "user_external_mcp" not in off["capabilities"].get("resource_families", [])
+    assert disabled_from_projection(_catalog(), off)["delegated_resource_families"] == ["user_external_mcp"]
+    assert "delegated_resource_families" not in disabled_from_projection(_catalog(), on)

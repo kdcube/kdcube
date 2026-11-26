@@ -368,6 +368,19 @@ export interface AgentCapabilitiesInventory {
   /** Saved defaults retained on the Agent Card but unavailable under the
    *  current descriptor-derived Control Card. */
   missing_capabilities?: AgentMissingCapability[]
+  /** Delegated resource families the descriptor allows: a
+   *  class of user-owned resources, such as the user's own MCP connectors.
+   *  A conversation may turn a family off; absent = not offered. */
+  delegated_resource_families?: AgentCapabilityResourceFamily[]
+}
+
+/** One delegated resource family row. */
+export interface AgentCapabilityResourceFamily {
+  id: string
+  label?: string
+  description?: string
+  resource_kinds?: string[]
+  authority_state?: AgentCapabilityAuthorityValue
 }
 
 /** UI adapter derived from the effective positive conversation projection.
@@ -381,6 +394,8 @@ export interface AgentSelectionDisabled {
    *  operations (`object.search`) / named actions (`object.action.send`). */
   named_services?: Record<string, true | string[]>
   skills?: string[]
+  /** Delegated resource family ids this conversation turned off. */
+  delegated_resource_families?: string[]
   /** The user's explicit sub-agent delegation preference: `true` = opted out
    *  (off), `false` = opted IN (on). Absent = no preference — the inventory's
    *  `default_on` decides the rendered state. Both booleans are stored (an
@@ -409,6 +424,8 @@ export interface AgentSelectionPatch {
   conversation_targets?: Record<string, boolean>
   named_services?: Record<string, boolean | string[]>
   skills?: Record<string, boolean>
+  /** Per-family toggles: `true` turns the family off, `false` back on. */
+  delegated_resource_families?: Record<string, boolean>
   /** Sub-agents toggle: the explicit preference the user is writing — `true`
    *  opts out (off), `false` opts in (on); omitted keeps state. Both booleans
    *  are stored (an explicit `false` is a real opt-in, not a clear). Rides the
@@ -496,6 +513,9 @@ export function applySelectionPatch(
     ...(disabled.named_services ? { named_services: { ...disabled.named_services } } : {}),
     ...(disabled.conversation_targets ? { conversation_targets: { ...disabled.conversation_targets } } : {}),
     ...(disabled.skills ? { skills: [...disabled.skills] } : {}),
+    ...(disabled.delegated_resource_families
+      ? { delegated_resource_families: [...disabled.delegated_resource_families] }
+      : {}),
     ...(disabled.subagents !== undefined ? { subagents: disabled.subagents } : {}),
   }
   for (const category of DICT_CATEGORIES) {
@@ -532,6 +552,15 @@ export function applySelectionPatch(
     if (skills.size > 0) out.skills = [...skills]
     else delete out.skills
   }
+  if (patch.delegated_resource_families) {
+    const families = new Set(out.delegated_resource_families ?? [])
+    for (const [familyId, value] of Object.entries(patch.delegated_resource_families)) {
+      if (value) families.add(familyId)
+      else families.delete(familyId)
+    }
+    if (families.size > 0) out.delegated_resource_families = [...families]
+    else delete out.delegated_resource_families
+  }
   if (patch.subagents !== undefined) {
     // Store the explicit preference both ways — a `false` is an opt-IN, not a
     // clear (it's what activates an admin default-off ability).
@@ -555,6 +584,11 @@ export function mergeSelectionPatches(
   if (Object.keys(conversationTargets).length) out.conversation_targets = conversationTargets
   const skills = { ...(base.skills ?? {}), ...(next.skills ?? {}) }
   if (Object.keys(skills).length > 0) out.skills = skills
+  const families = {
+    ...(base.delegated_resource_families ?? {}),
+    ...(next.delegated_resource_families ?? {}),
+  }
+  if (Object.keys(families).length > 0) out.delegated_resource_families = families
   if (next.subagents !== undefined) out.subagents = next.subagents
   else if (base.subagents !== undefined) out.subagents = base.subagents
   if (next.model !== undefined) out.model = next.model

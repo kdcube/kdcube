@@ -73,6 +73,7 @@ _INSTRUCTIONS_UNSET = object()
 _PRESENTATION_UNSET = object()
 
 _DICT_CATEGORIES = ("tools", "mcp", "named_services", "resources", "conversation_targets")
+_ID_SET_CATEGORIES = ("skills", "delegated_resource_families")
 
 
 def agent_selection_key(agent_id: str, *, conversation_id: str = "") -> str:
@@ -129,25 +130,29 @@ def merge_selection_patch(
         if merged:
             out[category] = merged
 
-    skills: list[str] = []
-    existing_skills = current.get("skills")
-    if isinstance(existing_skills, (list, tuple)):
-        skills = [str(s or "").strip() for s in existing_skills if str(s or "").strip()]
-    raw_skills = patch.get("skills")
-    if isinstance(raw_skills, Mapping):
-        for skill_id, value in raw_skills.items():
-            skill_id = str(skill_id or "").strip()
-            if not skill_id:
-                continue
-            if value:
-                if skill_id not in skills:
-                    skills.append(skill_id)
-            elif skill_id in skills:
-                skills.remove(skill_id)
-    elif isinstance(raw_skills, (list, tuple, set)):
-        skills = [str(s or "").strip() for s in raw_skills if str(s or "").strip()]
-    if skills:
-        out["skills"] = skills
+    # Id-set categories: a list replaces the whole denied set, an
+    # ``{id: bool}`` mapping toggles one id. ``delegated_resource_families``
+    # lets a conversation turn the user's own connectors off.
+    for category in _ID_SET_CATEGORIES:
+        denied: list[str] = []
+        existing_ids = current.get(category)
+        if isinstance(existing_ids, (list, tuple)):
+            denied = [str(s or "").strip() for s in existing_ids if str(s or "").strip()]
+        raw_ids = patch.get(category)
+        if isinstance(raw_ids, Mapping):
+            for item_id, value in raw_ids.items():
+                item_id = str(item_id or "").strip()
+                if not item_id:
+                    continue
+                if value:
+                    if item_id not in denied:
+                        denied.append(item_id)
+                elif item_id in denied:
+                    denied.remove(item_id)
+        elif isinstance(raw_ids, (list, tuple, set)):
+            denied = [str(s or "").strip() for s in raw_ids if str(s or "").strip()]
+        if denied:
+            out[category] = denied
 
     # Tri-state: an explicit stored value is kept either way (True = opted
     # out, False = opted in — the latter matters when the admin default is
@@ -177,21 +182,22 @@ def _merge_patch_over_patch(
                         merged[name] = value
         if merged:
             out[category] = merged
-    skills: dict[str, Any] = {}
-    for source in (base, patch):
-        raw = source.get("skills") if isinstance(source, Mapping) else None
-        if isinstance(raw, Mapping):
-            for skill_id, value in raw.items():
-                skill_id = str(skill_id or "").strip()
-                if skill_id:
-                    skills[skill_id] = bool(value)
-        elif isinstance(raw, (list, tuple, set)):
-            for skill_id in raw:
-                skill_id = str(skill_id or "").strip()
-                if skill_id:
-                    skills[skill_id] = True
-    if skills:
-        out["skills"] = skills
+    for category in _ID_SET_CATEGORIES:
+        toggles: dict[str, Any] = {}
+        for source in (base, patch):
+            raw = source.get(category) if isinstance(source, Mapping) else None
+            if isinstance(raw, Mapping):
+                for item_id, value in raw.items():
+                    item_id = str(item_id or "").strip()
+                    if item_id:
+                        toggles[item_id] = bool(value)
+            elif isinstance(raw, (list, tuple, set)):
+                for item_id in raw:
+                    item_id = str(item_id or "").strip()
+                    if item_id:
+                        toggles[item_id] = True
+        if toggles:
+            out[category] = toggles
     for source in (base, patch):
         if isinstance(source, Mapping) and "subagents" in source:
             out["subagents"] = bool(source.get("subagents"))

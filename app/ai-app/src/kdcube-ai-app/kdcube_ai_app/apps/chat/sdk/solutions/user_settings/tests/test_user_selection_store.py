@@ -588,3 +588,16 @@ async def test_presentation_pick_round_trip_merge_and_clear():
         presentation=None,
     )
     assert cleared["presentation"] is None
+
+
+def test_a_resource_family_toggle_is_kept_and_reverted_like_a_skill():
+    """The picker turns the user's own connectors off and on."""
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.agent_selection import merge_selection_patch
+
+    off = merge_selection_patch({}, {"delegated_resource_families": {"user_external_mcp": True}})
+    assert off["delegated_resource_families"] == ["user_external_mcp"]
+    kept = merge_selection_patch(off, {"skills": {"pdf-press": True}})
+    assert kept["delegated_resource_families"] == ["user_external_mcp"]
+    on = merge_selection_patch(kept, {"delegated_resource_families": {"user_external_mcp": False}})
+    assert "delegated_resource_families" not in on

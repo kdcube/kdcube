@@ -1203,6 +1203,52 @@ function HelperAgentsSection({ inventory, disabled, baseDisabled, editable, sele
   )
 }
 
+/** Delegated resource families: one toggle per family the
+ *  descriptor allows, such as the user's own MCP connectors. Turning a family
+ *  off in a conversation removes every resource it admits from this
+ *  conversation only; the connectors themselves stay on the Agent Card. */
+const RESOURCE_FAMILY_LABELS: Record<string, { label: string; sub: string }> = {
+  user_external_mcp: {
+    label: 'My MCP connectors',
+    sub: 'MCP servers you connected in Connection Hub (External MCP).',
+  },
+}
+
+function ResourceFamiliesSection({ inventory, disabled, baseDisabled, editable, selectionScope, toggle, pending }: CapabilityRowsProps) {
+  const families = inventory.delegated_resource_families ?? []
+  if (!families.length) return null
+  const denied = new Set(disabled.delegated_resource_families ?? [])
+  const baseDenied = new Set(baseDisabled?.delegated_resource_families ?? [])
+  const pendingFamilies = pending?.disabled?.delegated_resource_families ?? {}
+  return (
+    <div>
+      <SectionTitle>Your connected resources</SectionTitle>
+      {families.map((family) => {
+        const known = RESOURCE_FAMILY_LABELS[family.id]
+        const off = denied.has(family.id)
+        return (
+          <MenuRow
+            key={family.id}
+            label={
+              <>
+                {family.label || known?.label || family.id}
+                {family.id in pendingFamilies ? <PendingTag /> : null}
+              </>
+            }
+            sub={family.description || known?.sub || undefined}
+            checked={off ? 'off' : 'on'}
+            baseChecked={baseDenied.has(family.id) ? 'off' : 'on'}
+            selectionScope={selectionScope}
+            scopeLocked={!editable}
+            onToggle={() => toggle({ delegated_resource_families: { [family.id]: !off } })}
+            authorityState={family.authority_state}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 function MissingCapabilitiesSection({ inventory }: CapabilityRowsProps) {
   const missing = inventory.missing_capabilities ?? []
   if (!missing.length) return null
@@ -1348,6 +1394,7 @@ function builtInSections(namespaceStyles: NamespaceStyleMap): ComposerMenuSectio
     capabilitySection('mcp', 30, (inv) => inv.mcp.length > 0, McpSection),
     capabilitySection('services', 40, (inv) => inv.named_services.length > 0, ServicesSection),
     capabilitySection('conversation-targets', 43, (inv) => Boolean(inv.conversation_targets?.length), ConversationTargetsSection),
+    capabilitySection('resource-families', 44, (inv) => Boolean(inv.delegated_resource_families?.length), ResourceFamiliesSection),
     capabilitySection('subagents', 45, (inv) => Boolean(inv.subagents?.available), HelperAgentsSection),
     capabilitySection('missing', 47, (inv) => Boolean(inv.missing_capabilities?.length), MissingCapabilitiesSection),
     {
@@ -1369,6 +1416,7 @@ function changesConversationCapabilities(patch: AgentSelectionPatch): boolean {
     || patch.named_services
     || patch.conversation_targets
     || patch.skills
+    || patch.delegated_resource_families
     || patch.subagents !== undefined
   )
 }
@@ -1689,7 +1737,7 @@ export function ComposerMenu({
   const capabilities = vm.capabilities
 
   const openExpandedOnHost = (
-    source: 'composer-expand' | 'chat-spotlight',
+    source: 'chat-spotlight',
     spotlightTools?: string[],
   ) => openCapabilitiesOnHost(
     {
@@ -1812,10 +1860,13 @@ export function ComposerMenu({
               </span>
               <CanvasExpandButton
                 onClick={() => {
-                  void openExpandedOnHost('composer-expand').then((acked) => {
-                    if (acked) close()
-                    else setView('modal')
-                  })
+                  // Expanding is the same conversation
+                  // picker with the same draft, never a second window. A
+                  // scene window is another frame: it cannot hold this
+                  // draft, and without the conversation it edits the Agent
+                  // Card defaults. The full-page picker for the Card stays
+                  // the widget's own button.
+                  setView('modal')
                 }}
                 title="Expand"
               />

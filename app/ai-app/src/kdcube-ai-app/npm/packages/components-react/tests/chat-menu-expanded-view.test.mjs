@@ -52,12 +52,18 @@ test('one body renders into every shell (shared interaction state)', () => {
 })
 
 test('expand and collapse affordances are present', () => {
-  // Expand asks the scene host for an unclipped window with the active
-  // conversation, retaining the iframe modal as its no-ack fallback.
+  // Expand is the same conversation picker with the same
+  // draft, in the in-chat modal; it never asks the host for another window,
+  // which could not hold the draft and opened the Agent Card defaults.
   assert.match(SOURCE, /CanvasExpandButton/)
+  const button = SOURCE.slice(SOURCE.indexOf('<CanvasExpandButton'), SOURCE.indexOf('title="Expand"'))
+  assert.match(button, /setView\('modal'\)/)
+  assert.doesNotMatch(button, /openExpandedOnHost|openCapabilitiesOnHost/)
+  assert.doesNotMatch(SOURCE, /'composer-expand'/)
+  // A consent banner's spotlight may still open the conversation-scoped
+  // scene window; it carries the conversation id.
   assert.match(SOURCE, /openCapabilitiesOnHost/)
   assert.match(SOURCE, /conversation_id: vm\.state\.conversationId \|\| undefined/)
-  assert.match(SOURCE, /if \(acked\) close\(\)\n\s+else setView\('modal'\)/)
   assert.match(SOURCE, /aria-label="Collapse to menu"/)
   assert.match(SOURCE, /aria-label="Close \(Esc\)"/)
 })
