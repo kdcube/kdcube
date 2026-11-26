@@ -282,6 +282,9 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_deletions (
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_deletions_open
     ON <SCHEMA>.conv_archive_deletions ((scope->>'user_id'), (scope->>'conversation_id'))
     WHERE state IN ('started', 'failed');
+-- Every deletion of a conversation, to tell whether a queued message predates it.
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_deletions_conversation
+    ON <SCHEMA>.conv_archive_deletions ((scope->>'user_id'), (scope->>'conversation_id'), created_at);
 
 -- ---------- User memory (stable, consented facts/preferences) ----------
 CREATE TABLE IF NOT EXISTS <SCHEMA>.user_memory (

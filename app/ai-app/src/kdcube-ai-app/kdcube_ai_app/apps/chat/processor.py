@@ -1370,6 +1370,67 @@ class EnhancedChatRequestProcessor:
             raise ExternalEventLaneWakeIgnored(decision.reason)
         return self._payload_for_lane_wakeup(payload, wakeup=wakeup, event=event)
 
+    async def _drop_task_of_deleted_conversation(
+        self,
+        task_data: Dict[str, Any],
+        payload: Any,
+        *,
+        conversation_lock_key: Optional[str],
+        conversation_lock_token: Optional[str],
+    ) -> bool:
+        """Drop a message to a conversation that is being, or was, deleted; True when dropped.
+
+        A message that waited in the queue while its conversation was deleted
+        must not start a turn: the turn would bring the deleted conversation
+        back. A message sent after a completed deletion starts a new
+        conversation. When the deletion ledger cannot be read, the task goes
+        back to the queue.
+        """
+        if str(getattr(payload.request, "operation", "") or "") == BACKGROUND_JOB_OPERATION:
+            return False
+        index = getattr(self.conversation_ctx, "idx", None)
+        checker = getattr(index, "conversation_deletion_since", None)
+        if checker is None:
+            return False
+        since = None
+        try:
+            created_at = float(getattr(payload.meta, "created_at", None) or 0)
+            since = datetime.fromtimestamp(created_at, tz=timezone.utc) if created_at else None
+        except Exception:
+            since = None
+        try:
+            deletion = await checker(user_id=payload.user.user_id,
+                                     conversation_id=payload.routing.conversation_id, since=since)
+        except Exception:
+            logger.warning("Cannot read the conversation deletion ledger; task %s goes back to the queue",
+                           self._task_logical_id(task_data), exc_info=True)
+            await self._release_unstarted_claimed_work(task_data, reason="conversation-deletion-unreadable")
+            return True
+        if not deletion:
+            return False
+        logger.info("Dropping task %s: conversation %s is deleted (deletion %s, %s)",
+                    self._task_logical_id(task_data), payload.routing.conversation_id,
+                    deletion.get("deletion_id"), deletion.get("state"))
+        try:
+            _, _, _, comm = self._build_runtime_context(payload)
+            await comm.error(
+                message="This conversation was deleted.",
+                data={"task_id": payload.meta.task_id, "error_type": "conversation_deleted",
+                      "deletion_id": deletion.get("deletion_id")},
+            )
+        except Exception:
+            logger.debug("Failed to emit conversation_deleted for task %s", payload.meta.task_id, exc_info=True)
+        try:
+            await self._ack_claimed_task(task_data)
+        finally:
+            self._current_load = max(0, self._current_load - 1)
+            if conversation_lock_key:
+                try:
+                    await self._release_redis_lock(conversation_lock_key, conversation_lock_token)
+                except Exception:
+                    logger.debug("Failed to release conversation lock after a dropped task", exc_info=True)
+        return True
+
     async def _mark_task_interrupted(self, task_dict: Dict[str, Any], *, reason: str) -> None:
         try:
             payload = await self._resolve_queue_item_payload(task_dict)
@@ -2982,6 +3043,12 @@ class EnhancedChatRequestProcessor:
                 task_data,
                 reason=f"application-not-ready:{exc.snapshot.application_id}",
             )
+            return
+
+        if await self._drop_task_of_deleted_conversation(
+            task_data, payload, conversation_lock_key=conversation_lock_key,
+            conversation_lock_token=conversation_lock_token,
+        ):
             return
 
         if current_processor_task is not None:

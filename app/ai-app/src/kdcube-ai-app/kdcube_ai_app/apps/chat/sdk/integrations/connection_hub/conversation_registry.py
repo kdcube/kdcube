@@ -23,16 +23,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from kdcube_ai_app.apps.chat.sdk.event_identity import safe_event_lane_part
-from kdcube_ai_app.infra.namespaces import REDIS, ns_key
-
-
-def conversation_lock_key(*, tenant: str, project: str, user_id: str, conversation_id: str) -> str:
-    """The processor's per-conversation lock (``processor._task_conversation_lock_key``)."""
-    parts = (safe_event_lane_part(tenant, default="_"), safe_event_lane_part(project, default="_"),
-             safe_event_lane_part(user_id, default="_"), safe_event_lane_part(conversation_id, default="_"))
-    prefix = ns_key(REDIS.SYNCHRONIZATION.LOCK, tenant=tenant, project=project)
-    return f"{prefix}:conversation:{':'.join(parts)}"
+from kdcube_ai_app.apps.chat.sdk.runtime.conversation_lock import conversation_lock_key
 
 
 def _tags(row: Any) -> list[str]:

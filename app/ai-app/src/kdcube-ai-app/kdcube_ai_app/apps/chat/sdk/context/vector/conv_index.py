@@ -65,6 +65,20 @@ def _base_state_tags() -> list[str]:
     return [CONV_STATE_KIND]
 
 
+def conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str) -> str:
+    """SQL for "a ledger row deletes this whole conversation", in any state.
+
+    Not limited by tags (a tag-scoped deletion removes part of a
+    conversation) and not limited to an empty bundle list (which deletes
+    nothing but still writes a row).
+    """
+    a = alias
+    return (f"({a}.scope->>'user_id') = {user_sql}"
+            f" AND ({a}.scope->>'conversation_id') = {conversation_sql}"
+            f" AND COALESCE(jsonb_array_length({a}.scope->'tags_all'), 0) = 0"
+            f" AND (NOT ({a}.scope ? 'bundle_ids') OR jsonb_array_length({a}.scope->'bundle_ids') > 0)")
+
+
 def open_conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str) -> str:
     """SQL for "this conversation has an open deletion".
 
@@ -76,12 +90,7 @@ def open_conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: 
     deletes nothing but still writes a row). ``completed`` rows are history.
     The predicate matches the partial index ``idx_<schema>_conv_deletions_open``.
     """
-    a = alias
-    return (f"{a}.state IN ('started', 'failed')"
-            f" AND ({a}.scope->>'user_id') = {user_sql}"
-            f" AND ({a}.scope->>'conversation_id') = {conversation_sql}"
-            f" AND COALESCE(jsonb_array_length({a}.scope->'tags_all'), 0) = 0"
-            f" AND (NOT ({a}.scope ? 'bundle_ids') OR jsonb_array_length({a}.scope->'bundle_ids') > 0)")
+    return f"{alias}.state IN ('started', 'failed') AND {conversation_deletion_sql(alias, user_sql, conversation_sql)}"
 
 class ConvIndex:
     def __init__(self,
@@ -221,6 +230,27 @@ class ConvIndex:
         """
         async with self._pool.acquire() as con:
             row = await con.fetchrow(q, user_id, conversation_id)
+        return dict(row) if row else None
+
+    async def conversation_deletion_since(self, *, user_id: str, conversation_id: str,
+                                          since: Optional[datetime]) -> Optional[Dict[str, Any]]:
+        """The deletion that removes a message sent at ``since`` from this conversation, or None.
+
+        That is an open whole-conversation deletion, or a completed one that
+        started at or after ``since``: a message sent before such a deletion
+        belongs to the deleted conversation and must not bring it back. A
+        message sent after a completed deletion starts a new conversation.
+        """
+        q = f"""
+          SELECT deletion_id, state, created_at
+          FROM {self.schema}.conv_archive_deletions d
+          WHERE {conversation_deletion_sql("d", "$1", "$2")}
+            AND (d.state IN ('started', 'failed') OR ($3::timestamptz IS NOT NULL AND d.created_at >= $3::timestamptz))
+          ORDER BY created_at DESC
+          LIMIT 1
+        """
+        async with self._pool.acquire() as con:
+            row = await con.fetchrow(q, user_id, conversation_id, since)
         return dict(row) if row else None
 
     async def get_conversation_state_row(

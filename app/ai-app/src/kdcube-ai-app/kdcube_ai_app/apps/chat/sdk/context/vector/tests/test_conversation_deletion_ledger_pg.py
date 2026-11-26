@@ -87,3 +87,28 @@ async def test_the_open_deletions_index_exists_and_serves_the_check(index) -> No
             f" WHERE {open_conversation_deletion_sql('d', '$1', '$2')}", "u1", "c1"))
         await con.execute("RESET enable_seqscan")
     assert f"idx_{index.schema}_conv_deletions_open" in plan
+
+
+async def _set_created(idx: ConvIndex, deletion_id: str, created: str) -> None:
+    async with idx._pool.acquire() as con:
+        await con.execute(f"UPDATE {idx.schema}.conv_archive_deletions SET created_at = $2::text::timestamptz"
+                          " WHERE deletion_id = $1", deletion_id, created)
+
+
+@pytest.mark.asyncio
+async def test_a_message_sent_before_a_completed_deletion_belongs_to_the_deleted_conversation(index) -> None:
+    from datetime import datetime, timezone
+
+    deletion_id = await _ledger(index, state="completed")
+    await _set_created(index, deletion_id, "2026-11-26T12:00:00Z")
+    before = datetime(2026, 11, 26, 11, 59, tzinfo=timezone.utc)
+    after = datetime(2026, 11, 26, 12, 1, tzinfo=timezone.utc)
+    found = await index.conversation_deletion_since(user_id="u1", conversation_id="c1", since=before)
+    assert found and found["deletion_id"] == deletion_id
+    # A message sent after the deletion starts a new conversation with that id.
+    assert await index.conversation_deletion_since(user_id="u1", conversation_id="c1", since=after) is None
+    # Without a send time only an open deletion counts.
+    assert await index.conversation_deletion_since(user_id="u1", conversation_id="c1", since=None) is None
+    opened = await _ledger(index, state="failed")
+    found = await index.conversation_deletion_since(user_id="u1", conversation_id="c1", since=after)
+    assert found and found["deletion_id"] == opened

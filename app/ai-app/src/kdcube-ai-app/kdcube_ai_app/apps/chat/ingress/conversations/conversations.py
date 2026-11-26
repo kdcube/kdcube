@@ -444,15 +444,36 @@ async def delete_conversation(
     if not (details or {}).get("turns"):
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    from kdcube_ai_app.apps.chat.sdk.runtime.conversation_lock import (
+        ConversationTurnRunning, conversation_lock_key, hold_conversation_lock,
+    )
+
     try:
-        result = await router.state.conversation_browser.delete_conversation(
-            tenant=tenant,
-            project=project,
-            user_id=session.user_id,
-            conversation_id=conversation_id,
-            user_type=user_type_str,
-            bundle_id=None,
-            bundle_ids=allowed_bundle_ids,
+        # A conversation cannot be deleted while a turn runs: the turn would keep
+        # writing to it. Holding the processor's conversation lock refuses at
+        # once while a turn runs, and keeps any new turn from starting until
+        # the deletion is done.
+        async with hold_conversation_lock(
+            router.state.redis_async,
+            conversation_lock_key(tenant=tenant, project=project, user_id=session.user_id,
+                                  conversation_id=conversation_id),
+            owner="conversation-delete",
+        ):
+            result = await router.state.conversation_browser.delete_conversation(
+                tenant=tenant,
+                project=project,
+                user_id=session.user_id,
+                conversation_id=conversation_id,
+                user_type=user_type_str,
+                bundle_id=None,
+                bundle_ids=allowed_bundle_ids,
+            )
+    except ConversationTurnRunning as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": e.code,
+                    "message": "The conversation is still running and cannot be deleted. "
+                               "Wait until the answer is finished, then delete it."},
         )
     except HTTPException:
         raise

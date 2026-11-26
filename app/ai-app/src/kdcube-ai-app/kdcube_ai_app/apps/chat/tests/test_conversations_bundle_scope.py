@@ -108,17 +108,38 @@ class _FakeChatComm:
         self.calls.append(kwargs)
 
 
+class _FakeLockRedis:
+    """SET NX / compare-and-renew / compare-and-delete, as the conversation lock uses them."""
+
+    def __init__(self):
+        self.values = {}
+
+    async def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.values:
+            return None
+        self.values[key] = value
+        return True
+
+    async def eval(self, script, numkeys, key, token, *args):
+        if self.values.get(key) != token:
+            return 0
+        if "DEL" in script:
+            del self.values[key]
+        return 1
+
+
 @pytest.fixture
 def _router_state(monkeypatch):
     browser = _FakeConversationBrowser()
     chat_comm = _FakeChatComm()
+    redis = _FakeLockRedis()
     monkeypatch.setattr(
         conversations.router,
         "state",
-        SimpleNamespace(conversation_browser=browser, chat_comm=chat_comm),
+        SimpleNamespace(conversation_browser=browser, chat_comm=chat_comm, redis_async=redis),
         raising=False,
     )
-    return SimpleNamespace(browser=browser, chat_comm=chat_comm)
+    return SimpleNamespace(browser=browser, chat_comm=chat_comm, redis=redis)
 
 
 @pytest.mark.asyncio
@@ -642,3 +663,53 @@ async def test_submit_turn_feedback_clear_does_not_resolve_default_bundle(monkey
     assert _router_state.browser.calls[1][0] == "remove_user_reaction"
     assert _router_state.browser.calls[2][0] == "clear_user_feedback_in_turn_log"
     assert _router_state.browser.calls[2][1]["bundle_id"] is None
+
+
+
+def _scoped_registry(monkeypatch):
+    async def _load_registry(runtime_ctx, tenant, project):
+        return SimpleNamespace(bundles={"bundle.from.db": object()})
+
+    monkeypatch.setattr(conversations, "load_persisted_registry_from_runtime_ctx", _load_registry)
+
+
+@pytest.mark.asyncio
+async def test_a_running_conversation_cannot_be_deleted(monkeypatch, _router_state):
+    """While a turn holds the conversation lock the delete refuses with 409 and deletes nothing."""
+    from fastapi import HTTPException
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.conversation_lock import conversation_lock_key
+
+    _scoped_registry(monkeypatch)
+    key = conversation_lock_key(tenant="tenant-a", project="project-a", user_id="user-1", conversation_id="conv-1")
+    _router_state.redis.values[key] = "processor-turn"
+    session = SimpleNamespace(user_id="user-1", session_id="s", user_type="standard", fingerprint="fp")
+    with pytest.raises(HTTPException) as refused:
+        await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
+                                                session=session)
+    assert refused.value.status_code == 409
+    assert refused.value.detail["code"] == "conversation_turn_running"
+    assert not any(name == "delete_conversation" for name, _ in _router_state.browser.calls)
+    assert _router_state.redis.values[key] == "processor-turn"
+
+
+@pytest.mark.asyncio
+async def test_no_turn_starts_while_the_conversation_is_being_deleted(monkeypatch, _router_state):
+    """The delete holds the processor's conversation lock until it is done, then releases it."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.conversation_lock import conversation_lock_key
+
+    _scoped_registry(monkeypatch)
+    key = conversation_lock_key(tenant="tenant-a", project="project-a", user_id="user-1", conversation_id="conv-1")
+    seen = []
+    deleting = _router_state.browser.delete_conversation
+
+    async def delete_while_a_turn_tries_to_start(**kwargs):
+        seen.append(await _router_state.redis.set(key, "processor-turn", nx=True, ex=300))
+        return await deleting(**kwargs)
+
+    _router_state.browser.delete_conversation = delete_while_a_turn_tries_to_start
+    session = SimpleNamespace(user_id="user-1", session_id="s", user_type="standard", fingerprint="fp")
+    await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
+                                            session=session)
+    assert seen == [None]
+    assert key not in _router_state.redis.values
