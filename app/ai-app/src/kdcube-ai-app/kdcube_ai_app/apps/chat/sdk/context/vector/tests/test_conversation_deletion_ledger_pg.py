@@ -1,0 +1,89 @@
+"""The deletion ledger marks a conversation that is being deleted, on a real PostgreSQL.
+
+Runs only with ``KDCUBE_TEST_POSTGRES_DSN`` (a throwaway database with pgvector).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import uuid
+
+import pytest
+
+from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+
+asyncpg = pytest.importorskip("asyncpg")
+
+
+@pytest.fixture
+async def index():
+    dsn = os.environ.get("KDCUBE_TEST_POSTGRES_DSN")
+    if not dsn:
+        pytest.skip("KDCUBE_TEST_POSTGRES_DSN is not set")
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=4)
+    schema = f"w40d_{uuid.uuid4().hex[:10]}"
+    idx = ConvIndex(pool=pool, schema=schema)
+    await idx.ensure_schema()
+    try:
+        yield idx
+    finally:
+        async with pool.acquire() as con:
+            await con.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        await pool.close()
+
+
+async def _ledger(idx: ConvIndex, *, state: str, user: str = "u1", conversation: str = "c1", **scope) -> str:
+    deletion_id = f"del_{uuid.uuid4().hex}"
+    body = {"user_id": user, "conversation_id": conversation, "bundle_id": None, "tags_all": [], **scope}
+    async with idx._pool.acquire() as con:
+        await con.execute(
+            f"INSERT INTO {idx.schema}.conv_archive_deletions (deletion_id, actor, scope, state)"
+            " VALUES ($1, 'u1', ($2::text)::jsonb, $3)", deletion_id, json.dumps(body), state)
+    return deletion_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state,scope,is_open", [
+    ("started", {}, True),
+    ("failed", {}, True),
+    ("completed", {}, False),
+    ("started", {"bundle_ids": ["app@1-0"]}, True),        # the ingress delete always passes bundle_ids
+    ("started", {"bundle_ids": []}, False),                # an empty bundle list deletes nothing
+    ("started", {"tags_all": ["turn:t1"]}, False),         # part of a conversation, not all of it
+])
+async def test_what_counts_as_an_open_whole_conversation_deletion(index, state, scope, is_open) -> None:
+    deletion_id = await _ledger(index, state=state, **scope)
+    found = await index.open_conversation_deletion(user_id="u1", conversation_id="c1")
+    assert (found is not None) is is_open
+    if is_open:
+        assert found["deletion_id"] == deletion_id and found["state"] == state
+
+
+@pytest.mark.asyncio
+async def test_the_check_is_per_user_and_conversation(index) -> None:
+    await _ledger(index, state="started", user="u1", conversation="c1")
+    assert await index.open_conversation_deletion(user_id="u1", conversation_id="c1")
+    assert await index.open_conversation_deletion(user_id="u2", conversation_id="c1") is None
+    assert await index.open_conversation_deletion(user_id="u1", conversation_id="c2") is None
+
+
+@pytest.mark.asyncio
+async def test_the_open_deletions_index_exists_and_serves_the_check(index) -> None:
+    async with index._pool.acquire() as con:
+        name = f"{index.schema}.idx_{index.schema}_conv_deletions_open"
+        assert await con.fetchval("SELECT to_regclass($1)", name)
+        for i in range(300):
+            await con.execute(
+                f"INSERT INTO {index.schema}.conv_archive_deletions (deletion_id, actor, scope, state)"
+                " VALUES ($1, 'u', ($2::text)::jsonb, 'completed')",
+                f"del_{i}", json.dumps({"user_id": f"u{i}", "conversation_id": "c", "tags_all": []}))
+        await con.execute(f"ANALYZE {index.schema}.conv_archive_deletions")
+        await con.execute("SET enable_seqscan = off")
+        from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import open_conversation_deletion_sql
+
+        plan = "\n".join(r[0] for r in await con.fetch(
+            f"EXPLAIN SELECT 1 FROM {index.schema}.conv_archive_deletions d"
+            f" WHERE {open_conversation_deletion_sql('d', '$1', '$2')}", "u1", "c1"))
+        await con.execute("RESET enable_seqscan")
+    assert f"idx_{index.schema}_conv_deletions_open" in plan

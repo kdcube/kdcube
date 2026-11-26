@@ -64,6 +64,25 @@ def _state_tag(state: str) -> str:
 def _base_state_tags() -> list[str]:
     return [CONV_STATE_KIND]
 
+
+def open_conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str) -> str:
+    """SQL for "this conversation has an open deletion".
+
+    A ledger row (``conv_archive_deletions``) is an open whole-conversation
+    deletion when it is ``started`` (running, or a run that died; the row is
+    written under the retention lock before anything is deleted) or
+    ``failed``; it is not limited by tags (a tag-scoped deletion removes part
+    of a conversation); and it is not limited to an empty bundle list (which
+    deletes nothing but still writes a row). ``completed`` rows are history.
+    The predicate matches the partial index ``idx_<schema>_conv_deletions_open``.
+    """
+    a = alias
+    return (f"{a}.state IN ('started', 'failed')"
+            f" AND ({a}.scope->>'user_id') = {user_sql}"
+            f" AND ({a}.scope->>'conversation_id') = {conversation_sql}"
+            f" AND COALESCE(jsonb_array_length({a}.scope->'tags_all'), 0) = 0"
+            f" AND (NOT ({a}.scope ? 'bundle_ids') OR jsonb_array_length({a}.scope->'bundle_ids') > 0)")
+
 class ConvIndex:
     def __init__(self,
                  pool: Optional[asyncpg.Pool] = None,
@@ -185,6 +204,24 @@ class ConvIndex:
         if not path.is_file():
             raise FileNotFoundError(f"conversation index schema not found: {path}")
         return path.read_bytes()
+
+    async def open_conversation_deletion(self, *, user_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """The conversation's open whole-conversation deletion, or None.
+
+        The deletion ledger marks a conversation that is being deleted: while
+        such a row exists the conversation is hidden and frozen (no turn token,
+        no capability seeding), and the resume job finishes the deletion. See ``OPEN_CONVERSATION_DELETION_SQL`` for what counts.
+        """
+        q = f"""
+          SELECT deletion_id, state, created_at
+          FROM {self.schema}.conv_archive_deletions d
+          WHERE {open_conversation_deletion_sql("d", "$1", "$2")}
+          ORDER BY created_at DESC
+          LIMIT 1
+        """
+        async with self._pool.acquire() as con:
+            row = await con.fetchrow(q, user_id, conversation_id)
+        return dict(row) if row else None
 
     async def get_conversation_state_row(
             self,

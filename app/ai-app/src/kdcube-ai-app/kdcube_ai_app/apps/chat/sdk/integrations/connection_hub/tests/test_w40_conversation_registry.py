@@ -26,8 +26,11 @@ def test_the_lock_key_is_the_processors_conversation_lock():
 
 
 class _Index:
-    def __init__(self, row):
-        self.row = row
+    def __init__(self, row, deleting=False):
+        self.row, self.deleting = row, deleting
+
+    async def open_conversation_deletion(self, *, user_id, conversation_id):
+        return {"deletion_id": "del_1", "state": "started"} if self.deleting else None
 
     async def get_conversation_state_row(self, *, user_id, conversation_id):
         return self.row if (user_id, conversation_id) == (USER, CONV) else None
@@ -41,8 +44,9 @@ class _Redis:
         return int(key in self.keys)
 
 
-def _registry(row, keys=()):
-    return KDCubeConversationRegistry(conv_index=_Index(row), redis=_Redis(keys), tenant=TENANT, project=PROJECT)
+def _registry(row, keys=(), deleting=False):
+    return KDCubeConversationRegistry(conv_index=_Index(row, deleting), redis=_Redis(keys), tenant=TENANT,
+                                      project=PROJECT)
 
 
 @pytest.mark.asyncio
@@ -63,3 +67,15 @@ async def test_a_turn_is_alive_only_in_progress_for_it_and_with_the_lock_held():
     assert not await _registry(running, [lock]).turn_alive(owner_subject=USER, conversation_id=CONV, turn_id="t2")
     idle = {"bundle_id": "app@1-0", "tags": ["conv.state:idle", "conv.turn:t1"]}
     assert not await _registry(idle, [lock]).turn_alive(owner_subject=USER, conversation_id=CONV, turn_id="t1")
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_being_deleted_does_not_exist_for_the_hub():
+    """No seeding and no live turn while a deletion is open."""
+    lock = conversation_lock_key(tenant=TENANT, project=PROJECT, user_id=USER, conversation_id=CONV)
+    running = {"bundle_id": "app@1-0", "ts": datetime(2026, 11, 20, tzinfo=timezone.utc),
+               "tags": ["conv.state:in_progress", "conv.turn:t1"]}
+    assert await _registry(running, [lock]).conversation(owner_subject=USER, conversation_id=CONV) is not None
+    assert await _registry(running, [lock], deleting=True).conversation(owner_subject=USER, conversation_id=CONV) is None
+    assert not await _registry(running, [lock], deleting=True).turn_alive(owner_subject=USER, conversation_id=CONV,
+                                                                          turn_id="t1")

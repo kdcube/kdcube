@@ -274,6 +274,15 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_archive_deletions (
     completed_at TIMESTAMPTZ
     );
 
+-- An open whole-conversation deletion marks a conversation that is being
+-- deleted. While one exists the conversation is hidden and frozen (no turn
+-- token, no capability seeding); the resume job finishes the deletion.
+-- Only open rows are indexed, so the check stays cheap however long the
+-- deletion history grows.
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_deletions_open
+    ON <SCHEMA>.conv_archive_deletions ((scope->>'user_id'), (scope->>'conversation_id'))
+    WHERE state IN ('started', 'failed');
+
 -- ---------- User memory (stable, consented facts/preferences) ----------
 CREATE TABLE IF NOT EXISTS <SCHEMA>.user_memory (
                                                     id            BIGSERIAL PRIMARY KEY,

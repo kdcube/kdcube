@@ -9,6 +9,8 @@ The Hub asks two things, both answered from KDCube's own records:
   ``conv_messages``) is keyed by ``(user_id, conversation_id)`` and carries the
   ``bundle_id``; a conversation has no row until its first turn or its first
   picker write registers it.
+- Both answer "no" while the conversation has an open deletion in the
+  deletion ledger: it is being deleted.
 - ``turn_alive``: the state row says ``in_progress`` for exactly this turn
   AND the processor still holds the conversation's Redis lock. The lock is
   renewed while the turn runs (``processor._lock_renewer``) and lapses within
@@ -47,6 +49,10 @@ class KDCubeConversationRegistry:
     async def conversation(self, *, owner_subject: str, conversation_id: str) -> Optional[Any]:
         from connection_hub.delegated_credentials.slices.turns import RegisteredConversation
 
+        if await self._index.open_conversation_deletion(user_id=owner_subject, conversation_id=conversation_id):
+            # A conversation being deleted does not exist for the Hub, so its
+            # conversation capabilities are never seeded or reseeded.
+            return None
         row = await self._index.get_conversation_state_row(user_id=owner_subject, conversation_id=conversation_id)
         if not row:
             return None
@@ -56,6 +62,8 @@ class KDCubeConversationRegistry:
                                       created_at=created)
 
     async def turn_alive(self, *, owner_subject: str, conversation_id: str, turn_id: str) -> bool:
+        if await self._index.open_conversation_deletion(user_id=owner_subject, conversation_id=conversation_id):
+            return False
         row = await self._index.get_conversation_state_row(user_id=owner_subject, conversation_id=conversation_id)
         tags = _tags(row)
         if "conv.state:in_progress" not in tags or f"conv.turn:{turn_id}" not in tags:
