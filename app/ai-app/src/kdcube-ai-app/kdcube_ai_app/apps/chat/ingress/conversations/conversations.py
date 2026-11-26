@@ -10,6 +10,7 @@ import logging
 import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from kdcube_ai_app.apps.chat.ingress.resolvers import (
@@ -20,7 +21,10 @@ from kdcube_ai_app.apps.chat.ingress.resolvers import (
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.tools.citations import strip_base64_from_citables_artifact
-from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationDeleteUnavailable
+from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import (
+    ConversationDeleteIncomplete,
+    ConversationDeleteUnavailable,
+)
 from kdcube_ai_app.infra.plugin.bundle_registry import (
     load_persisted_registry_from_runtime_ctx,
     resolve_default_bundle_id_from_runtime_ctx,
@@ -154,6 +158,7 @@ class ConversationStatus(BaseModel):
 
 class ConversationDeleteResponse(BaseModel):
     conversation_id: str
+    deletion_id: str = Field("", description="The deletion's record in the conversation deletion ledger")
     deleted_messages: int = Field(..., description="Rows deleted from conv_messages")
     deleted_storage_messages: int = Field(
         ..., description="Message blobs removed from storage (best-effort)"
@@ -207,7 +212,6 @@ async def _ensure_conversation_in_scope_or_404(
     user_id: str,
     conversation_id: str,
     bundle_id: Optional[str] = None,
-    allow_deleting: bool = False,
 ) -> List[str]:
     allowed_bundle_ids = await _resolve_allowed_bundle_ids_or_404(tenant, project, bundle_id)
     details = await router.state.conversation_browser.get_conversation_details(
@@ -218,7 +222,7 @@ async def _ensure_conversation_in_scope_or_404(
     )
     if not (details or {}).get("turns"):
         raise HTTPException(status_code=404, detail="Conversation not found")
-    if not allow_deleting and await _conversation_being_deleted(user_id=user_id, conversation_id=conversation_id):
+    if await _conversation_being_deleted(user_id=user_id, conversation_id=conversation_id):
         # A conversation being deleted is gone for every reader and writer.
         raise HTTPException(status_code=404, detail="Conversation not found")
     return allowed_bundle_ids
@@ -430,14 +434,18 @@ async def delete_conversation(
     """
     if not session.user_id:
         raise HTTPException(status_code=401, detail="No user in session")
-    allowed_bundle_ids = await _ensure_conversation_in_scope_or_404(
-        tenant,
-        project,
-        user_id=session.user_id,
-        conversation_id=conversation_id,
-        # Deleting again finishes a deletion that did not complete.
-        allow_deleting=True,
-    )
+    # Deleting again finishes a deletion that did not complete, even when its
+    # messages are already gone.
+    finishing = await _conversation_being_deleted(user_id=session.user_id, conversation_id=conversation_id)
+    if finishing:
+        allowed_bundle_ids = await _resolve_allowed_bundle_ids_or_404(tenant, project, None)
+    else:
+        allowed_bundle_ids = await _ensure_conversation_in_scope_or_404(
+            tenant,
+            project,
+            user_id=session.user_id,
+            conversation_id=conversation_id,
+        )
 
     # Resolve user_type as the string used when writing messages (e.g. "standard")
     raw_user_type = getattr(session, "user_type", "standard")
@@ -455,8 +463,21 @@ async def delete_conversation(
         inferred_bundle_id = (details or {}).get("bundle_id")
     except Exception:
         inferred_bundle_id = None
-    if not (details or {}).get("turns"):
+    if not finishing and not (details or {}).get("turns"):
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+    async def _announce_deleted() -> None:
+        await router.state.chat_comm.emit_conversation_status(
+            request_id=str(uuid.uuid4()),
+            tenant=tenant,
+            project=project,
+            bundle_id=inferred_bundle_id,
+            user_id=session.user_id or session.fingerprint,
+            session_id=session.session_id,
+            conversation_id=conversation_id,
+            state="deleted",
+            target_sid=None,  # session-broadcast
+        )
 
     from kdcube_ai_app.apps.chat.sdk.runtime.conversation_lock import (
         ConversationTurnRunning, conversation_lock_key, hold_conversation_lock,
@@ -491,6 +512,18 @@ async def delete_conversation(
         )
     except HTTPException:
         raise
+    except ConversationDeleteIncomplete as e:
+        # The deletion is recorded and the conversation is already hidden; it
+        # finishes automatically.
+        logger.warning(f"Conversation delete accepted, not finished: conversation={conversation_id} "
+                       f"deletion={e.deletion_id}: {e}")
+        await _announce_deleted()
+        return JSONResponse(
+            status_code=202,
+            content={"status": "accepted", "conversation_id": conversation_id, "deletion_id": e.deletion_id,
+                     "message": "The conversation is deleted and no longer available; "
+                                "removing its data finishes automatically."},
+        )
     except ConversationDeleteUnavailable as e:
         # Nothing was deleted; the client may retry.
         logger.warning(f"Conversation delete refused for now: conversation={conversation_id} code={e.code}: {e}")
@@ -508,24 +541,13 @@ async def delete_conversation(
             status_code=500,
             detail=f"Failed to delete conversation: {str(e)}",
         )
-    if result.get("deleted_messages", 0) == 0:
+    if not finishing and result.get("deleted_messages", 0) == 0:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # You can decide whether "0 deleted_messages" should be treated as 404.
-    # For now we just return the counts.
-    await router.state.chat_comm.emit_conversation_status(
-        request_id=str(uuid.uuid4()),
-        tenant=tenant,
-        project=project,
-        bundle_id=inferred_bundle_id,
-        user_id=session.user_id or session.fingerprint,
-        session_id=session.session_id,
-        conversation_id=conversation_id,
-        state="deleted",
-        target_sid=None,  # session-broadcast
-    )
+    await _announce_deleted()
     return ConversationDeleteResponse(
         conversation_id=conversation_id,
+        deletion_id=str(result.get("deletion_id") or ""),
         deleted_messages=result.get("deleted_messages", 0),
         deleted_storage_messages=result.get("deleted_storage_messages", 0),
         deleted_storage_attachments=result.get("deleted_storage_attachments", 0),

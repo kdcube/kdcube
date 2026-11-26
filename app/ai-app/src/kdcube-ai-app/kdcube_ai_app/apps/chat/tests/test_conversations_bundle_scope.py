@@ -1,6 +1,8 @@
 
 from types import SimpleNamespace
 
+import json
+
 import pytest
 
 from kdcube_ai_app.apps.chat.ingress.conversations import conversations
@@ -748,3 +750,49 @@ async def test_deleting_again_reaches_a_conversation_being_deleted(monkeypatch, 
     await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
                                             session=session)
     assert any(name == "delete_conversation" for name, _ in _router_state.browser.calls)
+
+
+
+@pytest.mark.asyncio
+async def test_a_recorded_delete_that_did_not_finish_is_accepted_with_its_id(monkeypatch, _router_state):
+    """202: the conversation is already hidden and the deletion finishes automatically."""
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationDeleteIncomplete
+
+    _scoped_registry(monkeypatch)
+
+    async def incomplete(**kwargs):
+        raise ConversationDeleteIncomplete("del_7", "RuntimeError: storage unavailable")
+
+    _router_state.browser.delete_conversation = incomplete
+    session = SimpleNamespace(user_id="user-1", session_id="s", user_type="standard", fingerprint="fp")
+    resp = await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
+                                                   session=session)
+    assert resp.status_code == 202
+    body = json.loads(resp.body)
+    assert body["status"] == "accepted" and body["deletion_id"] == "del_7" and body["conversation_id"] == "conv-1"
+    assert _router_state.chat_comm.calls[-1]["state"] == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_deleting_again_finishes_a_deletion_whose_messages_are_already_gone(monkeypatch, _router_state):
+    """An open deletion is finished even when no turns are left to show; no 404."""
+    async def _allowed(tenant, project, bundle_id=None):
+        return ["bundle.from.db"]
+
+    async def _no_turns(**kwargs):
+        _router_state.browser.calls.append(("get_conversation_details", kwargs))
+        return {"turns": []}
+
+    async def _finished(**kwargs):
+        _router_state.browser.calls.append(("delete_conversation", kwargs))
+        return {"deletion_id": "del_8", "deleted_messages": 0, "deleted_storage_messages": 2,
+                "deleted_storage_attachments": 0, "deleted_storage_executions": 0}
+
+    monkeypatch.setattr(conversations, "_resolve_allowed_bundle_ids_or_404", _allowed)
+    _router_state.browser.get_conversation_details = _no_turns
+    _router_state.browser.delete_conversation = _finished
+    _router_state.browser.idx = _DeletingIndex({"conv-1"})
+    session = SimpleNamespace(user_id="user-1", session_id="s", user_type="standard", fingerprint="fp")
+    resp = await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
+                                                   session=session)
+    assert resp.deletion_id == "del_8" and resp.deleted_storage_messages == 2

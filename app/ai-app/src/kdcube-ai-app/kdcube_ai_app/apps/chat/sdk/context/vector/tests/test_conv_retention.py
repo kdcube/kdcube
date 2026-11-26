@@ -543,6 +543,27 @@ async def test_a_deletion_that_fails_part_way_is_still_recorded():
     assert deletion["actor"] == "operator" and deletion["hot_rows"] == 0
 
 
+
+@pytest.mark.asyncio
+async def test_a_recorded_deletion_that_fails_is_reported_as_incomplete_with_its_id():
+    """The ledger row stays open, so the deletion is finished later; the caller learns which one."""
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationDeleteIncomplete
+
+    db, backend, archive, store, retention = _setup()
+    db.messages = [_msg(1, days_ago=200), _msg(2, days_ago=1)]
+    await retention.archive_before(NOW - timedelta(days=90))
+
+    async def broken(*_a, **_k):
+        raise RuntimeError("storage unavailable")
+
+    archive.read_manifest = broken  # type: ignore[assignment]
+    with pytest.raises(ConversationDeleteIncomplete) as incomplete:
+        await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
+    (deletion,) = db.deletions
+    assert incomplete.value.deletion_id == deletion["deletion_id"] and deletion["state"] == "failed"
+    assert "storage unavailable" in str(incomplete.value)
+
+
 @pytest.mark.asyncio
 async def test_a_failed_body_delete_can_be_completed_by_running_the_deletion_again():
     db, backend, archive, store, retention = _setup()

@@ -130,6 +130,20 @@ class ConversationDeleteBusy(ConversationDeleteUnavailable):
     code = "conversation_delete_busy"
 
 
+class ConversationDeleteIncomplete(RuntimeError):
+    """A deletion that was recorded and started but did not finish (HTTP 202).
+
+    Its ledger row stays open, so the conversation stays hidden and frozen,
+    and the deletion is finished automatically (or by deleting again).
+    """
+
+    code = "conversation_delete_accepted"
+
+    def __init__(self, deletion_id: str, message: str) -> None:
+        super().__init__(message)
+        self.deletion_id = deletion_id
+
+
 DELETE_LOCK_WAIT_S = 30.0
 
 
@@ -719,7 +733,7 @@ class ConversationRetention:
                 raise RuntimeError("the cold tier kept changing during the deletion; run it again")
         except Exception as exc:
             await self._finish_deletion(deletion_id, "failed", counts, error=f"{type(exc).__name__}: {exc}")
-            raise
+            raise ConversationDeleteIncomplete(deletion_id, f"{type(exc).__name__}: {exc}") from exc
         await self._finish_deletion(deletion_id, "completed", counts)
         return {"deletion_id": deletion_id, **counts, "unfinished_batches": settled}
 

@@ -3227,6 +3227,7 @@ class ContextRAGClient:
             )
 
         return {
+            "deletion_id": str(deleted.get("deletion_id") or ""),
             "deleted_messages": int(deleted_rows or 0),
             "deleted_storage_messages": int(storage_counts.get("messages", 0) or 0),
             "deleted_storage_attachments": int(storage_counts.get("attachments", 0) or 0),
