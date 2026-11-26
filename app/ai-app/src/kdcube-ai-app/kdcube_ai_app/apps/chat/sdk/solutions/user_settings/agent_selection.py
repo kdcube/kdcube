@@ -132,7 +132,7 @@ def merge_selection_patch(
 
     # Id-set categories: a list replaces the whole denied set, an
     # ``{id: bool}`` mapping toggles one id. ``delegated_resource_families``
-    # (kdcube#270 F11) lets a conversation turn the user's own connectors off.
+    # lets a conversation turn the user's own connectors off.
     for category in _ID_SET_CATEGORIES:
         denied: list[str] = []
         existing_ids = current.get(category)

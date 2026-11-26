@@ -1069,7 +1069,7 @@ def selected_capabilities_from_disabled(
         and ApplicationResource.parse(target).application not in denied_targets
     }
 
-    # kdcube#270 F11: a conversation may turn a delegated resource family
+    # A conversation may turn a delegated resource family
     # (the user's own MCP connectors) off; the deny map names it by id.
     denied_families = set(_strings(disabled.get("delegated_resource_families")))
     if denied_families:

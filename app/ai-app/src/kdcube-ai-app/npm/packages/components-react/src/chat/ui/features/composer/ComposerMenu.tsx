@@ -1203,7 +1203,7 @@ function HelperAgentsSection({ inventory, disabled, baseDisabled, editable, sele
   )
 }
 
-/** Delegated resource families (kdcube#270 F11): one toggle per family the
+/** Delegated resource families: one toggle per family the
  *  descriptor allows, such as the user's own MCP connectors. Turning a family
  *  off in a conversation removes every resource it admits from this
  *  conversation only; the connectors themselves stay on the Agent Card. */
@@ -1860,7 +1860,7 @@ export function ComposerMenu({
               </span>
               <CanvasExpandButton
                 onClick={() => {
-                  // kdcube#270 F7/F12: expanding is the same conversation
+                  // Expanding is the same conversation
                   // picker with the same draft, never a second window. A
                   // scene window is another frame: it cannot hold this
                   // draft, and without the conversation it edits the Agent

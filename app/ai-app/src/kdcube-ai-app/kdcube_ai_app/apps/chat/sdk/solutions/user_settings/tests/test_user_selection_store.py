@@ -591,7 +591,7 @@ async def test_presentation_pick_round_trip_merge_and_clear():
 
 
 def test_a_resource_family_toggle_is_kept_and_reverted_like_a_skill():
-    """kdcube#270 F11: the picker turns the user's own connectors off and on."""
+    """The picker turns the user's own connectors off and on."""
 
     from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.agent_selection import merge_selection_patch
 

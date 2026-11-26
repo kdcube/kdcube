@@ -368,7 +368,7 @@ export interface AgentCapabilitiesInventory {
   /** Saved defaults retained on the Agent Card but unavailable under the
    *  current descriptor-derived Control Card. */
   missing_capabilities?: AgentMissingCapability[]
-  /** Delegated resource families the descriptor allows (kdcube#270 F11): a
+  /** Delegated resource families the descriptor allows: a
    *  class of user-owned resources, such as the user's own MCP connectors.
    *  A conversation may turn a family off; absent = not offered. */
   delegated_resource_families?: AgentCapabilityResourceFamily[]

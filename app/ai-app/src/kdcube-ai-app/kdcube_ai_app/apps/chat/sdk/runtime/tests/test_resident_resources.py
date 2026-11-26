@@ -976,7 +976,7 @@ def test_per_turn_service_loads_fresh_card_and_provider_facts_without_cache():
 
 
 def test_a_conversation_that_turns_a_resource_family_off_loses_every_resource_it_admits():
-    """kdcube#270 F11: the picker's deny map names the family; the turn honours it."""
+    """The picker's deny map names the family; the turn honours it."""
 
     narrowing = conversation_narrowing_from_selection(
         {"delegated_resource_families": ["user_external_mcp"]},

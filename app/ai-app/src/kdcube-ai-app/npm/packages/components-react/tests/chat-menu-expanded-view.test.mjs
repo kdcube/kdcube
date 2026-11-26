@@ -52,7 +52,7 @@ test('one body renders into every shell (shared interaction state)', () => {
 })
 
 test('expand and collapse affordances are present', () => {
-  // kdcube#270 F7/F12: Expand is the same conversation picker with the same
+  // Expand is the same conversation picker with the same
   // draft, in the in-chat modal; it never asks the host for another window,
   // which could not hold the draft and opened the Agent Card defaults.
   assert.match(SOURCE, /CanvasExpandButton/)

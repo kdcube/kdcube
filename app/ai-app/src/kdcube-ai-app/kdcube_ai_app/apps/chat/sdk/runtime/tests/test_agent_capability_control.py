@@ -1064,7 +1064,7 @@ def test_a_granted_action_carries_the_claims_that_action_needs() -> None:
 
 
 def test_a_saved_conversation_can_turn_the_users_own_connectors_off_and_on() -> None:
-    """kdcube#270 F11: the deny map's family id leaves the conversation selection."""
+    """The deny map's family id leaves the conversation selection."""
 
     authority = _payload()["capability_authority"]
     on = selected_capabilities_from_disabled(authority=authority, catalog=_catalog(), disabled={})

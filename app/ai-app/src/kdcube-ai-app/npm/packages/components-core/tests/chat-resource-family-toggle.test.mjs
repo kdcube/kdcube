@@ -1,4 +1,4 @@
-// kdcube#270 F11: a conversation may turn a delegated resource family (the user's own MCP
+// A conversation may turn a delegated resource family (the user's own MCP
 // connectors) off and back on, like a skill; the draft merge keeps the latest toggle.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
