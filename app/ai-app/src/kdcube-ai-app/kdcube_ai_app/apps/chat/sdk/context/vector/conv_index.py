@@ -458,7 +458,7 @@ class ConvIndex:
         async with self._pool.acquire() as con:
             if row is None:
                 # INSERT; a concurrent first writer wins through the one-state-row
-                # Index, and this writer then takes the CAS update below.
+                # index, and this writer then takes the CAS update below.
                 tags = list(dict.fromkeys(
                     base_tags + [new_state_tag] + ([turn_tag] if turn_tag else [])
                 ))
