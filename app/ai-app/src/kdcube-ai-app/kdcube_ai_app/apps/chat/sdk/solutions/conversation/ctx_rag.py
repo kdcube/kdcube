@@ -3121,7 +3121,7 @@ class ContextRAGClient:
             bundle_id: str,
             user_type: str = "system",
     ) -> Optional[dict]:
-        """W40: make a conversation known (owner, application) before its first turn.
+        """Make a conversation known (owner, application) before its first turn.
 
         Connection Hub seeds a conversation's capability slice only after the
         registry shows the conversation owned by this user in this application;

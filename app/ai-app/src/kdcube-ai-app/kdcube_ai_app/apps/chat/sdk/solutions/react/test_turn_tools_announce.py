@@ -1,4 +1,4 @@
-"""W40: a turn without its turn token tells the model why the connected-service tools are missing."""
+"""A turn without its turn token tells the model why the connected-service tools are missing."""
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import build_announce_turn_tools_lines
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx

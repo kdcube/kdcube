@@ -449,7 +449,7 @@ const slice = createSlice({
       state.capabilities.saving = action.payload
       if (!action.payload) state.capabilities.authorityUpdating = false
     },
-    /** W40: the save waits and retries while the agent's permissions are being updated. */
+    /** The save waits and retries while the agent's permissions are being updated. */
     capabilitiesAuthorityUpdating(state) {
       state.capabilities.saving = true
       state.capabilities.authorityUpdating = true

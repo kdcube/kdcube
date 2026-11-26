@@ -729,7 +729,7 @@ def _w40_plan():
     )
 
 
-def test_w40_every_gateway_call_carries_this_turns_token():
+def test_every_gateway_call_carries_this_turns_token():
     async def _bearer(connection, user_subject):
         return "card-token"
 
@@ -743,7 +743,7 @@ def test_w40_every_gateway_call_carries_this_turns_token():
     assert "ts1.turn.token" not in repr(provider)
 
 
-def test_w40_a_lost_turn_token_refuses_the_call_instead_of_using_the_card_defaults():
+def test_a_lost_turn_token_refuses_the_call_instead_of_using_the_card_defaults():
     async def _bearer(connection, user_subject):
         return "card-token"
 
@@ -756,7 +756,7 @@ def test_w40_a_lost_turn_token_refuses_the_call_instead_of_using_the_card_defaul
         asyncio.run(provider(GATEWAY_SERVER))
 
 
-def test_w40_the_turn_token_is_renewed_before_it_lapses(monkeypatch):
+def test_the_turn_token_is_renewed_before_it_lapses(monkeypatch):
     from kdcube_ai_app.apps.chat.sdk.runtime import agent_capability_control as control
 
     clock, calls = {"now": 0.0}, []
@@ -774,7 +774,7 @@ def test_w40_the_turn_token_is_renewed_before_it_lapses(monkeypatch):
     assert calls == [{"agent_id": "main", "conversation_id": "c1", "turn_id": "t1", "turn_token": "ts1.first"}]
 
 
-def test_w40_an_automation_run_is_recognised_from_its_call_context():
+def test_an_automation_run_is_recognised_from_its_call_context():
     from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import turn_is_automation_execution
     from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_call_context
 

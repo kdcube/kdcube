@@ -404,7 +404,7 @@ class ConvIndex:
     async def register_conversation_state(
             self, *, user_id: str, conversation_id: str, bundle_id: str, hosted_uri: str, now_ts: str,
     ) -> Optional[Dict[str, Any]]:
-        """W40: register a conversation (its idle state row) before its first turn; never overwrite one.
+        """Register a conversation (its idle state row) before its first turn; never overwrite one.
 
         Returns the conversation's state row: the new one, or the one that already
         existed (another turn or picker write registered it first).
@@ -458,7 +458,7 @@ class ConvIndex:
         async with self._pool.acquire() as con:
             if row is None:
                 # INSERT; a concurrent first writer wins through the one-state-row
-                # index (W40), and this writer then takes the CAS update below.
+                # Index, and this writer then takes the CAS update below.
                 tags = list(dict.fromkeys(
                     base_tags + [new_state_tag] + ([turn_tag] if turn_tag else [])
                 ))
@@ -2201,7 +2201,7 @@ class ConvIndex:
               {' '.join(extra)}
               AND {since_cond}
             GROUP BY m.conversation_id
-            -- W40: a conversation registered by a capability pick before its
+            -- A conversation registered by a capability pick before its
             -- first message has only its state row; it is not listed until then.
             HAVING bool_or(NOT (m.role = 'artifact'
                                 AND m.tags @> ARRAY['artifact:conversation.state']::text[]))

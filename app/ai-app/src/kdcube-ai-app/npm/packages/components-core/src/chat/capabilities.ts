@@ -475,7 +475,7 @@ export interface AgentCapabilitiesState {
   dirty: boolean
   saving: boolean
   saveError: string | null
-  /** W40: the save is waiting because the agent's permissions are being updated. */
+  /** The save is waiting because the agent's permissions are being updated. */
   authorityUpdating: boolean
 }
 

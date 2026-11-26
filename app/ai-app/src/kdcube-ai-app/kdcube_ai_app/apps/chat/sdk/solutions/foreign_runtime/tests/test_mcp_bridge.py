@@ -405,7 +405,7 @@ def test_connection_allowed_tools_reads_wildcards_as_unenumerable() -> None:
     assert mcp_bridge.connection_allowed_tools({}) == []
 
 
-# ── W40: a fixed-header runtime gets a per_call turn token ───────────────────
+# ── A fixed-header runtime gets a per_call turn token ───────────────────
 
 _DELEGATED = [{"kind": "mcp", "server_id": "hub", "url": "https://hub/mcp", "delegated": True},
               {"kind": "mcp", "server_id": "plain", "url": "https://plain/mcp"}]
@@ -434,7 +434,7 @@ def _w40_world(monkeypatch, answer):
     return entrypoint, seen
 
 
-def test_w40_delegated_servers_carry_a_per_call_turn_token(monkeypatch) -> None:
+def test_delegated_servers_carry_a_per_call_turn_token(monkeypatch) -> None:
     entrypoint, seen = _w40_world(monkeypatch, {"ok": True, "turn_token": "ts1.per.call"})
     server_map = asyncio.run(mcp_bridge.resolve_turn_mcp(entrypoint, list(_DELEGATED), agent_id="lg-react",
                                                          application="app@1-0", user_sub="u1"))
@@ -443,7 +443,7 @@ def test_w40_delegated_servers_carry_a_per_call_turn_token(monkeypatch) -> None:
     assert seen["request"] == {"agent_id": "lg-react", "conversation_id": "c1", "turn_id": "t1", "mode": "per_call"}
 
 
-def test_w40_a_refused_turn_token_keeps_the_delegated_servers_out_of_the_turn(monkeypatch) -> None:
+def test_a_refused_turn_token_keeps_the_delegated_servers_out_of_the_turn(monkeypatch) -> None:
     entrypoint, seen = _w40_world(monkeypatch, {"ok": False, "error": "agent_authority_updating"})
     drops = {}
     server_map = asyncio.run(mcp_bridge.resolve_turn_mcp(entrypoint, list(_DELEGATED), agent_id="lg-react",
@@ -452,7 +452,7 @@ def test_w40_a_refused_turn_token_keeps_the_delegated_servers_out_of_the_turn(mo
     assert drops == {"hub": mcp_bridge.DROP_TURN_TOKEN_UNAVAILABLE}
 
 
-def test_w40_an_automation_run_asks_no_turn_token_and_keeps_its_delegated_servers(monkeypatch) -> None:
+def test_an_automation_run_asks_no_turn_token_and_keeps_its_delegated_servers(monkeypatch) -> None:
     from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_call_context
 
     entrypoint, seen = _w40_world(monkeypatch, {"ok": False, "error": "conversation_not_owned"})

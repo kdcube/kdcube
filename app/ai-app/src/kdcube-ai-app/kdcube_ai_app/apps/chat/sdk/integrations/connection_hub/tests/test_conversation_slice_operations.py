@@ -1,4 +1,4 @@
-"""W40: the conversation-slice operations reach the Hub only for the calling app and its signed-in user."""
+"""The conversation-slice operations reach the Hub only for the calling app and its signed-in user."""
 
 from __future__ import annotations
 

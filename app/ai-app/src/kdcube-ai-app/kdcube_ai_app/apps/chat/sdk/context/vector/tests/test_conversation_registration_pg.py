@@ -1,4 +1,4 @@
-"""W40: one conversation-state row per (user, conversation), on a real PostgreSQL.
+"""One conversation-state row per (user, conversation), on a real PostgreSQL.
 
 Runs only with ``KDCUBE_TEST_POSTGRES_DSN`` (a throwaway database with pgvector).
 """

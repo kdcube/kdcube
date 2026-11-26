@@ -119,7 +119,7 @@ class _CapabilityStore:
 
 @pytest.fixture(autouse=True)
 def _hub_slice_writes(monkeypatch):
-    """W40: a conversation's capability write goes to its Hub slice first; recorded here."""
+    """A conversation's capability write goes to its Hub slice first; recorded here."""
     writes: list[dict[str, Any]] = []
 
     async def _write(_entrypoint: Any, **kwargs: Any):
@@ -667,7 +667,7 @@ async def test_capability_update_without_conversation_replaces_agent_card_defaul
 
 
 @pytest.mark.asyncio
-async def test_w40_the_conversation_write_reaches_the_hub_slice_with_kdcubes_selection(
+async def test_the_conversation_write_reaches_the_hub_slice_with_kdcubes_selection(
         monkeypatch, _hub_slice_writes) -> None:
     authority = _authority()
     events: list[str] = []
@@ -689,7 +689,7 @@ async def test_w40_the_conversation_write_reaches_the_hub_slice_with_kdcubes_sel
 
 
 @pytest.mark.asyncio
-async def test_w40_a_hub_refusal_leaves_the_conversation_record_unchanged(monkeypatch) -> None:
+async def test_a_hub_refusal_leaves_the_conversation_record_unchanged(monkeypatch) -> None:
     authority = _authority()
     events: list[str] = []
     capability_store = _CapabilityStore(events, authority)
@@ -733,7 +733,7 @@ def _registry_owner(client: Any) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_w40_registration_refuses_a_conversation_of_another_application() -> None:
+async def test_registration_refuses_a_conversation_of_another_application() -> None:
     identity = {"tenant": "t", "project": "p", "user_id": "u1", "bundle_id": "app@1-0"}
     client = _RegistryClient(row={"bundle_id": "other@1-0"})
     with pytest.raises(capability_control.AgentCapabilityControlUnavailable) as refused:
@@ -743,7 +743,7 @@ async def test_w40_registration_refuses_a_conversation_of_another_application() 
 
 
 @pytest.mark.asyncio
-async def test_w40_registration_fails_closed_without_the_registry() -> None:
+async def test_registration_fails_closed_without_the_registry() -> None:
     identity = {"tenant": "t", "project": "p", "user_id": "u1", "bundle_id": "app@1-0"}
     for owner in (_registry_owner(None), _registry_owner(_RegistryClient(fail=True))):
         with pytest.raises(capability_control.AgentCapabilityControlUnavailable) as refused:

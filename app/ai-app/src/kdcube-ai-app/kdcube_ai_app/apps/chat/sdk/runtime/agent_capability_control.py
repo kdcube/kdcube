@@ -1551,7 +1551,7 @@ async def _call_connection_hub(
     from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceResponse
 
     operation = {"publish": AGENT_CAPABILITY_PUBLISH, "turn": AGENT_CAPABILITY_TURN,
-                 # W40: the conversation picker's write (a local provider operation).
+                 # The conversation picker's write (a local provider operation).
                  "conversation": "agent_capability.conversation"}.get(kind, AGENT_CAPABILITY_SYNC)
     try:
         result = await call_bundle_named_service(
@@ -1591,7 +1591,7 @@ async def request_agent_turn_token(
     mode: str = "renew",
     turn_token: str = "",
 ) -> dict[str, Any]:
-    """W40: the token naming this turn's conversation, from Connection Hub.
+    """The token naming this turn's conversation, from Connection Hub.
 
     The Hub finds the signed-in user's Agent Card and seeds the slice itself;
     this names only the turn. Never raises: ``{"ok": False, "error": ...}``
@@ -1635,7 +1635,7 @@ async def write_conversation_capabilities(
     conversation_id: str,
     selected_capabilities: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """W40: the conversation picker's capability selection, written to the conversation's slice.
+    """The conversation picker's capability selection, written to the conversation's slice.
 
     The Hub converts KDCube's capability selection within the live shared
     Control and applies it from the next call. Raises
@@ -1669,7 +1669,7 @@ AUTOMATION_EXECUTION_KIND = "automation_execution"
 
 
 def turn_is_automation_execution() -> bool:
-    """W40: this turn runs a saved automation (its own fresh job conversation, no picker).
+    """This turn runs a saved automation (its own fresh job conversation, no picker).
 
     The design (2026-11-20, section 1) gives such runs ``agent_card AND
     control``: they request no turn token, so their gateway calls carry none

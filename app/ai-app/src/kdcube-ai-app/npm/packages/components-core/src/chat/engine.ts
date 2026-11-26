@@ -783,7 +783,7 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
     try {
       const response = await submitAgentSelectionUpdate(runtime, runtime.agentId, patch, {
         conversationId,
-        // W40: shown in the save bar while the write waits and retries.
+        // Shown in the save bar while the write waits and retries.
         onAuthorityUpdating: () => dispatch(chatActions.capabilitiesAuthorityUpdating()),
       })
       if (getChat().conversationId === conversationId) {

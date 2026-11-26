@@ -475,10 +475,10 @@ export interface AgentSelectionWriteOptions {
   conversationId?: string | null
   /** Persist the user's standing per-class policy alongside. */
   cachePolicy?: Record<string, string>
-  /** W40: called each time the write waits because the agent's permissions
+  /** Called each time the write waits because the agent's permissions
    *  are being updated (`agent_authority_updating`), so the picker can say so. */
   onAuthorityUpdating?: (retryInMs: number) => void
-  /** W40: how long to keep retrying an `agent_authority_updating` refusal. */
+  /** How long to keep retrying an `agent_authority_updating` refusal. */
   authorityUpdateBudgetMs?: number
 }
 
@@ -569,7 +569,7 @@ export async function submitAgentSelectionUpdate(
   }
 }
 
-/** W40: Connection Hub's one reason for "the agent's permissions are being updated". */
+/** Connection Hub's one reason for "the agent's permissions are being updated". */
 export const AUTHORITY_UPDATING = 'agent_authority_updating'
 const AUTHORITY_UPDATE_BUDGET_MS = 120000
 

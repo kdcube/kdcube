@@ -164,7 +164,7 @@ TURN_TOKEN_HEADER = "x-connection-hub-turn"
 
 
 def _request_turn_token(request: Any) -> str:
-    """W40: the turn token the SDK gateway attaches to a resident agent's call."""
+    """The turn token the SDK gateway attaches to a resident agent's call."""
     headers = getattr(request, "headers", None)
     try:
         return str((headers or {}).get(TURN_TOKEN_HEADER) or "").strip()
@@ -173,7 +173,7 @@ def _request_turn_token(request: Any) -> str:
 
 
 def _live_grant_refusal(reason: str) -> JSONResponse:
-    """A live-grant denial; the authority-update window answers one plain, retryable reason (W40)."""
+    """A live-grant denial; the authority-update window answers one plain, retryable reason."""
     from connection_hub.delegated_credentials.live_grant import (
         AUTHORITY_UPDATE_RETRY_SECONDS, authority_update_reason,
     )
@@ -684,7 +684,7 @@ async def _live_grant_record(request: Any, grant_record: Optional[Dict[str, Any]
     if composition is None:
         LOGGER.info("[connection-hub.oauth.guard] registry card %s gone — binding treated as revoked", access_id)
         return None
-    # W40: a resident agent's call in a conversation names it by the turn
+    # A resident agent's call in a conversation names it by the turn
     # token; the Effective Card is narrowed by that conversation's slice (and a
     # call outside any conversation by the Card's defaults). Every refusal is a
     # LiveGrantCardError: the call is denied, never widened.

@@ -1,4 +1,4 @@
-"""W40: the delegated guard reads the turn token and answers the authority-update window plainly."""
+"""The delegated guard reads the turn token and answers the authority-update window plainly."""
 
 from __future__ import annotations
 

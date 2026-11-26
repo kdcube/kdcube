@@ -217,7 +217,7 @@ class GatewayRuntimeHeadersProvider:
         self._connections = _connection_index(rows)
         self._user_subject = subject
         self._bearer_provider = bearer_provider
-        # W40: the turn token naming this conversation, renewed by its provider.
+        # The turn token naming this conversation, renewed by its provider.
         self._turn_token_provider = turn_token_provider
 
     def __repr__(self) -> str:
@@ -263,7 +263,7 @@ class GatewayRuntimeHeadersProvider:
         return headers
 
 
-# W40: the header the delegated guard reads (surface_guard.TURN_TOKEN_HEADER).
+# The header the delegated guard reads (surface_guard.TURN_TOKEN_HEADER).
 TURN_TOKEN_HEADER = "x-connection-hub-turn"
 
 

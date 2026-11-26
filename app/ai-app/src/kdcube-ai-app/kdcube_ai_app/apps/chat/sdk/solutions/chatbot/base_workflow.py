@@ -2900,7 +2900,7 @@ class BaseWorkflow():
                     level="WARNING",
                 )
                 return safe_tool_config
-            # W40: a turn in a conversation names it to the Hub; the guard then
+            # A turn in a conversation names it to the Hub; the guard then
             # applies this conversation's choice. Without a token the gateway
             # tools stay unavailable for this turn (never the Card's defaults).
             # An automation run has no conversation choice: it requests no token

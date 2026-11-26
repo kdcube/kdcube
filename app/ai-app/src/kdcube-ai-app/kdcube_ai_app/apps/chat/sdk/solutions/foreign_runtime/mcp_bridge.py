@@ -98,7 +98,7 @@ DROP_TURN_TOKEN_UNAVAILABLE = "turn_token_unavailable"
 
 
 async def _per_call_turn_token(entrypoint: Any, *, agent_id: str) -> tuple[str, str]:
-    """W40: a turn token for a runtime whose headers are fixed for the turn.
+    """A turn token for a runtime whose headers are fixed for the turn.
 
     Mode ``per_call``: valid up to the turn cap and never renewed; the guard
     checks on every call that this turn is still alive. Returns ``(token,
@@ -260,7 +260,7 @@ async def resolve_turn_mcp(
     if delegated:
         turn_token, refusal = await _per_call_turn_token(entrypoint, agent_id=agent_id)
     if refusal:
-        # W40: without the turn token the guard would apply the Card's defaults,
+        # Without the turn token the guard would apply the Card's defaults,
         # not this conversation's choice; the delegated servers stay out of this turn.
         connections = [conn for conn in connections or []
                        if not (isinstance(conn, Mapping) and conn.get("delegated"))]

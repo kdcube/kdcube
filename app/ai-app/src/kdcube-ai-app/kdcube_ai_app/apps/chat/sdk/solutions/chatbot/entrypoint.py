@@ -461,7 +461,7 @@ class BaseEntrypoint:
     async def _register_conversation_for_capabilities(
         self, identity: Mapping[str, str], conversation_id: str,
     ) -> None:
-        """W40: register the conversation before Connection Hub is asked to seed its slice.
+        """Register the conversation before Connection Hub is asked to seed its slice.
 
         A pick can precede the first message; the Hub verifies the conversation
         (owner, application) in KDCube's registry once, when the slice is first
@@ -1486,7 +1486,7 @@ class BaseEntrypoint:
                     )
                 if conversation_id:
                     assert capability_store is not None
-                    # W40: the conversation's slice in Connection Hub is the authority
+                    # The conversation's slice in Connection Hub is the authority
                     # the guard applies; write it first, so a refusal (for example
                     # agent_authority_updating) leaves both records unchanged.
                     from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (

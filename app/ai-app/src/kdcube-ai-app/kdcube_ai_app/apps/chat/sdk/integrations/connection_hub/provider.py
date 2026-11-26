@@ -487,7 +487,7 @@ class ConnectionsProviderBase(NamedServiceProvider):
             "status": 501,
         }
 
-    # ── W40: conversation slices (local-only; the host binds user and app) ───
+    # ── Conversation slices (local-only; the host binds user and app) ───
 
     _SLICE_OPERATIONS = {
         "turn": ("application", "agent_id", "conversation_id", "turn_id"),
@@ -515,17 +515,17 @@ class ConnectionsProviderBase(NamedServiceProvider):
         return NamedServiceResponse.ok_response(provider=self.provider_identity(), namespace=NAMESPACE, object=result)
 
     async def agent_capability_turn(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
-        """W40: the token naming this turn's conversation."""
+        """The token naming this turn's conversation."""
         return await self._slice_operation(ctx, request, "turn")
 
     async def agent_capability_conversation(self, ctx: NamedServiceContext,
                                             request: NamedServiceRequest) -> NamedServiceResponse:
-        """W40: the conversation picker's write; it applies from the next call."""
+        """The conversation picker's write; it applies from the next call."""
         return await self._slice_operation(ctx, request, "conversation")
 
     async def conversation_slice_call(self, ctx: NamedServiceContext, *, kind: str,
                                       payload: Mapping[str, Any]) -> dict[str, Any]:
-        """W40: only the Connection Hub host keeps conversation slices."""
+        """Only the Connection Hub host keeps conversation slices."""
         del ctx, kind, payload
         return {"ok": False, "error": "conversation_slices_not_supported", "status": 501}
 

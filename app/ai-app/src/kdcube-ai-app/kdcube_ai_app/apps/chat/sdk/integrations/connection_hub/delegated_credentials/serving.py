@@ -112,7 +112,7 @@ GRANTOR_AUTHORITY_SECRET_PATH = "connections.delegated_credentials.grantor_autho
 
 
 async def _kdcube_turn_secret() -> str:
-    """W40: the Hub's grantor-authority secret, read only to derive the turn-token key."""
+    """The Hub's grantor-authority secret, read only to derive the turn-token key."""
     from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
     app_id = connection_hub_app_id()
@@ -131,7 +131,7 @@ async def install_delegated_serving_resolvers(
 ) -> bool:
     registry = None
     if pg_pool is not None and redis is not None:
-        # W40: the guard checks a per_call token's turn against KDCube's records.
+        # The guard checks a per_call token's turn against KDCube's records.
         from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
         from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.conversation_registry import (
             KDCubeConversationRegistry,

@@ -1141,7 +1141,7 @@ async def run_automation_execution(
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     if str(run_conversation_id or "").strip() and not is_job_conversation_id(run_conversation_id):
-        # W40: an automation runs only in its own fresh job conversation, never in
+        # An automation runs only in its own fresh job conversation, never in
         # a user's conversation, so its authority is the Agent Card defaults and
         # never a conversation's choice taken over silently.
         return {
@@ -1416,7 +1416,7 @@ async def enqueue_automation_job(
             "error": {"code": "automation_not_found", "message": f"Automation {automation_id!r} was not found."},
             "execution": None,
         }
-    # W40: always a fresh job conversation; a passed id is only recorded, as
+    # Always a fresh job conversation; a passed id is only recorded, as
     # run_automation_now does, so the job, the processor's conversation lock and
     # the run name the same conversation.
     run_conversation_id = new_job_conversation_id()

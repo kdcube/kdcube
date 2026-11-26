@@ -188,7 +188,7 @@ class RuntimeCtx:
     # premium is attributable as one component within the turn's spend sum.
     # Shape: {reason, reasons, deltas, prev_model?, new_model?, policy?, warm}.
     cold_turn_marker: Optional[Dict[str, Any]] = None
-    # W40: why this turn has no turn token (so no connected-service tools), for
+    # Why this turn has no turn token (so no connected-service tools), for
     # the [TOOLS] announce line; the code only, never a credential.
     resident_turn_token_refusal: Optional[str] = None
     # ---- ReAct subagents (charter-scoped child conversations) ----

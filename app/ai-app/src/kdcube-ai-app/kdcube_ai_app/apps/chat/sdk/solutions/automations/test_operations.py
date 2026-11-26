@@ -207,7 +207,7 @@ async def test_scheduled_execution_runs_one_shot_disabled_after_enqueue(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_w40_a_run_in_a_users_conversation_is_refused(tmp_path):
+async def test_a_run_in_a_users_conversation_is_refused(tmp_path):
     _configure(tmp_path)
     storage = AutomationStorage(tmp_path, user_id="user-a")
     automation = storage.create_automation(title="Inbox monitor", schedule_cron="*/10 * * * *")
@@ -222,7 +222,7 @@ async def test_w40_a_run_in_a_users_conversation_is_refused(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_w40_enqueue_always_uses_a_fresh_job_conversation_and_records_a_passed_one(tmp_path, monkeypatch):
+async def test_enqueue_always_uses_a_fresh_job_conversation_and_records_a_passed_one(tmp_path, monkeypatch):
     _configure(tmp_path)
     storage = AutomationStorage(tmp_path, user_id="user-a")
     automation = storage.create_automation(title="Inbox monitor", schedule_cron="*/10 * * * *")

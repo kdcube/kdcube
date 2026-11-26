@@ -1,4 +1,4 @@
-"""W40: the conversation registry the Hub reads, over KDCube's own records."""
+"""The conversation registry the Hub reads, over KDCube's own records."""
 
 from __future__ import annotations
 

@@ -1742,7 +1742,7 @@ _AUTHORITY_UPDATING = "agent_authority_updating"
 
 
 def build_announce_turn_tools_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[str]:
-    """`[TOOLS]` — W40: this turn could not name its conversation to Connection Hub,
+    """`[TOOLS]`: this turn could not name its conversation to Connection Hub,
     so the connected-service tools are unavailable this turn; say why plainly."""
     reason = str(getattr(runtime_ctx, "resident_turn_token_refusal", "") or "").strip() if runtime_ctx else ""
     if not reason:
