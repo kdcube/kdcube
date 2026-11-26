@@ -10,14 +10,14 @@ from kdcube_ai_app.apps.chat.sdk.runtime import agent_capability_control as cont
 
 
 class _DeletionIndex:
-    def __init__(self, deleting=False, fails=False):
-        self.deleting, self.fails, self.asked = deleting, fails, []
+    def __init__(self, deleting=False, fails=False, epoch=0):
+        self.deleting, self.fails, self.epoch, self.asked = deleting, fails, epoch, []
 
-    async def open_conversation_deletion(self, *, user_id, conversation_id):
+    async def conversation_deletion_status(self, *, user_id, conversation_id):
         self.asked.append((user_id, conversation_id))
         if self.fails:
             raise RuntimeError("pg down")
-        return {"deletion_id": "del_1", "state": "failed"} if self.deleting else None
+        return {"open_deletion_id": "del_1" if self.deleting else None, "epoch": self.epoch}
 
 
 def _entrypoint(index):
@@ -55,7 +55,8 @@ async def test_every_token_path_is_refused_for_a_conversation_being_deleted(hub_
 
 
 @pytest.mark.asyncio
-async def test_a_conversation_without_an_open_deletion_gets_its_token(hub_calls):
-    answer = await control.request_agent_turn_token(_entrypoint(_DeletionIndex()), agent_id="agent",
+async def test_a_conversation_without_an_open_deletion_gets_its_token_naming_its_epoch(hub_calls):
+    answer = await control.request_agent_turn_token(_entrypoint(_DeletionIndex(epoch=5000)), agent_id="agent",
                                                     conversation_id="c1", turn_id="turn-1")
     assert answer == {"ok": True, "turn_token": "tok"} and len(hub_calls) == 1
+    assert hub_calls[0]["conversation_epoch"] == 5000

@@ -40,7 +40,9 @@ class KDCubeConversationRegistry:
     async def conversation(self, *, owner_subject: str, conversation_id: str) -> Optional[Any]:
         from connection_hub.delegated_credentials.slices.turns import RegisteredConversation
 
-        if await self._index.open_conversation_deletion(user_id=owner_subject, conversation_id=conversation_id):
+        deletion = await self._index.conversation_deletion_status(user_id=owner_subject,
+                                                                  conversation_id=conversation_id)
+        if deletion.get("open_deletion_id"):
             # A conversation being deleted does not exist for the Hub, so its
             # conversation capabilities are never seeded or reseeded.
             return None
@@ -50,10 +52,12 @@ class KDCubeConversationRegistry:
         ts = row.get("ts")
         created = int(ts.timestamp()) if isinstance(ts, datetime) else 0
         return RegisteredConversation(owner_subject=owner_subject, application=str(row.get("bundle_id") or ""),
-                                      created_at=created)
+                                      created_at=created, epoch=int(deletion.get("epoch") or 0))
 
     async def turn_alive(self, *, owner_subject: str, conversation_id: str, turn_id: str) -> bool:
-        if await self._index.open_conversation_deletion(user_id=owner_subject, conversation_id=conversation_id):
+        deletion = await self._index.conversation_deletion_status(user_id=owner_subject,
+                                                                  conversation_id=conversation_id)
+        if deletion.get("open_deletion_id"):
             return False
         row = await self._index.get_conversation_state_row(user_id=owner_subject, conversation_id=conversation_id)
         tags = _tags(row)

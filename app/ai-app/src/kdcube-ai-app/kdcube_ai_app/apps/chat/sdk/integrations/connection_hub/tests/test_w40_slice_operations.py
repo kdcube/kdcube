@@ -46,7 +46,8 @@ async def test_the_turn_operation_reaches_the_hub_for_the_calling_app_and_user()
                                                             conversation_id="c1", turn_id="t1"))
     assert response.ok, response
     assert service.calls == [("begin_agent_turn", {"user_id": "user-1"}, {
-        "application": APP, "agent_id": "main", "conversation_id": "c1", "turn_id": "t1", "turn_token": "", "mode": "renew"})]
+        "application": APP, "agent_id": "main", "conversation_id": "c1", "turn_id": "t1", "turn_token": "", "mode": "renew",
+        "conversation_epoch": None})]
 
 
 @pytest.mark.asyncio
@@ -63,17 +64,16 @@ async def test_another_app_or_an_application_holder_is_refused(context, code):
 
 
 @pytest.mark.asyncio
-async def test_picker_and_delete_phases_route_to_their_hub_methods():
+async def test_the_picker_and_the_turn_pass_the_conversations_deletion_epoch():
     provider, service = _provider()
     await provider.dispatch(_context(), _request("agent_capability.conversation", application=APP, agent_id="main",
                                                  conversation_id="c1", selection={"resource_families": []},
-                                                 expected_slice_revision=3))
-    for phase in ("mark", "remove"):
-        await provider.dispatch(_context(), _request("agent_capability.conversation_delete", conversation_id="c1",
-                                                     phase=phase))
-    assert [name for name, _, _ in service.calls] == [
-        "update_conversation_selection", "mark_conversation_deleting", "remove_conversation_slices"]
-    assert service.calls[0][2]["expected_slice_revision"] == 3 and "deferred" not in service.calls[0][2]
-    bad = await provider.dispatch(_context(), _request("agent_capability.conversation_delete", conversation_id="c1",
-                                                       phase="later"))
-    assert bad.ok is False and bad.error.code == "conversation_delete_phase_invalid"
+                                                 expected_slice_revision=3, conversation_epoch=5000))
+    assert [name for name, _, _ in service.calls] == ["update_conversation_selection"]
+    assert service.calls[0][2]["expected_slice_revision"] == 3 and service.calls[0][2]["conversation_epoch"] == 5000
+    await provider.dispatch(_context(), _request("agent_capability.conversation", application=APP, agent_id="main",
+                                                 conversation_id="c1", selection={"resource_families": []}))
+    assert service.calls[1][2]["conversation_epoch"] is None
+    unknown = await provider.dispatch(_context(), _request("agent_capability.conversation_delete",
+                                                           conversation_id="c1", phase="mark"))
+    assert unknown.ok is False

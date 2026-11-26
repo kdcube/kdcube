@@ -492,7 +492,6 @@ class ConnectionsProviderBase(NamedServiceProvider):
     _SLICE_OPERATIONS = {
         "turn": ("application", "agent_id", "conversation_id", "turn_id"),
         "conversation": ("application", "agent_id", "conversation_id"),
-        "conversation_delete": ("conversation_id", "phase"),
     }
 
     async def _slice_operation(self, ctx: NamedServiceContext, request: NamedServiceRequest,
@@ -523,11 +522,6 @@ class ConnectionsProviderBase(NamedServiceProvider):
                                             request: NamedServiceRequest) -> NamedServiceResponse:
         """W40: the conversation picker's write; it applies from the next call."""
         return await self._slice_operation(ctx, request, "conversation")
-
-    async def agent_capability_conversation_delete(self, ctx: NamedServiceContext,
-                                                   request: NamedServiceRequest) -> NamedServiceResponse:
-        """W40 A1: ``phase`` mark (before the messages) or remove (after them)."""
-        return await self._slice_operation(ctx, request, "conversation_delete")
 
     async def conversation_slice_call(self, ctx: NamedServiceContext, *, kind: str,
                                       payload: Mapping[str, Any]) -> dict[str, Any]:

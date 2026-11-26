@@ -85,6 +85,15 @@ def _is_expired(tokens: dict[str, Any], *, skew: int = _REFRESH_SKEW_SECONDS) ->
     return expires_at <= int(time.time()) + int(skew)
 
 
+def _epoch(payload: Mapping[str, Any]) -> int | None:
+    """The conversation's deletion epoch the runtime names, or None when it names none."""
+    value = payload.get("conversation_epoch")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 @named_service_provider(
     provider_id="connections",
     bundle_id=BUNDLE_ID,
@@ -102,6 +111,8 @@ def _is_expired(tokens: dict[str, Any], *, skew: int = _REFRESH_SKEW_SECONDS) ->
         },
     },
 )
+
+
 class ConnectionHubProvider(ConnectionsProviderBase):
     def __init__(
         self,
@@ -331,7 +342,7 @@ class ConnectionHubProvider(ConnectionsProviderBase):
         """
         source_bundle_id = str(dict(ctx.metadata or {}).get(SOURCE_BUNDLE_ID_METADATA) or "").strip()
         application = str(payload.get("application") or "").strip()
-        if kind != "conversation_delete" and (not source_bundle_id or source_bundle_id != application):
+        if not source_bundle_id or source_bundle_id != application:
             return {"ok": False, "error": "agent_capability_source_mismatch", "status": 403}
         user_id = self._user_id(ctx)
         if not user_id or user_id.startswith("application-authority:"):
@@ -345,7 +356,8 @@ class ConnectionHubProvider(ConnectionsProviderBase):
                 user, application=application, agent_id=str(payload["agent_id"]),
                 conversation_id=str(payload["conversation_id"]), turn_id=str(payload["turn_id"]),
                 turn_token=str(payload.get("turn_token") or ""),
-                mode=str(payload.get("mode") or "renew"))
+                mode=str(payload.get("mode") or "renew"),
+                conversation_epoch=_epoch(payload))
         if kind == "conversation":
             selection = payload.get("selection")
             capabilities = payload.get("selected_capabilities")
@@ -358,13 +370,9 @@ class ConnectionHubProvider(ConnectionsProviderBase):
                 selection=dict(selection) if isinstance(selection, Mapping) else None,
                 # KDCube's capability selection; the Hub converts it within the shared Control.
                 selected_capabilities=dict(capabilities) if isinstance(capabilities, Mapping) else None,
-                expected_slice_revision=int(expected) if expected is not None else None)
-        phase = str(payload.get("phase") or "")
-        if phase == "mark":
-            return await service.mark_conversation_deleting(user, conversation_id=str(payload["conversation_id"]))
-        if phase == "remove":
-            return await service.remove_conversation_slices(user, conversation_id=str(payload["conversation_id"]))
-        return {"ok": False, "error": "conversation_delete_phase_invalid", "status": 400}
+                expected_slice_revision=int(expected) if expected is not None else None,
+                conversation_epoch=_epoch(payload))
+        return {"ok": False, "error": "conversation_slice_kind_invalid", "status": 400}
 
     async def publish_agent_capabilities(
         self,

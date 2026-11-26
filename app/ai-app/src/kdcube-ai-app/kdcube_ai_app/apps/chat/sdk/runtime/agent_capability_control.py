@@ -1565,21 +1565,21 @@ async def _call_connection_hub(
         raise AgentCapabilityControlUnavailable("agent_capability_transport_unavailable") from None
 
 
-async def _conversation_deletion_refusal(entrypoint: Any, *, user_id: str,
-                                        conversation_id: str) -> dict[str, Any] | None:
-    """A refusal when the conversation has an open deletion, else None."""
+async def _conversation_deletion_gate(entrypoint: Any, *, user_id: str,
+                                     conversation_id: str) -> tuple[dict[str, Any] | None, int]:
+    """(a refusal when the conversation is being deleted or cannot be checked, its deletion epoch)."""
     getter = getattr(entrypoint, "get_ctx_client", None)
     try:
         client = await getter() if callable(getter) else None
         index = getattr(client, "idx", None)
         if index is None or not user_id:
-            return {"ok": False, "error": "conversation_registry_unavailable", "retryable": True}
-        open_deletion = await index.open_conversation_deletion(user_id=user_id, conversation_id=conversation_id)
+            return {"ok": False, "error": "conversation_registry_unavailable", "retryable": True}, 0
+        status = await index.conversation_deletion_status(user_id=user_id, conversation_id=conversation_id)
     except Exception:
-        return {"ok": False, "error": "conversation_registry_unavailable", "retryable": True}
-    if open_deletion:
-        return {"ok": False, "error": "conversation_deleting", "retryable": False}
-    return None
+        return {"ok": False, "error": "conversation_registry_unavailable", "retryable": True}, 0
+    if status.get("open_deletion_id"):
+        return {"ok": False, "error": "conversation_deleting", "retryable": False}, 0
+    return None, int(status.get("epoch") or 0)
 
 
 async def request_agent_turn_token(
@@ -1605,12 +1605,15 @@ async def request_agent_turn_token(
     # No token while the conversation is being deleted. Every token path (turn start, per-call MCP tokens, renewal)
     # comes here, so a turn already running when the delete starts stops
     # getting tokens too. Fails closed when the index cannot be read.
-    frozen = await _conversation_deletion_refusal(entrypoint, user_id=_text(identity.get("user_id")),
-                                                  conversation_id=conversation_id)
+    frozen, epoch = await _conversation_deletion_gate(entrypoint, user_id=_text(identity.get("user_id")),
+                                                      conversation_id=conversation_id)
     if frozen is not None:
         return frozen
+    # The deletion epoch tells the Hub which conversation with this id is
+    # meant, so a conversation created again never inherits a deleted one's
+    # selection.
     payload = {"application": application, "agent_id": agent_id, "conversation_id": conversation_id,
-               "turn_id": turn_id, "mode": mode}
+               "turn_id": turn_id, "mode": mode, "conversation_epoch": epoch}
     if turn_token:
         payload["turn_token"] = turn_token
     try:
@@ -1645,8 +1648,14 @@ async def write_conversation_capabilities(
     application = _text(identity.get("bundle_id"))
     if not tenant or not project or not application or not agent_id or not conversation_id:
         raise AgentCapabilityControlUnavailable("agent_capability_identity_missing", retryable=False, status=400)
+    frozen, epoch = await _conversation_deletion_gate(entrypoint, user_id=_text(identity.get("user_id")),
+                                                      conversation_id=conversation_id)
+    if frozen is not None:
+        raise AgentCapabilityControlUnavailable(frozen["error"], retryable=bool(frozen.get("retryable")),
+                                                status=503 if frozen.get("retryable") else 409)
     payload = {"application": application, "agent_id": agent_id, "conversation_id": conversation_id,
-               "selected_capabilities": copy.deepcopy(dict(selected_capabilities or {}))}
+               "selected_capabilities": copy.deepcopy(dict(selected_capabilities or {})),
+               "conversation_epoch": epoch}
     response = await _call_connection_hub(entrypoint, "conversation", payload, tenant=tenant, project=project)
     if not response.ok:
         details = dict(getattr(response.error, "details", {}) or {})

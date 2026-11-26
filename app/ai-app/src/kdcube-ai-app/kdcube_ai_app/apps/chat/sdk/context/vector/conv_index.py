@@ -253,6 +253,27 @@ class ConvIndex:
             row = await con.fetchrow(q, user_id, conversation_id, since)
         return dict(row) if row else None
 
+    async def conversation_deletion_status(self, *, user_id: str, conversation_id: str) -> Dict[str, Any]:
+        """Whether the conversation is being deleted, and its deletion epoch, in one query.
+
+        ``epoch`` is the start of its latest completed whole-conversation
+        deletion in whole seconds, 0 when it was never deleted. A conversation
+        created again under a deleted conversation's id has a later epoch.
+        """
+        q = f"""
+          SELECT
+            (SELECT d.deletion_id FROM {self.schema}.conv_archive_deletions d
+              WHERE {open_conversation_deletion_sql("d", "$1", "$2")}
+              ORDER BY d.created_at DESC LIMIT 1) AS open_deletion_id,
+            (SELECT COALESCE(FLOOR(EXTRACT(EPOCH FROM MAX(d.created_at))), 0)::bigint
+               FROM {self.schema}.conv_archive_deletions d
+              WHERE d.state = 'completed' AND {conversation_deletion_sql("d", "$1", "$2")}) AS epoch
+        """
+        async with self._pool.acquire() as con:
+            row = await con.fetchrow(q, user_id, conversation_id)
+        return {"open_deletion_id": row["open_deletion_id"] if row else None,
+                "epoch": int(row["epoch"] or 0) if row else 0}
+
     async def conversations_being_deleted(self, *, user_id: str, conversation_ids: Sequence[str]) -> set[str]:
         """The given conversations of this user that have an open deletion (hidden from every listing)."""
         ids = sorted({str(c) for c in conversation_ids if str(c or "").strip()})

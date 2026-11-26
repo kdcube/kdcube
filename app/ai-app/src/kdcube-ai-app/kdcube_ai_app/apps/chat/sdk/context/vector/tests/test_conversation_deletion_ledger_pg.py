@@ -177,3 +177,22 @@ async def test_a_background_deletion_never_waits_for_the_retention_lock(index) -
                 pass
     async with _retention(index)._exclusive(wait_s=0):
         pass
+
+
+@pytest.mark.asyncio
+async def test_the_deletion_status_names_an_open_deletion_and_the_latest_completed_epoch(index) -> None:
+    assert await index.conversation_deletion_status(user_id="u1", conversation_id="c1") == {
+        "open_deletion_id": None, "epoch": 0}
+    older = await _ledger(index, state="completed")
+    await _set_created(index, older, "2026-11-20T00:00:00Z")
+    newer = await _ledger(index, state="completed")
+    await _set_created(index, newer, "2026-11-26T12:00:00Z")
+    await _ledger(index, state="completed", tags_all=["turn:t1"])  # a partial deletion is no epoch
+    from datetime import datetime, timezone
+
+    newer_epoch = int(datetime(2026, 11, 26, 12, tzinfo=timezone.utc).timestamp())
+    status = await index.conversation_deletion_status(user_id="u1", conversation_id="c1")
+    assert status == {"open_deletion_id": None, "epoch": newer_epoch}
+    opened = await _ledger(index, state="started")
+    status = await index.conversation_deletion_status(user_id="u1", conversation_id="c1")
+    assert status["open_deletion_id"] == opened and status["epoch"] == newer_epoch

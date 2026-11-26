@@ -26,11 +26,11 @@ def test_the_lock_key_is_the_processors_conversation_lock():
 
 
 class _Index:
-    def __init__(self, row, deleting=False):
-        self.row, self.deleting = row, deleting
+    def __init__(self, row, deleting=False, epoch=0):
+        self.row, self.deleting, self.epoch = row, deleting, epoch
 
-    async def open_conversation_deletion(self, *, user_id, conversation_id):
-        return {"deletion_id": "del_1", "state": "started"} if self.deleting else None
+    async def conversation_deletion_status(self, *, user_id, conversation_id):
+        return {"open_deletion_id": "del_1" if self.deleting else None, "epoch": self.epoch}
 
     async def get_conversation_state_row(self, *, user_id, conversation_id):
         return self.row if (user_id, conversation_id) == (USER, CONV) else None
@@ -44,8 +44,8 @@ class _Redis:
         return int(key in self.keys)
 
 
-def _registry(row, keys=(), deleting=False):
-    return KDCubeConversationRegistry(conv_index=_Index(row, deleting), redis=_Redis(keys), tenant=TENANT,
+def _registry(row, keys=(), deleting=False, epoch=0):
+    return KDCubeConversationRegistry(conv_index=_Index(row, deleting, epoch), redis=_Redis(keys), tenant=TENANT,
                                       project=PROJECT)
 
 
@@ -79,3 +79,11 @@ async def test_a_conversation_being_deleted_does_not_exist_for_the_hub():
     assert await _registry(running, [lock], deleting=True).conversation(owner_subject=USER, conversation_id=CONV) is None
     assert not await _registry(running, [lock], deleting=True).turn_alive(owner_subject=USER, conversation_id=CONV,
                                                                           turn_id="t1")
+
+
+
+@pytest.mark.asyncio
+async def test_the_registry_reports_the_conversations_deletion_epoch():
+    row = {"bundle_id": "app@1-0", "ts": datetime(2026, 11, 20, tzinfo=timezone.utc), "tags": []}
+    assert (await _registry(row).conversation(owner_subject=USER, conversation_id=CONV)).epoch == 0
+    assert (await _registry(row, epoch=5000).conversation(owner_subject=USER, conversation_id=CONV)).epoch == 5000
