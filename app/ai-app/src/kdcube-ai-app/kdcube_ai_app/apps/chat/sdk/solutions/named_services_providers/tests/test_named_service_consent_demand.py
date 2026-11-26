@@ -389,3 +389,63 @@ async def test_a_boundary_refusal_asks_for_the_operation_it_was_refused(
     assert announced[0].consent["operation"] == operation
     assert announced[0].consent["namespace"] == "mem"
     assert operation in announced[0].agent_message
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_the_control_card_holds_raises_no_consent_demand(monkeypatch):
+    """Connection Hub attributed the refusal to the agent's
+    Control (`request_user_consent: false`), yet the gate announced a consent
+    demand and the chat showed an unsatisfiable "Review agent access" banner."""
+    import kdcube_ai_app.apps.chat.sdk.infra.bundle_operations as bundle_operations
+    import kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx as comm_ctx
+    import kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.mcp_consent as mcp_consent
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.tools import (
+        _agent_grant_admission,
+    )
+
+    monkeypatch.setattr(
+        comm_ctx, "get_current_user_identity",
+        lambda: {"user_id": "u1", "bundle_id": "workspace@1-0", "tenant_id": "t", "project_id": "p"},
+    )
+    monkeypatch.setattr(
+        comm_ctx, "get_current_request_context",
+        lambda: SimpleNamespace(event=SimpleNamespace(agent_id="main")),
+    )
+    state = {
+        "governed": True,
+        "granted": False,
+        "missing_claims": [],
+        "claims": ["docs:write", "named_services:use"],
+        "resource": "*/kdcube-services@1-0/public/mcp/named_services*",
+        "client_id": "kdcube-agent:workspace@1-0:main",
+        "account_scope": {},
+        "not_granted": {
+            "ok": False,
+            "error": {"code": "delegated_capability_not_granted", "retryable": False},
+            "ret": {
+                "requested_capability": {"namespace": "docs", "operation": "object.action.insert_page_break"},
+                "recovery": {"action": "review_blocking_cards", "request_user_consent": False},
+            },
+        },
+    }
+
+    async def fake_call(**kwargs):
+        return SimpleNamespace(value={"ok": True, "ret": {"object": state}})
+
+    monkeypatch.setattr(bundle_operations, "call_bundle_named_service", fake_call)
+    monkeypatch.setattr(bundle_operations, "get_current_bundle_named_service_caller", lambda: object())
+    announced: list[Any] = []
+
+    async def fake_announce(consent):
+        announced.append(consent)
+
+    monkeypatch.setattr(mcp_consent, "announce_agent_consent", fake_announce)
+
+    admission, result = await _agent_grant_admission(
+        "docs", "object.action.insert_page_break", "named_services_action"
+    )
+
+    assert admission is None
+    assert announced == []
+    assert "consent" not in result
+    assert result["ret"]["recovery"]["request_user_consent"] is False

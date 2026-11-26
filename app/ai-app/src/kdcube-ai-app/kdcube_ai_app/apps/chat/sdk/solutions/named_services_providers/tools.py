@@ -386,7 +386,29 @@ def _operation_allowed(namespace: str, operation: str) -> bool:
         return False
     policy = _client_namespace_policy(namespace)
     allowed = _allowed_values(policy.get("allowed_operations"), _DEFAULT_READ_OPERATIONS)
-    return "*" in allowed or operation in allowed
+    if "*" in allowed or operation in allowed:
+        return True
+    # A namespace that lists exact actions without the parent still takes
+    # the action call; `_descriptor_action_list` then admits only those actions.
+    return operation == OBJECT_ACTION and any(
+        value.startswith(f"{OBJECT_ACTION}.") for value in allowed
+    )
+
+
+def _descriptor_action_list(namespace: str) -> frozenset[str] | None:
+    """The actions an agent's configuration lists for a namespace.
+
+    ``None`` when the configuration allows every action: ``*`` or the parent
+    ``object.action``, with or without exact actions beside it. Otherwise the
+    listed ``object.action.<name>`` names are the agent's ceiling.
+    """
+    policy = _client_namespace_policy(namespace)
+    allowed = _allowed_values(policy.get("allowed_operations"), _DEFAULT_READ_OPERATIONS)
+    if "*" in allowed or OBJECT_ACTION in allowed:
+        return None
+    prefix = f"{OBJECT_ACTION}."
+    listed = {value[len(prefix):] for value in allowed if value.startswith(prefix)}
+    return frozenset(listed) if listed else None
 
 
 def _operation_applicable_namespaces(namespaces: list[str], operation: str) -> list[str]:
@@ -691,6 +713,19 @@ async def _agent_grant_admission(
         missing_claims = [str(c) for c in (state.get("missing_claims") or [])] or gate_claims
         not_granted = state.get("not_granted")
         if isinstance(not_granted, Mapping):
+            recovery = ((not_granted.get("ret") or {}).get("recovery") or {}) if isinstance(
+                not_granted.get("ret"), Mapping) else {}
+            if isinstance(recovery, Mapping) and recovery.get("request_user_consent") is False:
+                # Connection Hub attributes the refusal to a card no user
+                # consent can change (the agent's Control). Announcing a consent
+                # demand would put an unsatisfiable "Review agent access" banner
+                # in the chat; the refusal goes back as the Hub wrote it.
+                LOGGER.warning(
+                    "Named-service agent gate: operation blocked by a card consent cannot change\n"
+                    "  namespace: %s\n  operation: %s\n  tool: %s\n  agent_client: %s",
+                    base_ns, operation, tool_name, client_id,
+                )
+                return None, dict(not_granted)
             # Claims are held; only the card's own boundary excludes the
             # operation. The demand names it, and approval grants that one.
             from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.mcp_consent import (
@@ -859,6 +894,19 @@ async def _call(
             namespace=base_ns,
             requested_namespace=ns,
             tool=tool_name,
+            client_id=_client_id(),
+        )
+    listed_actions = _descriptor_action_list(base_ns) if operation == OBJECT_ACTION else None
+    if action and listed_actions is not None and str(action).strip() not in listed_actions:
+        # The agent's configuration lists its actions; this one is not among
+        # them, so the fix is the app admin's, not the user's toggle.
+        return _error(
+            "named_service_action_not_allowed_for_client",
+            f"Client {_client_id()!r} is not configured to call action {action!r} on namespace {base_ns!r}.",
+            fix=_admin_grant_fix(base_ns, f"{OBJECT_ACTION}.{str(action).strip()}"),
+            namespace=base_ns,
+            requested_namespace=ns,
+            action=action,
             client_id=_client_id(),
         )
     if action and not _action_allowed(base_ns, action):
