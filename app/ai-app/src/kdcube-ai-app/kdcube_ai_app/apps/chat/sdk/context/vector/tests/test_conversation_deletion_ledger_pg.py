@@ -124,3 +124,56 @@ async def test_the_listing_check_finds_only_open_whole_conversation_deletions(in
     found = await index.conversations_being_deleted(user_id="u1", conversation_ids=["c1", "c2", "c3", "c4", "c5", "c6"])
     assert found == {"c1", "c2"}
     assert await index.conversations_being_deleted(user_id="u1", conversation_ids=[]) == set()
+
+
+def _retention(idx: ConvIndex):
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationRetention
+
+    return ConversationRetention(pool=idx._pool, schema=idx.schema, archive=None)
+
+
+@pytest.mark.asyncio
+async def test_unfinished_deletions_are_listed_oldest_first_with_their_latest_scope(index) -> None:
+    first = await _ledger(index, state="failed", conversation="c1", bundle_ids=["a"])
+    await _set_created(index, first, "2026-11-26T10:00:00Z")
+    latest = await _ledger(index, state="started", conversation="c1", bundle_ids=["a", "b"])
+    await _set_created(index, latest, "2026-11-26T11:00:00Z")
+    other = await _ledger(index, state="failed", conversation="c2")
+    await _set_created(index, other, "2026-11-26T10:30:00Z")
+    await _ledger(index, state="completed", conversation="c3")
+    await _ledger(index, state="failed", conversation="c4", tags_all=["turn:t1"])
+    await _ledger(index, state="failed", conversation="c5", bundle_ids=[])
+
+    listed = await _retention(index).unfinished_conversation_deletions(limit=10)
+    assert [(i["conversation_id"], i["attempts"], i["bundle_ids"]) for i in listed] == [
+        ("c1", 2, ["a", "b"]), ("c2", 1, None)]
+    assert [i["conversation_id"] for i in await _retention(index).unfinished_conversation_deletions(limit=1)] == ["c1"]
+
+
+@pytest.mark.asyncio
+async def test_a_finished_deletion_closes_the_earlier_ones_it_covered(index) -> None:
+    narrow = await _ledger(index, state="failed", conversation="c1", bundle_ids=["a"])
+    wide = await _ledger(index, state="failed", conversation="c1", bundle_ids=["a", "b"])
+    other_user = await _ledger(index, state="failed", user="u2", conversation="c1", bundle_ids=["a"])
+    current = await _ledger(index, state="completed", conversation="c1", bundle_ids=["a"])
+    closed = await _retention(index)._close_covered_deletions(current, user_id="u1", conversation_id="c1",
+                                                             bundle_id=None, bundles=["a"])
+    assert closed == 1
+    async with index._pool.acquire() as con:
+        states = {r["deletion_id"]: (r["state"], r["error"]) for r in await con.fetch(
+            f"SELECT deletion_id, state, error FROM {index.schema}.conv_archive_deletions")}
+    assert states[narrow] == ("completed", f"finished by {current}")
+    assert states[wide][0] == "failed" and states[other_user][0] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_a_background_deletion_never_waits_for_the_retention_lock(index) -> None:
+    from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import ConversationDeleteBusy
+
+    retention = _retention(index)
+    async with retention._exclusive(wait_s=30):
+        with pytest.raises(ConversationDeleteBusy):
+            async with _retention(index)._exclusive(wait_s=0):
+                pass
+    async with _retention(index)._exclusive(wait_s=0):
+        pass

@@ -100,3 +100,32 @@ class AdminBundleEntrypoint(BaseEntrypoint):
             )
         finally:
             await index.close()
+
+    @cron(alias="conversation-deletion-resume", cron_expression="*/10 * * * *", span="system")
+    async def finish_unfinished_conversation_deletions(self) -> None:
+        """Finish conversation deletions that were recorded but did not complete.
+
+        Every ten minutes, one instance per tenant and project. Such a
+        conversation is hidden from its user and frozen until its deletion
+        completes. Always on: unlike the archive, a deletion a user asked for
+        must finish.
+        """
+        from kdcube_ai_app.apps.chat.sdk.solutions.conversation.deletion_resume import (
+            finish_unfinished_conversation_deletions,
+        )
+
+        settings = get_settings()
+        if self.redis is None:
+            logger.warning("[conversation-deletion-resume] no Redis; nothing finished")
+            return
+        client = await self.get_ctx_client()
+        if client is None:
+            logger.warning("[conversation-deletion-resume] conversation index unavailable; nothing finished")
+            return
+        summary = await finish_unfinished_conversation_deletions(
+            ctx_client=client, redis=self.redis, tenant=settings.TENANT, project=settings.PROJECT,
+        )
+        if summary["found"]:
+            logger.info("[conversation-deletion-resume] found=%s finished=%s incomplete=%s turn_running=%s stopped=%s",
+                        summary["found"], summary["finished"], summary["incomplete"], summary["turn_running"],
+                        summary["stopped"])

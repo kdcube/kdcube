@@ -134,6 +134,16 @@ class _Con:
             hit = self._scope(q, args)
             self.db.delete_ids({r["id"] for r in hit})
             return [{"id": r["id"], "hosted_uri": r["hosted_uri"]} for r in hit]
+        if q.startswith("SELECT deletion_id, scope FROM kdcube_test_w536.conv_archive_deletions"):
+            user_id, conversation_id, current = args
+            out = []
+            for row in self.db.deletions:
+                scope = json.loads(row["scope"])
+                if (row["state"] in ("started", "failed") and row["deletion_id"] != current
+                        and scope.get("user_id") == user_id and scope.get("conversation_id") == conversation_id
+                        and not scope.get("tags_all")):
+                    out.append({"deletion_id": row["deletion_id"], "scope": row["scope"]})
+            return out
         raise AssertionError(f"unexpected fetch: {q}")
 
     def _scope(self, q: str, args) -> list[dict]:
@@ -236,6 +246,12 @@ class _Con:
                  "sql": q}
             )
             return "INSERT 0 1"
+        if q.startswith("UPDATE kdcube_test_w536.conv_archive_deletions SET state = 'completed'"):
+            ids, error = args
+            for row in self.db.deletions:
+                if row["deletion_id"] in ids and row["state"] in ("started", "failed"):
+                    row.update(state="completed", error=error)
+            return "UPDATE 1"
         if q.startswith("UPDATE kdcube_test_w536.conv_archive_deletions"):
             deletion_id, state, hot, bodies, cold, error = args
             for row in self.db.deletions:
@@ -587,6 +603,9 @@ async def test_a_failed_body_delete_can_be_completed_by_running_the_deletion_aga
     result = await retention.delete_messages(actor="operator", user_id="u1", conversation_id="c1")
     assert sorted(store.deleted) == ["cb/x/1.json", "cb/x/2.json"]
     assert result["hot_rows"] == 1 and result["cold_rows"] == 1 and db.deletions[1]["state"] == "completed"
+    # The run that finished it closes the earlier unfinished record of the same conversation.
+    assert db.deletions[0]["state"] == "completed"
+    assert db.deletions[0]["error"] == f"finished by {db.deletions[1]['deletion_id']}"
 
 
 def test_the_daily_archive_is_on_by_default():

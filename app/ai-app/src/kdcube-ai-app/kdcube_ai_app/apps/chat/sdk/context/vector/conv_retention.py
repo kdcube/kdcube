@@ -180,6 +180,17 @@ class ConversationRetention:
         """
 
         key = self._lock_key()
+        if wait_s is not None and wait_s <= 0:
+            # Only when free right now: background work never queues ahead of
+            # a deletion a person is waiting for.
+            async with self._pool.acquire() as con:
+                if not await con.fetchval("SELECT pg_try_advisory_lock($1)", key):
+                    raise ConversationDeleteBusy("the retention lock is held; try again later")
+                try:
+                    yield
+                finally:
+                    await con.fetchval("SELECT pg_advisory_unlock($1)", key)
+            return
         if wait_s is not None:
             async with self._pool.acquire() as con:
                 await con.fetchval("SELECT set_config('lock_timeout', $1, false)", f"{max(1, int(wait_s * 1000))}ms")
@@ -735,7 +746,73 @@ class ConversationRetention:
             await self._finish_deletion(deletion_id, "failed", counts, error=f"{type(exc).__name__}: {exc}")
             raise ConversationDeleteIncomplete(deletion_id, f"{type(exc).__name__}: {exc}") from exc
         await self._finish_deletion(deletion_id, "completed", counts)
+        if not tags:
+            await self._close_covered_deletions(deletion_id, user_id=user_id, conversation_id=conversation_id,
+                                                bundle_id=bundle_id, bundles=bundles)
         return {"deletion_id": deletion_id, **counts, "unfinished_batches": settled}
+
+    async def _close_covered_deletions(self, deletion_id: str, *, user_id: str, conversation_id: str,
+                                       bundle_id: Optional[str], bundles: Optional[List[str]]) -> int:
+        """Mark earlier unfinished deletions of this conversation that this one covered as completed."""
+        covered = None if (bundle_id is None and bundles is None) else ({bundle_id} if bundle_id else set(bundles))
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(
+                f"""
+                SELECT deletion_id, scope FROM {self.schema}.conv_archive_deletions
+                 WHERE state IN ('started', 'failed') AND deletion_id <> $3
+                   AND (scope->>'user_id') = $1 AND (scope->>'conversation_id') = $2
+                   AND COALESCE(jsonb_array_length(scope->'tags_all'), 0) = 0
+                """,
+                user_id, conversation_id, deletion_id,
+            )
+            closed = []
+            for row in rows:
+                scope = row["scope"] if isinstance(row["scope"], dict) else json.loads(row["scope"])
+                earlier = (None if not scope.get("bundle_id") and scope.get("bundle_ids") is None
+                           else ({scope["bundle_id"]} if scope.get("bundle_id") else set(scope.get("bundle_ids") or ())))
+                if covered is None or (earlier is not None and earlier <= covered):
+                    closed.append(row["deletion_id"])
+            if closed:
+                await con.execute(
+                    f"""
+                    UPDATE {self.schema}.conv_archive_deletions
+                       SET state = 'completed', completed_at = now(), error = $2
+                     WHERE deletion_id = ANY($1::text[]) AND state IN ('started', 'failed')
+                    """,
+                    closed, f"finished by {deletion_id}",
+                )
+        return len(closed)
+
+    async def unfinished_conversation_deletions(self, *, limit: int = 20) -> List[Dict[str, Any]]:
+        """Conversations whose deletion did not finish, oldest first, with their latest recorded scope.
+
+        ``attempts`` counts the unfinished runs recorded for that conversation.
+        A ``started`` row whose run is still going is listed too; finishing it
+        takes the retention lock, which that run holds.
+        """
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(
+                f"""
+                SELECT DISTINCT ON (scope->>'user_id', scope->>'conversation_id')
+                       scope, created_at,
+                       COUNT(*) OVER (PARTITION BY scope->>'user_id', scope->>'conversation_id') AS attempts,
+                       MIN(created_at) OVER (PARTITION BY scope->>'user_id', scope->>'conversation_id') AS first_at
+                  FROM {self.schema}.conv_archive_deletions
+                 WHERE state IN ('started', 'failed')
+                   AND COALESCE(jsonb_array_length(scope->'tags_all'), 0) = 0
+                   AND (NOT (scope ? 'bundle_ids') OR jsonb_array_length(scope->'bundle_ids') > 0)
+                 ORDER BY scope->>'user_id', scope->>'conversation_id', created_at DESC
+                """,
+            )
+        out = []
+        for row in rows:
+            scope = row["scope"] if isinstance(row["scope"], dict) else json.loads(row["scope"])
+            out.append({"user_id": scope.get("user_id"), "conversation_id": scope.get("conversation_id"),
+                        "bundle_id": scope.get("bundle_id"), "bundle_ids": scope.get("bundle_ids"),
+                        "attempts": int(row["attempts"]),
+                        "first_at": row["first_at"]})
+        out.sort(key=lambda item: item["first_at"])
+        return out[: max(1, int(limit))]
 
     async def _settle_unfinished(self, deletion_id: str, *, user_id: str, conversation_id: str) -> Dict[str, int]:
         """Finish or retire the conversation's 'written'/'verified' batches before a deletion plans.

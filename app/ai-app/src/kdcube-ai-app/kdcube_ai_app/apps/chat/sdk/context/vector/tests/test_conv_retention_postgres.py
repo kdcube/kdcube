@@ -664,7 +664,22 @@ async def test_the_ingress_delete_answers_503_when_the_retention_lock_stays_held
         return SimpleNamespace(bundles={"b1": object()})
 
     monkeypatch.setattr(conversations, "load_persisted_registry_from_runtime_ctx", _registry)
-    monkeypatch.setattr(conversations.router, "state", SimpleNamespace(conversation_browser=_Browser(), chat_comm=_Comm()),
+    class _LockRedis:  # the conversation lock is free: no turn runs
+        values: dict = {}
+
+        async def set(self, key, value, nx=False, ex=None):
+            if nx and key in self.values:
+                return None
+            self.values[key] = value
+            return True
+
+        async def eval(self, script, numkeys, key, token, *args):
+            if self.values.get(key) == token and "DEL" in script:
+                del self.values[key]
+            return 1
+
+    monkeypatch.setattr(conversations.router, "state",
+                        SimpleNamespace(conversation_browser=_Browser(), chat_comm=_Comm(), redis_async=_LockRedis()),
                         raising=False)
     session = SimpleNamespace(user_id="u1", session_id="s1", user_type="registered", fingerprint="fp")
     async with pool.acquire() as holder:  # an archive step in another process holds the lock
