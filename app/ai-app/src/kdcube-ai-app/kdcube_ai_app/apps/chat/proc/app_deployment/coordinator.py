@@ -404,7 +404,7 @@ async def deploy_loaded_bundle_app_resources(
             logger=logger,
             reread_props=_reread_effective_props,
         )
-        # W41: the application's agents' shared descriptor Controls, published
+        # The application's agents' shared descriptor Controls, published
         # from the props re-read under this lock (never a user's sync).
         from kdcube_ai_app.apps.chat.proc.app_deployment.descriptor_controls import (
             publish_agent_descriptor_controls,

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""W41: an application's deployment publishes its agents' shared descriptor Controls.
+"""An application's deployment publishes its agents' shared descriptor Controls.
 
 The publication runs in the application's own identity-free context (as a
 headless bundle job's), so the Connection Hub host sees the calling app as the

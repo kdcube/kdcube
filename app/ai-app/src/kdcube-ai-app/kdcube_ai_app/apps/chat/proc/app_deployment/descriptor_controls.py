@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""W41: publish an application's shared descriptor Controls when it deploys.
+"""Publish an application's shared descriptor Controls when it deploys.
 
 Connection Hub holds one descriptor Control per agent, for every user of the
 agent. The application's deployment publishes it, as the application and

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""W41: the application's deployment publishes its agents' shared descriptor Control.
+"""The application's deployment publishes its agents' shared descriptor Control.
 
 A user's sync never writes the Control. When the Hub answers that this
 descriptor revision is not published yet, the runtime publishes it itself,
@@ -136,7 +136,7 @@ async def test_the_deployment_publication_uses_the_props_it_was_given() -> None:
 
 
 @pytest.mark.asyncio
-async def test_c2_an_authority_that_moves_during_the_publication_stops_the_retry(authority) -> None:
+async def test_an_authority_that_moves_during_the_publication_stops_the_retry(authority) -> None:
     calls, call = _hub("agent_descriptor_control_not_published", "ok")
     reads = {"n": 0}
     original = authority["props"]
