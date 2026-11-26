@@ -469,8 +469,17 @@ class BaseEntrypoint:
         """
         from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import (
             AgentCapabilityControlUnavailable,
+            _conversation_deletion_gate,
         )
 
+        # A conversation being deleted is never registered again: its state row
+        # would outlive the deletion.
+        refused, _epoch = await _conversation_deletion_gate(
+            self, user_id=str(identity.get("user_id") or ""), conversation_id=conversation_id)
+        if refused is not None:
+            raise AgentCapabilityControlUnavailable(
+                refused["error"], retryable=bool(refused.get("retryable")),
+                status=503 if refused.get("retryable") else 409)
         client = await self.get_ctx_client()
         if client is None:
             raise AgentCapabilityControlUnavailable("conversation_registry_unavailable", retryable=True, status=503)

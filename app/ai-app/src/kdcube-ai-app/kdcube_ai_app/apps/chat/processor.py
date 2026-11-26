@@ -1420,6 +1420,8 @@ class EnhancedChatRequestProcessor:
             )
         except Exception:
             logger.debug("Failed to emit conversation_deleted for task %s", payload.meta.task_id, exc_info=True)
+        if deletion.get("state") == "completed":
+            await self._remove_state_left_by_dropped_task(payload)
         try:
             await self._ack_claimed_task(task_data)
         finally:
@@ -1430,6 +1432,38 @@ class EnhancedChatRequestProcessor:
                 except Exception:
                     logger.debug("Failed to release conversation lock after a dropped task", exc_info=True)
         return True
+
+    async def _remove_state_left_by_dropped_task(self, payload: Any) -> None:
+        """Delete the conversation state a dropped message wrote after its conversation was deleted.
+
+        Ingress marks the conversation in progress when it accepts a message.
+        For a message accepted while the deletion ran, that write recreates the
+        deleted conversation's state; left alone it shows the conversation again
+        and keeps it "in progress", so the next message under the id is refused.
+        Only a state row naming this message's turn is removed, never a newer
+        conversation that already took the id. Runs with the conversation lock held.
+        """
+        index = getattr(self.conversation_ctx, "idx", None)
+        try:
+            row = await index.get_conversation_state_row(user_id=payload.user.user_id,
+                                                         conversation_id=payload.routing.conversation_id)
+        except Exception:
+            logger.warning("Cannot read the state left by a dropped task", exc_info=True)
+            return
+        turn_id = str(getattr(payload.routing, "turn_id", "") or "")
+        if not row or not turn_id or f"conv.turn:{turn_id}" not in (row.get("tags") or []):
+            return
+        try:
+            await self.conversation_ctx.delete_conversation(
+                tenant=payload.actor.tenant_id, project=payload.actor.project_id,
+                user_id=payload.user.user_id, conversation_id=payload.routing.conversation_id,
+                user_type=str(getattr(payload.user, "user_type", "") or "registered"),
+                bundle_id=payload.routing.bundle_id, actor="processor:dropped-task",
+                reason="state written by a message to a deleted conversation", lock_wait_s=0,
+            )
+        except Exception:
+            logger.warning("Could not remove the state a dropped task left for conversation %s",
+                           payload.routing.conversation_id, exc_info=True)
 
     async def _mark_task_interrupted(self, task_dict: Dict[str, Any], *, reason: str) -> None:
         try:

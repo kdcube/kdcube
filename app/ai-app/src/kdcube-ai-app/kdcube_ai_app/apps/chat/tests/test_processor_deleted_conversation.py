@@ -11,8 +11,13 @@ from kdcube_ai_app.apps.chat.processor import EnhancedChatRequestProcessor
 
 
 class _Index:
-    def __init__(self, answer=None, fails=False):
-        self.answer, self.fails, self.asked = answer, fails, []
+    def __init__(self, answer=None, fails=False, state_turn=None):
+        self.answer, self.fails, self.asked, self.state_turn = answer, fails, [], state_turn
+
+    async def get_conversation_state_row(self, *, user_id, conversation_id):
+        if self.state_turn is None:
+            return None
+        return {"tags": ["conv.state:in_progress", f"conv.turn:{self.state_turn}"]}
 
     async def conversation_deletion_since(self, *, user_id, conversation_id, since):
         self.asked.append((user_id, conversation_id, since))
@@ -44,19 +49,30 @@ def _processor(index):
         events.append(("requeue", reason))
         return True
 
+    deletes = []
+
+    async def delete_conversation(**kwargs):
+        deletes.append(kwargs)
+        return {"deletion_id": "del_again"}
+
     proc = SimpleNamespace(
-        conversation_ctx=SimpleNamespace(idx=index), _current_load=1, _ack_claimed_task=ack,
+        conversation_ctx=SimpleNamespace(idx=index, delete_conversation=delete_conversation, deletes=deletes),
+        _current_load=1, _ack_claimed_task=ack,
         _release_redis_lock=release_lock, _release_unstarted_claimed_work=release_unstarted,
         _build_runtime_context=lambda payload: ("req", None, None, comm),
         _task_logical_id=lambda task_data: "task-1",
     )
+    proc._remove_state_left_by_dropped_task = (
+        lambda payload: EnhancedChatRequestProcessor._remove_state_left_by_dropped_task(proc, payload))
     return proc, comm, events
 
 
 def _payload(created_at=1764150000.0, operation="chat"):
     return SimpleNamespace(request=SimpleNamespace(operation=operation),
                            meta=SimpleNamespace(created_at=created_at, task_id="task-1"),
-                           user=SimpleNamespace(user_id="u1"), routing=SimpleNamespace(conversation_id="c1"))
+                           user=SimpleNamespace(user_id="u1", user_type="registered"),
+                           actor=SimpleNamespace(tenant_id="t", project_id="p"),
+                           routing=SimpleNamespace(conversation_id="c1", turn_id="turn-9", bundle_id="app@1-0"))
 
 
 async def _drop(proc, payload):
@@ -95,3 +111,21 @@ async def test_background_jobs_are_not_checked():
     proc, comm, events = _processor(index)
     assert await _drop(proc, _payload(operation=BACKGROUND_JOB_OPERATION)) is False
     assert index.asked == []
+
+
+
+@pytest.mark.asyncio
+async def test_state_a_dropped_message_wrote_after_the_deletion_is_removed():
+    """Accepted while the deletion ran, the message recreated the conversation's state; it goes again."""
+    proc, comm, events = _processor(_Index({"deletion_id": "del_1", "state": "completed"}, state_turn="turn-9"))
+    assert await _drop(proc, _payload()) is True
+    [deleted] = proc.conversation_ctx.deletes
+    assert (deleted["conversation_id"], deleted["bundle_id"], deleted["lock_wait_s"]) == ("c1", "app@1-0", 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state_turn", [None, "turn-of-a-newer-conversation"])
+async def test_a_newer_conversation_under_the_id_is_never_removed(state_turn):
+    proc, comm, events = _processor(_Index({"deletion_id": "del_1", "state": "completed"}, state_turn=state_turn))
+    assert await _drop(proc, _payload()) is True
+    assert proc.conversation_ctx.deletes == []

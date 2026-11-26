@@ -128,7 +128,12 @@ async def hold_conversation_lock(
         stop.set()
         with contextlib.suppress(Exception):
             await renewer
-        await redis.eval(_RELEASE, 1, key, token)
+        # The work under the lock is done; a failed release must not turn its
+        # result into an error. The lock then lapses at its TTL.
+        try:
+            await redis.eval(_RELEASE, 1, key, token)
+        except Exception:
+            logger.warning("[conversation-lock] releasing %s failed; it lapses at its TTL", key, exc_info=True)
 
 
 __all__ = ["CONVERSATION_LOCK_TTL_SECONDS", "ConversationDeleteInProgress", "ConversationLockHeld",

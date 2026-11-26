@@ -133,7 +133,7 @@ def _retention(idx: ConvIndex):
 
 
 @pytest.mark.asyncio
-async def test_unfinished_deletions_are_listed_oldest_first_with_their_latest_scope(index) -> None:
+async def test_unfinished_deletions_are_listed_least_recently_tried_first_with_their_latest_scope(index) -> None:
     first = await _ledger(index, state="failed", conversation="c1", bundle_ids=["a"])
     await _set_created(index, first, "2026-11-26T10:00:00Z")
     latest = await _ledger(index, state="started", conversation="c1", bundle_ids=["a", "b"])
@@ -145,9 +145,10 @@ async def test_unfinished_deletions_are_listed_oldest_first_with_their_latest_sc
     await _ledger(index, state="failed", conversation="c5", bundle_ids=[])
 
     listed = await _retention(index).unfinished_conversation_deletions(limit=10)
+    # c1 was last tried at 11:00, c2 at 10:30: the one tried least recently goes first.
     assert [(i["conversation_id"], i["attempts"], i["bundle_ids"]) for i in listed] == [
-        ("c1", 2, ["a", "b"]), ("c2", 1, None)]
-    assert [i["conversation_id"] for i in await _retention(index).unfinished_conversation_deletions(limit=1)] == ["c1"]
+        ("c2", 1, None), ("c1", 2, ["a", "b"])]
+    assert [i["conversation_id"] for i in await _retention(index).unfinished_conversation_deletions(limit=1)] == ["c2"]
 
 
 @pytest.mark.asyncio

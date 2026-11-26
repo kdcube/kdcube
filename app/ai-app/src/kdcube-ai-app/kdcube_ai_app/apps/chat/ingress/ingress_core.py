@@ -1495,6 +1495,34 @@ async def process_chat_message(
                 http_status=409,
             )
 
+    # --- A conversation being deleted takes no new message ---
+    # Writing its state now would bring the deleted conversation back, and
+    # the processor drops the message anyway. An unreadable ledger lets the
+    # message through: the processor checks again before any turn starts.
+    try:
+        _index = getattr(app.state.conversation_browser, "idx", None)
+        _open_deletion = (await _index.open_conversation_deletion(
+            user_id=payload.user.user_id, conversation_id=conversation_id)
+            if _index is not None and hasattr(_index, "open_conversation_deletion") else None)
+    except Exception:
+        logger.warning("Cannot read the conversation deletion ledger for %s", conversation_id, exc_info=True)
+        _open_deletion = None
+    if _open_deletion:
+        err = "This conversation is being deleted."
+        await chat_comm.emit_error(
+            svc,
+            conv,
+            error=err,
+            target_sid=ingress.stream_id,
+            session_id=session.session_id,
+        )
+        return IngressResult(
+            ok=False,
+            error_type="conversation_deleting",
+            error=err,
+            http_status=409,
+        )
+
     # --- Conversation lock + state ---
     if active_control_state_result is not None:
         conv_exists = True

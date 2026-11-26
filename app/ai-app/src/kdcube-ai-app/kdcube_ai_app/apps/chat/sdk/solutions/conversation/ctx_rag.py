@@ -3132,6 +3132,9 @@ class ContextRAGClient:
         row = await self.idx.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
         if row:
             return row
+        if await self.idx.open_conversation_deletion(user_id=user_id, conversation_id=conversation_id):
+            # Registering it now would leave state behind the deletion.
+            return None
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
         hosted_uri, _message_id, _rn = await self.store.put_message(
             tenant=tenant, project=project, user=user_id, fingerprint=None,

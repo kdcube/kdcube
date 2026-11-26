@@ -1141,3 +1141,42 @@ async def test_stale_explicit_steer_cannot_stop_newer_active_turn(_patch_ingress
     assert result.target_turn_id == "turn-old"
     assert queue.payloads == []
     assert await _scoped_external_source(redis).read_since(0) == []
+
+
+class _DeletingConversationBrowser(_IdleConversationBrowser):
+    def __init__(self):
+        self.state_writes = 0
+        outer = self
+
+        class _Index:
+            async def open_conversation_deletion(self, *, user_id, conversation_id):
+                return {"deletion_id": "del_1", "state": "started"}
+
+        self.idx = _Index()
+
+    async def set_conversation_state(self, **kwargs):
+        self.state_writes += 1
+        return await super().set_conversation_state(**kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_message_to_a_conversation_being_deleted_is_refused_and_writes_no_state(_patch_ingress_dependencies):
+    """Writing its state would bring the deleted conversation back."""
+    redis = _MiniRedis()
+    browser = _DeletingConversationBrowser()
+    app = SimpleNamespace(state=SimpleNamespace(
+        redis_async=redis, conversation_browser=browser, conversation_store=_DummyConversationStore()))
+    session = SimpleNamespace(session_id="sess-1", user_type=UserType.REGISTERED, user_id="user-1",
+                              username="user", email="user@example.com", fingerprint="fp-1", roles=[],
+                              permissions=[], timezone="UTC")
+    queue = _QueueManagerCaptures(redis)
+    result = await process_chat_message(
+        app=app, chat_queue_manager=queue, chat_comm=_DummyRelay(), session=session,
+        request_context=SimpleNamespace(user_utc_offset_min=None),
+        message_data={"conversation_id": "conv-1", "external_events": [_text_event("event.user.prompt", "hello")]},
+        message_text="hello",
+        ingress=IngressConfig(transport="sse", entrypoint="/sse/chat", component="chat.sse",
+                              instance_id="ingress-1", stream_id="stream-1"),
+    )
+    assert result.ok is False and result.error_type == "conversation_deleting" and result.http_status == 409
+    assert browser.state_writes == 0 and queue.payloads == []

@@ -784,9 +784,11 @@ class ConversationRetention:
         return len(closed)
 
     async def unfinished_conversation_deletions(self, *, limit: int = 20) -> List[Dict[str, Any]]:
-        """Conversations whose deletion did not finish, oldest first, with their latest recorded scope.
+        """Conversations whose deletion did not finish, least recently tried first, with their latest scope.
 
-        ``attempts`` counts the unfinished runs recorded for that conversation.
+        Every attempt records a row, so a conversation whose deletion keeps
+        failing moves behind the others instead of taking the whole batch each
+        run. ``attempts`` counts the unfinished runs recorded for it.
         A ``started`` row whose run is still going is listed too; finishing it
         takes the retention lock, which that run holds.
         """
@@ -810,8 +812,8 @@ class ConversationRetention:
             out.append({"user_id": scope.get("user_id"), "conversation_id": scope.get("conversation_id"),
                         "bundle_id": scope.get("bundle_id"), "bundle_ids": scope.get("bundle_ids"),
                         "attempts": int(row["attempts"]),
-                        "first_at": row["first_at"]})
-        out.sort(key=lambda item: item["first_at"])
+                        "first_at": row["first_at"], "last_at": row["created_at"]})
+        out.sort(key=lambda item: (item["last_at"], item["first_at"]))
         return out[: max(1, int(limit))]
 
     async def _settle_unfinished(self, deletion_id: str, *, user_id: str, conversation_id: str) -> Dict[str, int]:

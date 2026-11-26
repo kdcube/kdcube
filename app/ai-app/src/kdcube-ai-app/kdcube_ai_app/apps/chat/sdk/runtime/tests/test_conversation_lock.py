@@ -60,3 +60,18 @@ async def test_who_holds_the_lock_decides_the_refusal(holder, error):
         async with hold_conversation_lock(redis, "k", owner="conversation-delete"):
             pass
     assert redis.values["k"] == holder
+
+
+
+@pytest.mark.asyncio
+async def test_a_failed_release_does_not_fail_the_work_done_under_the_lock():
+    class _FailingRelease(_Redis):
+        async def eval(self, script, numkeys, key, token, *args):
+            if "DEL" in script:
+                raise ConnectionError("redis went away")
+            return await super().eval(script, numkeys, key, token, *args)
+
+    redis = _FailingRelease()
+    async with hold_conversation_lock(redis, "k", owner="conversation-delete"):
+        done = True
+    assert done

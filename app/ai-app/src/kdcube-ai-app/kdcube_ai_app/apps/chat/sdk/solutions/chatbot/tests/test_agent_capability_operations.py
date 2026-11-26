@@ -711,9 +711,18 @@ async def test_a_hub_refusal_leaves_the_conversation_record_unchanged(monkeypatc
 
 
 
+class _DeletionStatus:
+    def __init__(self, deleting: bool = False) -> None:
+        self.deleting = deleting
+
+    async def conversation_deletion_status(self, *, user_id: str, conversation_id: str):
+        return {"open_deletion_id": "del_1" if self.deleting else None, "epoch": 0}
+
+
 class _RegistryClient:
-    def __init__(self, row: Any = None, fail: bool = False) -> None:
+    def __init__(self, row: Any = None, fail: bool = False, deleting: bool = False) -> None:
         self.row, self.fail, self.calls = row, fail, []
+        self.idx = _DeletionStatus(deleting)
 
     async def register_conversation(self, **kwargs: Any):
         self.calls.append(kwargs)
@@ -751,3 +760,14 @@ async def test_registration_fails_closed_without_the_registry() -> None:
         assert refused.value.code == "conversation_registry_unavailable"
     await BaseEntrypoint._register_conversation_for_capabilities(
         _registry_owner(_RegistryClient(row={"bundle_id": "app@1-0"})), identity, "c1")
+
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_being_deleted_is_not_registered_again() -> None:
+    """Its state row would outlive the deletion."""
+    identity = {"tenant": "t", "project": "p", "user_id": "u1", "bundle_id": "app@1-0"}
+    client = _RegistryClient(row={"bundle_id": "app@1-0"}, deleting=True)
+    with pytest.raises(capability_control.AgentCapabilityControlUnavailable) as refused:
+        await BaseEntrypoint._register_conversation_for_capabilities(_registry_owner(client), identity, "c1")
+    assert refused.value.code == "conversation_deleting" and client.calls == []
