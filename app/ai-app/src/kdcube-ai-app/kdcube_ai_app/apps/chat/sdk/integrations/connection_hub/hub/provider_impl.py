@@ -380,7 +380,7 @@ class ConnectionHubProvider(ConnectionsProviderBase):
         *,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """W41: the calling application's deployment publishes one agent's shared Control.
+        """The calling application's deployment publishes one agent's shared Control.
 
         The platform binds the calling app (``source_bundle_id``); it must be
         the descriptor's own application. No user is involved: the Control is
@@ -434,7 +434,7 @@ class ConnectionHubProvider(ConnectionsProviderBase):
             }
         user_id = self._user_id(ctx)
         if not user_id or user_id.startswith("application-authority:"):
-            # W41: an application's synthetic holder is never a person.
+            # An application's synthetic holder is never a person.
             return {
                 "ok": False,
                 "error": "delegated_access_requires_authenticated_user",

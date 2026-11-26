@@ -1486,13 +1486,13 @@ async def _sync_agent_capability_projection(
 
     response = await _call_connection_hub(entrypoint, "sync", payload, tenant=tenant, project=project)
     if not response.ok and _error_code(response) in PUBLICATION_REFUSALS:
-        # W41: the deployment publishes the shared Control; this runtime may
+        # The deployment publishes the shared Control; this runtime may
         # publish too, but only a descriptor that equals the props authority's,
         # so an instance holding older props never overwrites a newer one.
         if await _descriptor_matches_authority(entrypoint, payload, catalog=catalog, identity=identity):
             # The descriptor's own default seeds the Control, never this user's picks.
             published = await publish_agent_capability_control(entrypoint, catalog=catalog, agent_id=agent_id)
-            # Review C2: this publication ran outside the deployment's lock. If the
+            # This publication ran outside the deployment's lock. If the
             # authority moved meanwhile, this runtime is now the older one: stop
             # here; the next sync of a current runtime (or the deployment)
             # publishes the newer descriptor again.
@@ -1507,7 +1507,7 @@ async def _sync_agent_capability_projection(
     return projection
 
 
-# W41: a user's sync never writes the shared descriptor Control; these say the
+# A user's sync never writes the shared descriptor Control; these say the
 # deployment has not published this descriptor revision yet.
 PUBLICATION_REFUSALS = frozenset({
     "agent_descriptor_control_not_published",
@@ -1730,7 +1730,7 @@ def _merge_props(entrypoint: Any, base: Mapping[str, Any], override: Mapping[str
 async def _descriptor_matches_authority(
     entrypoint: Any, payload: Mapping[str, Any], *, catalog: Mapping[str, Any], identity: Mapping[str, str],
 ) -> bool:
-    """Whether this runtime's descriptor for the agent is the props authority's right now (R3-1)."""
+    """Whether this runtime's descriptor for the agent is the props authority's right now."""
     from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props_from_authority
 
     tenant, project = _text(identity.get("tenant")), _text(identity.get("project"))
@@ -1754,7 +1754,7 @@ async def publish_agent_capability_control(
     bundle_props: Mapping[str, Any] | None = None,
     identity: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """W41: publish one agent's shared descriptor Control as the application's deployment.
+    """Publish one agent's shared descriptor Control as the application's deployment.
 
     ``bundle_props`` are the props read from the authority under the
     deployment's shared lock; the publication that commits last therefore

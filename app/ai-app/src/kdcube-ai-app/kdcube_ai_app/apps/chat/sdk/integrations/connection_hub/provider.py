@@ -353,7 +353,7 @@ class ConnectionsProviderBase(NamedServiceProvider):
         ctx: NamedServiceContext,
         request: NamedServiceRequest,
     ) -> NamedServiceResponse:
-        """W41: the application's deployment publishes one agent's shared descriptor Control."""
+        """The application's deployment publishes one agent's shared descriptor Control."""
 
         payload = dict(request.payload or {})
         missing = [key for key in ("application", "agent_id", "descriptor_revision")
@@ -535,7 +535,7 @@ class ConnectionsProviderBase(NamedServiceProvider):
         *,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """W41: only the Connection Hub host publishes a shared descriptor Control."""
+        """Only the Connection Hub host publishes a shared descriptor Control."""
 
         del ctx, payload
         return {
