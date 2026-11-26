@@ -1809,3 +1809,16 @@ def test_react_presentation_facets_defaults_from_agent_config():
     bare = react_presentation_facets(_props(), "main")["facets"]
     assert bare["tool_catalog"]["default"] == "full"
     assert bare["skills_form"]["default"] == "full"
+
+
+def test_a_saved_conversation_selection_keeps_the_resource_families_it_turned_off():
+    """The picker's "My MCP connectors" switch survives the save path's sanitizing."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import clamp_selection
+    from kdcube_ai_app.apps.chat.sdk.solutions.user_settings.agent_selection import merge_selection_patch
+
+    catalog = {"delegated_resource_families": [{"id": "user_external_mcp", "label": "My MCP connectors"}]}
+    merged = merge_selection_patch({}, {"delegated_resource_families": {"user_external_mcp": True,
+                                                                         "not_offered": True}})
+    assert clamp_selection(merged, catalog) == {"delegated_resource_families": ["user_external_mcp"]}
+    turned_back_on = merge_selection_patch(merged, {"delegated_resource_families": {"user_external_mcp": False}})
+    assert clamp_selection(turned_back_on, catalog) == {}

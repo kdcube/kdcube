@@ -2067,6 +2067,18 @@ def clamp_selection(
         if skill_id in skill_ids and skill_id not in out_skills:
             out_skills.append(skill_id)
 
+    # A conversation may turn a family of the user's own resources off (for
+    # example the user's MCP connectors); only families the agent offers.
+    family_ids = {
+        _norm(row.get("id"))
+        for row in catalog.get("delegated_resource_families") or []
+        if isinstance(row, Mapping) and _norm(row.get("id"))
+    }
+    out_families: list[str] = []
+    for family_id in _string_list(disabled.get("delegated_resource_families")):
+        if family_id in family_ids and family_id not in out_families:
+            out_families.append(family_id)
+
     # The subagents toggle is only storable when the admin inventory actually
     # offers the ability (narrows, never widens — and never references an
     # ability the agent does not have).
@@ -2088,6 +2100,8 @@ def clamp_selection(
         out["conversation_targets"] = out_conversation_targets
     if out_skills:
         out["skills"] = out_skills
+    if out_families:
+        out["delegated_resource_families"] = out_families
     if subagents_offered and "subagents" in disabled:
         # Store the user's explicit choice either way: True = opted out,
         # False = opted in (matters when the admin default is off). An absent
