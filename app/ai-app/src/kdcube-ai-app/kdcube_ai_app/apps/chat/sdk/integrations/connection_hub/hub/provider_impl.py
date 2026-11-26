@@ -333,7 +333,7 @@ class ConnectionHubProvider(ConnectionsProviderBase):
         kind: str,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """W40: a conversation-slice request of the calling application, for its signed-in user.
+        """A conversation-slice request of the calling application, for its signed-in user.
 
         The application named in the request must be the platform-bound
         calling app; the user is the host's binding, never an application

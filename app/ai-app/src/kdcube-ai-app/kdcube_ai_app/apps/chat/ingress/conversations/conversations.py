@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 import datetime
 
@@ -228,12 +228,16 @@ async def _ensure_conversation_in_scope_or_404(
     return allowed_bundle_ids
 
 
-async def _conversation_being_deleted(*, user_id: str, conversation_id: str) -> bool:
+async def _open_conversation_deletion(*, user_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
     index = getattr(router.state.conversation_browser, "idx", None)
     checker = getattr(index, "open_conversation_deletion", None)
     if checker is None:
-        return False
-    return bool(await checker(user_id=user_id, conversation_id=conversation_id))
+        return None
+    return await checker(user_id=user_id, conversation_id=conversation_id)
+
+
+async def _conversation_being_deleted(*, user_id: str, conversation_id: str) -> bool:
+    return bool(await _open_conversation_deletion(user_id=user_id, conversation_id=conversation_id))
 
 @router.get("/{tenant}/{project}", response_model=ConversationListResponse)
 async def list_conversations(
@@ -480,7 +484,7 @@ async def delete_conversation(
         )
 
     from kdcube_ai_app.apps.chat.sdk.runtime.conversation_lock import (
-        ConversationTurnRunning, conversation_lock_key, hold_conversation_lock,
+        ConversationDeleteInProgress, ConversationTurnRunning, conversation_lock_key, hold_conversation_lock,
     )
 
     try:
@@ -503,6 +507,11 @@ async def delete_conversation(
                 bundle_id=None,
                 bundle_ids=allowed_bundle_ids,
             )
+    except ConversationDeleteInProgress as e:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": e.code, "message": "This conversation is already being deleted."},
+        )
     except ConversationTurnRunning as e:
         raise HTTPException(
             status_code=409,
@@ -543,6 +552,19 @@ async def delete_conversation(
         )
     if not finishing and result.get("deleted_messages", 0) == 0:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if finishing:
+        # This run covers the bundles allowed now; an earlier deletion recorded
+        # with more of them stays open until the resume job finishes it.
+        remaining = await _open_conversation_deletion(user_id=session.user_id, conversation_id=conversation_id)
+        if remaining:
+            await _announce_deleted()
+            return JSONResponse(
+                status_code=202,
+                content={"status": "accepted", "conversation_id": conversation_id,
+                         "deletion_id": str(remaining.get("deletion_id") or ""),
+                         "message": "The conversation is deleted and no longer available; "
+                                    "removing its data finishes automatically."},
+            )
 
     await _announce_deleted()
     return ConversationDeleteResponse(

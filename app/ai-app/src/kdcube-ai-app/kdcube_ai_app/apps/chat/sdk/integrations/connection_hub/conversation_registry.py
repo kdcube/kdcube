@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 
-"""W40: KDCube's conversation registry, as Connection Hub reads it.
+"""KDCube's conversation registry, as Connection Hub reads it.
 
 The Hub asks two things, both answered from KDCube's own records:
 

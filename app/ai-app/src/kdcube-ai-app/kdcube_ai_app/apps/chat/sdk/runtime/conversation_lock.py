@@ -15,13 +15,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import uuid
 from typing import Any, AsyncIterator
 
 from kdcube_ai_app.apps.chat.sdk.event_identity import safe_event_lane_part
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
+logger = logging.getLogger(__name__)
+
 CONVERSATION_LOCK_TTL_SECONDS = 300
+# Owners of the lock other than a turn: they hold it while deleting.
+DELETION_LOCK_OWNERS = ("conversation-delete", "conversation-deletion-resume")
 CONVERSATION_LOCK_RENEW_SECONDS = 60
 
 _RENEW = """
@@ -38,13 +43,40 @@ return 0
 """
 
 
-class ConversationTurnRunning(RuntimeError):
+class ConversationLockHeld(RuntimeError):
+    """The conversation's lock is held by someone else."""
+
+    code = "conversation_busy"
+
+
+class ConversationTurnRunning(ConversationLockHeld):
     """A turn of the conversation is running; the conversation cannot be changed now."""
 
     code = "conversation_turn_running"
 
     def __init__(self, message: str = "A turn of this conversation is still running.") -> None:
         super().__init__(message)
+
+
+class ConversationDeleteInProgress(ConversationLockHeld):
+    """The conversation is already being deleted."""
+
+    code = "conversation_delete_in_progress"
+
+    def __init__(self, message: str = "This conversation is already being deleted.") -> None:
+        super().__init__(message)
+
+
+async def _lock_held_error(redis: Any, key: str) -> ConversationLockHeld:
+    try:
+        holder = await redis.get(key)
+    except Exception:
+        holder = None
+    if isinstance(holder, bytes):
+        holder = holder.decode("utf-8", "replace")
+    if isinstance(holder, str) and holder.split(":", 1)[0] in DELETION_LOCK_OWNERS:
+        return ConversationDeleteInProgress()
+    return ConversationTurnRunning()
 
 
 def conversation_lock_key(*, tenant: str, project: str, user_id: str, conversation_id: str) -> str:
@@ -64,14 +96,16 @@ async def hold_conversation_lock(
     ttl_seconds: int = CONVERSATION_LOCK_TTL_SECONDS,
     renew_seconds: float = CONVERSATION_LOCK_RENEW_SECONDS,
 ) -> AsyncIterator[str]:
-    """Hold the conversation lock for the block, or raise ``ConversationTurnRunning`` at once.
+    """Hold the conversation lock for the block, or raise ``ConversationLockHeld`` at once.
 
-    The lock is renewed while the block runs and released only by its holder,
-    so a lock that expired and was taken by a turn is never released here.
+    ``ConversationTurnRunning`` when a turn holds it, ``ConversationDeleteInProgress``
+    when a deletion does. The lock is renewed while the block runs and
+    released only by its holder, so a lock that expired and was taken by a
+    turn is never released here.
     """
     token = f"{owner}:{uuid.uuid4().hex}"
     if not await redis.set(key, token, nx=True, ex=int(ttl_seconds)):
-        raise ConversationTurnRunning()
+        raise await _lock_held_error(redis, key)
     stop = asyncio.Event()
 
     async def renew() -> None:
@@ -79,7 +113,13 @@ async def hold_conversation_lock(
             try:
                 await asyncio.wait_for(stop.wait(), timeout=renew_seconds)
             except asyncio.TimeoutError:
-                await redis.eval(_RENEW, 1, key, token, str(int(ttl_seconds)))
+                # A failed renewal is retried at the next interval; one error
+                # must not leave the lock to expire under the holder.
+                try:
+                    if not await redis.eval(_RENEW, 1, key, token, str(int(ttl_seconds))):
+                        logger.warning("[conversation-lock] %s lost the lock %s", owner, key)
+                except Exception:
+                    logger.warning("[conversation-lock] renewing %s failed; retrying", key, exc_info=True)
 
     renewer = asyncio.create_task(renew())
     try:
@@ -91,5 +131,5 @@ async def hold_conversation_lock(
         await redis.eval(_RELEASE, 1, key, token)
 
 
-__all__ = ["CONVERSATION_LOCK_TTL_SECONDS", "ConversationTurnRunning", "conversation_lock_key",
-           "hold_conversation_lock"]
+__all__ = ["CONVERSATION_LOCK_TTL_SECONDS", "ConversationDeleteInProgress", "ConversationLockHeld",
+           "ConversationTurnRunning", "conversation_lock_key", "hold_conversation_lock"]

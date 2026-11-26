@@ -129,6 +129,9 @@ class _FakeLockRedis:
             del self.values[key]
         return 1
 
+    async def get(self, key):
+        return self.values.get(key)
+
 
 @pytest.fixture
 def _router_state(monkeypatch):
@@ -785,6 +788,7 @@ async def test_deleting_again_finishes_a_deletion_whose_messages_are_already_gon
 
     async def _finished(**kwargs):
         _router_state.browser.calls.append(("delete_conversation", kwargs))
+        _router_state.browser.idx.deleting.discard("conv-1")  # the run closed the open deletion
         return {"deletion_id": "del_8", "deleted_messages": 0, "deleted_storage_messages": 2,
                 "deleted_storage_attachments": 0, "deleted_storage_executions": 0}
 
@@ -796,3 +800,43 @@ async def test_deleting_again_finishes_a_deletion_whose_messages_are_already_gon
     resp = await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
                                                    session=session)
     assert resp.deletion_id == "del_8" and resp.deleted_storage_messages == 2
+
+
+
+@pytest.mark.asyncio
+async def test_deleting_again_answers_202_when_an_earlier_wider_deletion_stays_open(monkeypatch, _router_state):
+    """The run covers the bundles allowed now; a deletion recorded with more stays for the resume job."""
+    async def _allowed(tenant, project, bundle_id=None):
+        return ["bundle.from.db"]
+
+    async def _no_turns(**kwargs):
+        return {"turns": []}
+
+    async def _finished(**kwargs):
+        return {"deletion_id": "del_9", "deleted_messages": 0, "deleted_storage_messages": 0,
+                "deleted_storage_attachments": 0, "deleted_storage_executions": 0}
+
+    monkeypatch.setattr(conversations, "_resolve_allowed_bundle_ids_or_404", _allowed)
+    _router_state.browser.get_conversation_details = _no_turns
+    _router_state.browser.delete_conversation = _finished
+    _router_state.browser.idx = _DeletingIndex({"conv-1"})
+    session = SimpleNamespace(user_id="user-1", session_id="s", user_type="standard", fingerprint="fp")
+    resp = await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
+                                                   session=session)
+    assert resp.status_code == 202 and json.loads(resp.body)["deletion_id"] == "del_1"
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_already_being_deleted_is_not_reported_as_running(monkeypatch, _router_state):
+    from fastapi import HTTPException
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.conversation_lock import conversation_lock_key
+
+    _scoped_registry(monkeypatch)
+    key = conversation_lock_key(tenant="tenant-a", project="project-a", user_id="user-1", conversation_id="conv-1")
+    _router_state.redis.values[key] = "conversation-deletion-resume:abc"
+    session = SimpleNamespace(user_id="user-1", session_id="s", user_type="standard", fingerprint="fp")
+    with pytest.raises(HTTPException) as refused:
+        await conversations.delete_conversation(tenant="tenant-a", project="project-a", conversation_id="conv-1",
+                                                session=session)
+    assert refused.value.status_code == 409 and refused.value.detail["code"] == "conversation_delete_in_progress"

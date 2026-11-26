@@ -79,7 +79,7 @@ def conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str) 
             f" AND (NOT ({a}.scope ? 'bundle_ids') OR jsonb_array_length({a}.scope->'bundle_ids') > 0)")
 
 
-def open_conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str, match: str = "=") -> str:
+def open_conversation_deletion_sql(alias: str, user_sql: str, conversation_sql: str) -> str:
     """SQL for "this conversation has an open deletion".
 
     A ledger row (``conv_archive_deletions``) is an open whole-conversation
@@ -219,7 +219,7 @@ class ConvIndex:
 
         The deletion ledger marks a conversation that is being deleted: while
         such a row exists the conversation is hidden and frozen (no turn token,
-        no capability seeding), and the resume job finishes the deletion. See ``OPEN_CONVERSATION_DELETION_SQL`` for what counts.
+        no capability seeding), and the resume job finishes the deletion. See ``open_conversation_deletion_sql`` for what counts.
         """
         q = f"""
           SELECT deletion_id, state, created_at
@@ -282,7 +282,7 @@ class ConvIndex:
         q = f"""
           SELECT DISTINCT d.scope->>'conversation_id' AS conversation_id
           FROM {self.schema}.conv_archive_deletions d
-          WHERE {open_conversation_deletion_sql("d", "$1", "ANY($2::text[])", match="=")}
+          WHERE {open_conversation_deletion_sql("d", "$1", "ANY($2::text[])")}
         """
         async with self._pool.acquire() as con:
             rows = await con.fetch(q, user_id, ids)

@@ -21,7 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.context.vector.conv_retention import (
     ConversationDeleteUnavailable,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.conversation_lock import (
-    ConversationTurnRunning,
+    ConversationLockHeld,
     conversation_lock_key,
     hold_conversation_lock,
 )
@@ -67,7 +67,8 @@ async def finish_unfinished_conversation_deletions(
                     actor=RESUME_ACTOR, reason="finish an unfinished deletion", lock_wait_s=0,
                 )
             summary["finished"] += 1
-        except ConversationTurnRunning:
+        except ConversationLockHeld:
+            # A turn runs, or a person is deleting it right now.
             summary["turn_running"] += 1
         except ConversationDeleteIncomplete as exc:
             summary["incomplete"] += 1
