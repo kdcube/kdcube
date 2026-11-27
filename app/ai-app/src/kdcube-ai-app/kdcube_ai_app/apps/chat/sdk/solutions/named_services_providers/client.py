@@ -7,8 +7,8 @@ from typing import Any, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext
 
-from .registry import NamedServiceRegistry, RegisteredNamedServiceProvider
-from .types import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.registry import NamedServiceRegistry, RegisteredNamedServiceProvider
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     OBJECT_ACTION,
     OBJECT_DELETE,
     OBJECT_GET,

@@ -1,4 +1,4 @@
-from .resolver import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver import (
     MEMORY_OBJECT_NAMESPACE,
     MEMORY_RESOLVER_NAME,
     memory_id_from_ref,
@@ -6,7 +6,7 @@ from .resolver import (
     memory_ref_capabilities,
     resolve_memory_ref_action,
 )
-from .policies import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.events.policies import (
     MEMORY_CONTEXT_BLOCK_POLICY_ID,
     MEMORY_CONTEXT_COMPACTION_POLICY_ID,
     MEMORY_CONTEXT_RENDER_POLICY_ID,

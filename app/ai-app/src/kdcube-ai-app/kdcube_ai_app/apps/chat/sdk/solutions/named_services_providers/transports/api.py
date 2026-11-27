@@ -8,9 +8,9 @@ from typing import Any, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext
 
-from ..client import NamedServiceClient
-from ..registry import NamedServiceRegistry
-from ..types import TRANSPORT_API, NamedServiceRequest, NamedServiceResponse, ensure_json_object
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client import NamedServiceClient
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.registry import NamedServiceRegistry
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import TRANSPORT_API, NamedServiceRequest, NamedServiceResponse, ensure_json_object
 
 LOGGER = logging.getLogger("kdcube.sdk.named_services.api")
 

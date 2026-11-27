@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 try:
-    from .storage import AutomationStorage
-    from .executions_storage import AutomationExecutionsStorage
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.storage import AutomationStorage
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.executions_storage import AutomationExecutionsStorage
 except ImportError:
     import importlib.util
     import sys

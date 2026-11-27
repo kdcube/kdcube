@@ -8,7 +8,7 @@ from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
 
-from .models import normalize_terms
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import normalize_terms
 
 
 _WORD_RE = re.compile(r"[a-z0-9]+")

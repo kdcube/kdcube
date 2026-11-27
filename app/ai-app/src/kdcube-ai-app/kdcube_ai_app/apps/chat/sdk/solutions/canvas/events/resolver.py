@@ -22,8 +22,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import DEFAULT_CANV
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import read_canvas_for_agent
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events import default_tool_event_policies
 
-from ..storage import CanvasStore
-from .policies import (  # noqa: F401 - imported so event discovery sees canvas read policies
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.storage import CanvasStore
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.policies import (  # noqa: F401 - imported so event discovery sees canvas read policies
     canvas_announce_policy,
     canvas_read_block_policy,
     canvas_tool_projection_policy,

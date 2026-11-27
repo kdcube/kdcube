@@ -28,11 +28,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping, Sequence
 
-from .client_tools import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     connected_named_service_namespaces,
     render_named_service_namespace_roster,
 )
-from .instructions import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.instructions import (
     NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS,
     named_services_bridge_instructions,
 )
@@ -111,7 +111,7 @@ async def named_service_agent_instruction_block(
 
     if intros is None:
         try:
-            from .discovery import RedisNamedServiceDiscovery, fetch_namespace_intros
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import RedisNamedServiceDiscovery, fetch_namespace_intros
 
             if discovery is None and redis is not None and str(tenant or "").strip() and str(project or "").strip():
                 discovery = RedisNamedServiceDiscovery(redis, tenant=str(tenant), project=str(project))

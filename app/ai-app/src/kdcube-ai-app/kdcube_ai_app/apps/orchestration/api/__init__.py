@@ -10,7 +10,7 @@ from typing import Callable
 from fastapi import FastAPI
 
 from kdcube_ai_app.auth.AuthManager import AuthManager
-from .orchestration_app import router as distributed_locks_router
+from kdcube_ai_app.apps.orchestration.api.orchestration_app import router as distributed_locks_router
 
 
 def mount_orchestrator_routers(app: FastAPI,

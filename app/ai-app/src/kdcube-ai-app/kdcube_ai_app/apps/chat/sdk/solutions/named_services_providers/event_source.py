@@ -12,13 +12,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.admission im
     NamedServiceAdmission,
 )
 
-from .client_tools import named_service_namespace_provider_configs_from_config
-from .discovery import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import named_service_namespace_provider_configs_from_config
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
     ConfiguredNamedServiceDiscovery,
     get_current_named_service_discovery,
 )
-from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
-from .types import BLOCK_PRODUCE, EVENT_RESOLVE, NamedServiceRequest
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import BLOCK_PRODUCE, EVENT_RESOLVE, NamedServiceRequest
 
 
 NAMED_SERVICE_EVENT_SOURCE_PREFIX = "named_services."

@@ -9,7 +9,7 @@ from typing import Callable
 
 from fastapi import FastAPI
 
-from .opex import router as opex_router
+from kdcube_ai_app.apps.chat.ingress.opex.opex import router as opex_router
 
 
 def mount_opex_router(app: FastAPI):

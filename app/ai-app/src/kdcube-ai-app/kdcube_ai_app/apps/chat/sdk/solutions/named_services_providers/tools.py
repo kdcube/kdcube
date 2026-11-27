@@ -20,7 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.harness.workspace.references import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.named_service_search import NamedServiceSearchResultsWidget
 
-from .client_tools import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     denied_named_service_entries,
     named_service_namespace_client_tools_config,
     named_service_namespace_provider_configs,
@@ -29,9 +29,9 @@ from .client_tools import (
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.consent import (
     raise_named_service_consent_demand as _raise_named_service_consent_demand,
 )
-from .discovery import get_current_named_service_discovery
-from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
-from .types import (
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import get_current_named_service_discovery
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     OBJECT_ACTION,
     OBJECT_DELETE,
     OBJECT_GET,
@@ -830,6 +830,18 @@ async def _call(
     base_ns = _base_namespace(ns)
     if not ns:
         return _error("named_service_namespace_required", "namespace is required")
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+        named_service_denials_unavailable,
+    )
+    if named_service_denials_unavailable():
+        # This isolated runtime did not receive the conversation's denials;
+        # running the call without them could do what the conversation turned off.
+        return _error(
+            "named_service_denials_unavailable",
+            "This runtime did not receive the conversation's settings for connected services; "
+            "the call is refused. Run it again from the conversation.",
+            namespace=base_ns, tool=tool_name,
+        )
     if not _operation_allowed(base_ns, operation):
         # Every denial explains its own fix: the user's own toggle is
         # user-fixable in the picker ONLY when the config ceiling would allow

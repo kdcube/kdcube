@@ -14,7 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import GLOBAL_BUNDLE_ID
 from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import StripeEconomicsAdminService
 
-from .stripe_router import router, _get_stripe, _get_control_plane_manager
+from kdcube_ai_app.apps.chat.ingress.economics.stripe_router import router, _get_stripe, _get_control_plane_manager
 from kdcube_ai_app.infra.accounting.usage import llm_reference_service
 
 logger = logging.getLogger(__name__)

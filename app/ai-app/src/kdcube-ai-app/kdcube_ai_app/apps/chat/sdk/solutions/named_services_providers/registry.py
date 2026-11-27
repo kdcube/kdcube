@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .types import NamedServiceProviderSpec, namespace_for_ref
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceProviderSpec, namespace_for_ref
 
 
 @dataclass(frozen=True)

@@ -3,12 +3,12 @@
 
 """Request authentication surfaces and gateway-facing Connection Hub auth."""
 
-from ..authentication_surface import (
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.authentication_surface import (
     ConnectionHubAuthenticationSurface,
     connection_hub_auth_enabled,
     maybe_install_connection_hub_authentication_surface,
 )
-from ..request_auth import (
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.request_auth import (
     PlatformTokenAuthenticator,
     RequestAuthenticationSurface,
     RequestAuthResolver,

@@ -352,9 +352,28 @@ class ToolSubsystem:
         with ExitStack() as stack:
             comm_context = self.registry.get("comm_context")
             if comm_context is not None:
-                from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+                from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+                    bind_current_request_context,
+                    get_current_bundle_call_context,
+                )
 
-                stack.enter_context(bind_current_request_context(comm_context, comm=self.comm))
+                # The request object keeps the call context it was built with;
+                # the turn may have written more since (conversation
+                # denials), and possibly while another request object was bound.
+                # The live call context wins, so the child sees what this turn
+                # enforces.
+                stored = getattr(comm_context, "bundle_call_context", None)
+                call_context = {
+                    **(dict(stored) if isinstance(stored, Mapping) else {}),
+                    **get_current_bundle_call_context(),
+                }
+                stack.enter_context(
+                    bind_current_request_context(
+                        comm_context,
+                        comm=self.comm,
+                        bundle_call_context=call_context,
+                    )
+                )
 
             if self._named_service_tools_configured():
                 redis = self.registry.get("redis")

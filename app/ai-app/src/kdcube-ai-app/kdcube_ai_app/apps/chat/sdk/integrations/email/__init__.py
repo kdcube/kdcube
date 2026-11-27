@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .accounts import (
+from kdcube_ai_app.apps.chat.sdk.integrations.email.accounts import (
     DEFAULT_GOOGLE_SCOPES,
     GOOGLE_GMAIL_API,
     EmailAccountStore,
@@ -24,9 +24,9 @@ from .accounts import (
     process_user_emails,
     refresh_google_token,
 )
-from .attachments import materialize_email_attachments_for_current_turn
-from .claude import claude_code_enabled, configure_email_claude, run_email_processor_with_claude_code
-from .delivery import (
+from kdcube_ai_app.apps.chat.sdk.integrations.email.attachments import materialize_email_attachments_for_current_turn
+from kdcube_ai_app.apps.chat.sdk.integrations.email.claude import claude_code_enabled, configure_email_claude, run_email_processor_with_claude_code
+from kdcube_ai_app.apps.chat.sdk.integrations.email.delivery import (
     build_email_message,
     email_html_to_text,
     inline_markdown_to_email_html,
@@ -34,7 +34,7 @@ from .delivery import (
     safe_email_filename,
     split_email_addresses,
 )
-from .icloud import (
+from kdcube_ai_app.apps.chat.sdk.integrations.email.icloud import (
     default_icloud_account_settings,
     ensure_icloud_credentials,
     fetch_icloud_attachment,
@@ -42,7 +42,7 @@ from .icloud import (
     fetch_icloud_messages,
     send_icloud_message,
 )
-from .mcp import (
+from kdcube_ai_app.apps.chat.sdk.integrations.email.mcp import (
     EMAIL_MCP_ALLOWED_TOOLS,
     EMAIL_MCP_SERVER_NAME,
     EMAIL_MCP_TOKEN_HEADER,

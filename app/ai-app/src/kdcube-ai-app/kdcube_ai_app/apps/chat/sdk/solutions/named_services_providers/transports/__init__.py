@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from .api import NamedServiceApiTransport, dispatch_named_service_api_request
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.transports.api import NamedServiceApiTransport, dispatch_named_service_api_request
 
 __all__ = [
     "NamedServiceApiTransport",

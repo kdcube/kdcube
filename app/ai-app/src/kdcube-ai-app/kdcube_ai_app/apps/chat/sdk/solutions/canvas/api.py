@@ -3,16 +3,16 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Mapping, Sequence
 
-from .ids import timestamp_slug_id
-from .storage_utils import safe_storage_segment
-from .events.resolver import (
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.ids import timestamp_slug_id
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.storage_utils import safe_storage_segment
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver import (
     CanvasObjectResolverRegistry,
     CanvasPinResolver,
     namespace_for_ref,
     object_ref_from_payload,
     search_canvas_cards,
 )
-from .storage import CanvasStore
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.storage import CanvasStore
 
 
 LOGGER = logging.getLogger("kdcube.sdk.solutions.canvas.api")

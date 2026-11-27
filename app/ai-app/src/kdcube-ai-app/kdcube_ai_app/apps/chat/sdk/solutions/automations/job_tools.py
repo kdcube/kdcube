@@ -11,12 +11,12 @@ except Exception:
     from semantic_kernel.utils.function_decorator import kernel_function
 
 try:
-    from .async_storage import AsyncAutomationStorage
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.async_storage import AsyncAutomationStorage
 except ImportError:
     from kdcube_ai_app.apps.chat.sdk.solutions.automations.async_storage import AsyncAutomationStorage
 
 try:
-    from .common import (
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.common import (
         bind_integrations,
         error,
         extract_automation_execution_context_from_scope,

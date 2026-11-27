@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import re
 from contextvars import ContextVar
+
+import re
 from typing import Any, Iterable, Mapping, Sequence
 
 from kdcube_ai_app.apps.chat.sdk.event_identity import normalize_agent_id
@@ -14,60 +15,87 @@ NAMED_SERVICE_TOOLS_MODULE = "kdcube_ai_app.apps.chat.sdk.solutions.named_servic
 NAMED_SERVICE_TOOLS_ALIAS = "named_services"
 DEFAULT_AGENT_TOOLS_ID = "default_agent"
 
-# Per-turn namespace deny-set (per-user agent selection). Consulted by
-# `named_service_namespaces` and the per-client tools-config lookup so denied
-# namespaces disappear for the turn — from the agent's namespace roster/intros
-# AND from operation dispatch. Set via `set_denied_named_service_namespaces`
-# in BaseWorkflow.apply_user_agent_selection; empty/None means nothing denied.
-_NAMED_SERVICE_NAMESPACE_DENY_CV: ContextVar[frozenset[str] | None] = ContextVar(
-    "kdcube_named_service_namespace_deny", default=None
-)
+# Per-turn deny sets from the conversation's capability selection.
+#
+# `BaseWorkflow.apply_user_agent_selection` writes them at the start of every
+# turn: the namespaces turned off as a whole, and per namespace the operation
+# tokens (`object.search`) and action keys (`object.action.send`) turned off.
+# `named_service_namespaces`, the per-client tools-config lookup and the grammar
+# tools' dispatch (`_operation_allowed` / `_action_allowed`) read them, so a
+# denied namespace leaves the roster and a denied operation is uncallable.
+#
+# They travel in the bundle call context (`runtime/comm_ctx.py`), the portable
+# request-scoped carrier: a tools module loaded as a dynamic copy reads the same
+# value, and a subprocess or ISO runtime restores it with the comm context
+# (docs/runtime/cross-runtime-context-README.md). The carrier holds JSON only,
+# so the sets are stored as sorted lists and rebuilt as frozensets on read.
+NAMED_SERVICE_DENIALS_CONTEXT_KEY = "named_service_denials"
+
+
+def _normalize_namespace_key(namespace: Any) -> str:
+    return str(namespace or "").strip().lower().rstrip(":")
+
+
+# Set in an isolated runtime whose call context could not be restored: the
+# conversation's denials are unknown there, so named-service calls they govern
+# refuse instead of running with none.
+_DENIALS_UNAVAILABLE = ContextVar("named_service_denials_unavailable", default=False)
+
+
+def mark_named_service_denials_unavailable() -> None:
+    _DENIALS_UNAVAILABLE.set(True)
+
+
+def named_service_denials_unavailable() -> bool:
+    return bool(_DENIALS_UNAVAILABLE.get())
+
+
+def _read_denials() -> Mapping[str, Any]:
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_call_context
+
+    value = get_current_bundle_call_context().get(NAMED_SERVICE_DENIALS_CONTEXT_KEY)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _write_denials(part: str, value: Any) -> None:
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import update_current_bundle_call_context
+
+    denials = dict(_read_denials())
+    if value:
+        denials[part] = value
+    else:
+        denials.pop(part, None)
+    update_current_bundle_call_context({NAMED_SERVICE_DENIALS_CONTEXT_KEY: denials})
 
 
 def set_denied_named_service_namespaces(namespaces: Iterable[str] | None) -> None:
-    if not namespaces:
-        _NAMED_SERVICE_NAMESPACE_DENY_CV.set(None)
-        return
-    normalized = frozenset(
-        str(ns or "").strip().lower().rstrip(":")
-        for ns in namespaces
-        if str(ns or "").strip()
+    normalized = sorted(
+        {_normalize_namespace_key(ns) for ns in (namespaces or ()) if _normalize_namespace_key(ns)}
     )
-    _NAMED_SERVICE_NAMESPACE_DENY_CV.set(normalized or None)
+    _write_denials("namespaces", normalized)
 
 
 def denied_named_service_namespaces() -> frozenset[str]:
-    return _NAMED_SERVICE_NAMESPACE_DENY_CV.get() or frozenset()
-
-
-# Per-turn (namespace -> denied entry keys) deny-set — the per-user selection
-# at (namespace, operation/action) granularity. Keys are operation tokens
-# (`object.search`) and action keys (`object.action.send`). Consulted by the
-# grammar tools' dispatch (`_operation_allowed` / `_action_allowed`) so a
-# denied operation or action is literally uncallable for the turn. Set via
-# `set_denied_named_service_entries` in BaseWorkflow.apply_user_agent_selection.
-_NAMED_SERVICE_ENTRY_DENY_CV: ContextVar[Mapping[str, frozenset[str]] | None] = ContextVar(
-    "kdcube_named_service_entry_deny", default=None
-)
+    values = _read_denials().get("namespaces")
+    return frozenset(str(v) for v in values) if isinstance(values, list) else frozenset()
 
 
 def set_denied_named_service_entries(entries: Mapping[str, Iterable[str]] | None) -> None:
-    if not entries:
-        _NAMED_SERVICE_ENTRY_DENY_CV.set(None)
-        return
-    normalized: dict[str, frozenset[str]] = {}
-    for namespace, keys in entries.items():
-        ns = str(namespace or "").strip().lower().rstrip(":")
-        clean = frozenset(str(key or "").strip() for key in (keys or ()) if str(key or "").strip())
+    normalized: dict[str, list[str]] = {}
+    for namespace, keys in (entries or {}).items():
+        ns = _normalize_namespace_key(namespace)
+        clean = sorted({str(key or "").strip() for key in (keys or ()) if str(key or "").strip()})
         if ns and clean:
             normalized[ns] = clean
-    _NAMED_SERVICE_ENTRY_DENY_CV.set(normalized or None)
+    _write_denials("entries", normalized)
 
 
 def denied_named_service_entries(namespace: str) -> frozenset[str]:
-    entries = _NAMED_SERVICE_ENTRY_DENY_CV.get() or {}
-    ns = str(namespace or "").strip().lower().rstrip(":")
-    return entries.get(ns) or frozenset()
+    entries = _read_denials().get("entries")
+    if not isinstance(entries, Mapping):
+        return frozenset()
+    values = entries.get(_normalize_namespace_key(namespace))
+    return frozenset(str(v) for v in values) if isinstance(values, list) else frozenset()
 
 
 def _get_path(data: Mapping[str, Any] | None, path: str, default: Any = None) -> Any:
@@ -533,7 +561,7 @@ def compose_named_service_react_instructions(
     namespaces = connected_named_service_namespaces(bundle_props, client_id=client_id)
     if not namespaces:
         return ""
-    from .instructions import NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.instructions import NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS
 
     roster = render_named_service_namespace_roster(namespaces, intros)
     if not roster:

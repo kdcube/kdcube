@@ -386,3 +386,141 @@ class TestToolSubsystemPortableContext:
 
         assert comm_ctx["REQUEST_CONTEXT"]["user"]["user_id"] == "user-1"
         assert comm_ctx["NAMED_SERVICE_DISCOVERY"] == {}
+
+    # A conversation denial written during the turn did not reach the
+    # isolated runtime; the supervisor let docs object.list through to Connection Hub. The portable
+    # spec rebinds the request from registry["comm_context"], whose bundle_call_context is the copy
+    # taken when the request object was built, not the call context the turn has written since.
+    def _denials_in_spec(self, spec):
+        bundle_call_context = spec.contextvars["comm_ctx"]["BUNDLE_CALL_CONTEXT"] or {}
+        return bundle_call_context.get("named_service_denials")
+
+    def _tool_subsystem_for_denials(self, monkeypatch, *, comm_context=None):
+        self._patch_snapshot(monkeypatch)
+        tool_subsystem = self._make_tool_subsystem(monkeypatch, bundle_props={})
+        if comm_context is not None:
+            tool_subsystem.registry["comm_context"] = comm_context
+        return tool_subsystem
+
+    @pytest.mark.parametrize("bound", ["same request object", "another request object", "no request bound"])
+    def test_portable_spec_carries_the_denials_the_turn_wrote(self, monkeypatch, bound):
+        from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+            set_denied_named_service_entries,
+            set_denied_named_service_namespaces,
+        )
+
+        registry_context = self._make_request_context()
+        tool_subsystem = self._tool_subsystem_for_denials(monkeypatch, comm_context=registry_context)
+        turn_context = {
+            "same request object": registry_context,
+            "another request object": self._make_request_context(),
+            "no request bound": None,
+        }[bound]
+        with _comm_ctx.bind_current_request_context(turn_context, bundle_call_context={}):
+            set_denied_named_service_namespaces(["slack"])
+            set_denied_named_service_entries({"docs": ["object.list"]})
+            spec = tool_subsystem.build_portable_spec()
+
+        assert self._denials_in_spec(spec) == {"namespaces": ["slack"], "entries": {"docs": ["object.list"]}}
+
+
+# A conversation denial reached the supervisor in the comm_ctx pocket and was
+# erased right after. The generic ContextVar snapshot stores each value as is (snapshot._encode_value), while
+# bootstrap's decoder expected a {"kind", "data"} envelope and returned its missing "data": every dict-valued
+# ContextVar (the bundle call context, the named-service discovery context, the Connection Hub account scope)
+# became None, after the dedicated pockets had restored it. Seen through probes in the live supervisor.
+_DENIALS = {"namespaces": ["slack"], "entries": {"docs": ["object.list"]}}
+
+
+def _snapshot_with_denials():
+    import contextvars
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import snapshot_all_contextvars
+
+    def take():
+        _comm_ctx.set_current_bundle_call_context({"named_service_denials": _DENIALS, "role_models": {"a": "b"}})
+        _comm_ctx.set_current_named_service_discovery_context({"backend": "redis", "tenant": "t", "project": "p"})
+        return snapshot_all_contextvars(), _comm_ctx.snapshot_ctxvars()
+
+    return contextvars.Context().run(take)
+
+
+class TestGenericContextVarSnapshotRoundTrip:
+    def test_dict_values_survive_the_generic_snapshot(self):
+        import contextvars
+
+        cv_snapshot, _ = _snapshot_with_denials()
+
+        def restore_and_read():
+            _bootstrap_mod.restore_all_contextvars(cv_snapshot)
+            return _comm_ctx.get_current_bundle_call_context(), _comm_ctx.get_current_named_service_discovery_context()
+
+        call_context, discovery = contextvars.Context().run(restore_and_read)
+        assert call_context.get("named_service_denials") == _DENIALS
+        assert call_context.get("role_models") == {"a": "b"}
+        assert discovery == {"backend": "redis", "tenant": "t", "project": "p"}
+
+    def test_the_legacy_envelope_still_decodes(self):
+        assert _bootstrap_mod._decode_value({"kind": "json", "data": {"x": 1}}) == {"x": 1}
+        assert _bootstrap_mod._decode_value({"x": 1}) == {"x": 1}
+        assert _bootstrap_mod._decode_value({"data": 1, "other": 2}) == {"data": 1, "other": 2}
+        assert _bootstrap_mod._decode_value(["a"]) == ["a"]
+        assert _bootstrap_mod._decode_value("text") == "text"
+
+    @pytest.mark.parametrize("entry", ["bootstrap_bind_all", "bootstrap_from_spec"])
+    def test_bootstrap_keeps_the_denials_the_spec_carries(self, monkeypatch, entry):
+        import contextvars
+        import types
+
+        _patch_heavy(monkeypatch)
+        cv_snapshot, comm_pocket = _snapshot_with_denials()
+        spec_json = PortableSpec(
+            model_config=ModelConfigSpec(), contextvars={"comm_ctx": comm_pocket}, cv_snapshot=cv_snapshot,
+        ).to_json()
+
+        def run():
+            if entry == "bootstrap_bind_all":
+                _bootstrap_mod.bootstrap_bind_all(spec_json, module_names=[], bootstrap_env=False)
+            else:
+                _bootstrap_mod.bootstrap_from_spec(spec_json, tool_module=types.ModuleType("w39_tools"))
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+                denied_named_service_entries,
+                denied_named_service_namespaces,
+            )
+            return set(denied_named_service_entries("docs")), set(denied_named_service_namespaces())
+
+        entries, namespaces = contextvars.Context().run(run)
+        assert entries == {"object.list"}
+        assert namespaces == {"slack"}
+
+
+class TestNamedServiceDenialsWhenTheCallContextIsLost:
+    def test_a_failed_call_context_restore_closes_named_service_calls(self, monkeypatch):
+        """Without the conversation's denials, named-service calls refuse instead of running with none."""
+        import contextvars
+
+        from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import client_tools
+
+        def run():
+            _patch_heavy(monkeypatch)
+
+            def broken(_payload):
+                raise RuntimeError("snapshot unreadable")
+
+            monkeypatch.setattr(_comm_ctx, "restore_ctxvars", broken)
+            _bootstrap_mod.bootstrap_bind_all(_spec_json(), module_names=[], bootstrap_env=False)
+            return client_tools.named_service_denials_unavailable()
+
+        assert contextvars.copy_context().run(run) is True
+
+    def test_a_restored_call_context_leaves_named_service_calls_open(self, monkeypatch):
+        import contextvars
+
+        from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import client_tools
+
+        def run():
+            _patch_heavy(monkeypatch)
+            _bootstrap_mod.bootstrap_bind_all(_spec_json(), module_names=[], bootstrap_env=False)
+            return client_tools.named_service_denials_unavailable()
+
+        assert contextvars.copy_context().run(run) is False

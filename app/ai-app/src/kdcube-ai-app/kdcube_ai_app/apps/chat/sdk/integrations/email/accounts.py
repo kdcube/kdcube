@@ -1111,7 +1111,7 @@ async def ensure_email_account_access(
     if provider == "google":
         return await ensure_google_access_token(store=store, entrypoint=entrypoint, account=account)
     if provider == "icloud":
-        from .icloud import ensure_icloud_credentials
+        from kdcube_ai_app.apps.chat.sdk.integrations.email.icloud import ensure_icloud_credentials
 
         return await ensure_icloud_credentials(store=store, account=account)
     return {
@@ -1162,7 +1162,7 @@ async def fetch_email_messages(
             text=text,
         )
     if provider == "icloud":
-        from .icloud import fetch_icloud_messages
+        from kdcube_ai_app.apps.chat.sdk.integrations.email.icloud import fetch_icloud_messages
 
         return await fetch_icloud_messages(
             store=store,
@@ -1210,7 +1210,7 @@ async def fetch_email_message(
             body_limit=body_limit,
         )
     if provider == "icloud":
-        from .icloud import fetch_icloud_message
+        from kdcube_ai_app.apps.chat.sdk.integrations.email.icloud import fetch_icloud_message
 
         return await fetch_icloud_message(
             store=store,
@@ -1252,7 +1252,7 @@ async def fetch_email_attachment(
             max_bytes=max_bytes,
         )
     if provider == "icloud":
-        from .icloud import fetch_icloud_attachment
+        from kdcube_ai_app.apps.chat.sdk.integrations.email.icloud import fetch_icloud_attachment
 
         return await fetch_icloud_attachment(
             store=store,
@@ -1559,7 +1559,7 @@ def _sync_email_mcp_task_state(
     if not str(automation_id or "").strip() or not str(account_id or "").strip():
         return
     try:
-        from .mcp import EmailMCPRunStore
+        from kdcube_ai_app.apps.chat.sdk.integrations.email.mcp import EmailMCPRunStore
 
         mcp_store = EmailMCPRunStore(storage_root, user_id=user_id)
         existing = mcp_store.read_task_state(automation_id=automation_id, account_id=account_id)
@@ -1789,7 +1789,7 @@ async def process_user_emails(
         claude_code_enabled_fn = None
         run_email_processor_with_claude_code_fn = None
         try:
-            from .claude import claude_code_enabled, run_email_processor_with_claude_code
+            from kdcube_ai_app.apps.chat.sdk.integrations.email.claude import claude_code_enabled, run_email_processor_with_claude_code
             claude_code_enabled_fn = claude_code_enabled
             run_email_processor_with_claude_code_fn = run_email_processor_with_claude_code
         except ImportError:

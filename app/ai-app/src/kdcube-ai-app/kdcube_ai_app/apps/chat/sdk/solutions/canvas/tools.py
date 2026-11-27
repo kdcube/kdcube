@@ -39,7 +39,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events import default_tool_event_policies
 from kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context import error, ok, scope
 
-from .events.policies import (  # noqa: F401 - imported so the event subsystem discovers default policies
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.policies import (  # noqa: F401 - imported so the event subsystem discovers default policies
     canvas_announce_policy,
     canvas_patch_block_policy,
     canvas_state_projection_policy,

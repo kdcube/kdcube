@@ -3,7 +3,7 @@
 
 """Short-lived KDCube federated credentials for Connection Hub transports."""
 
-from .data_bus import (
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.federated_tokens.data_bus import (
     FEDERATED_TOKEN_DEFAULT_TTL_SECONDS,
     FEDERATED_TOKEN_MAX_TTL_SECONDS,
     FEDERATED_TOKEN_SCHEMA,

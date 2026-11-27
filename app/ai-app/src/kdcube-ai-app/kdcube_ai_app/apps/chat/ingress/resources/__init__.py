@@ -9,7 +9,7 @@ from typing import Callable
 
 from fastapi import FastAPI
 
-from .resources import router as resources_router
+from kdcube_ai_app.apps.chat.ingress.resources.resources import router as resources_router
 
 
 def mount_resources_router(app: FastAPI):

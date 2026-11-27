@@ -15,7 +15,7 @@ from typing import Any, Dict
 
 import httpx
 
-from ..registry import ConnectionProvider, connection_provider
+from kdcube_ai_app.apps.chat.sdk.integrations.connections.registry import ConnectionProvider, connection_provider
 
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 
