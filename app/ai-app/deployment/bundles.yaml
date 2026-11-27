@@ -3091,9 +3091,9 @@ bundles:
                 # the namespace roster (+ the conversation-recovery block when
                 # `conv` is declared). Trade-offs:
                 # docs/agents/lg-react-named-services-config.md (in the bundle).
-                # Ships scoped to CONV only — the conversation namespace is
-                # built-in (served by kdcube-services), so it works on a fresh
-                # install with no extra setup. Provider namespaces (slack, mail)
+                # Ships with CONV and MEM (read only) — both namespaces are
+                # built-in (served by kdcube-services), so they work on a fresh
+                # install with no extra setup; a memory write is refused. Provider namespaces (slack, mail)
                 # need their OAuth app configured in Connection Hub first; then
                 # declare the namespace under the roster. Account-backed claims
                 # (Slack's real `slack:search`/`slack:post`/…, mail's agnostic
