@@ -2066,10 +2066,16 @@ a { color: inherit; }
   bottom: calc(100% + 8px);
   left: 0;
   z-index: 50;
-  width: 320px;
-  max-width: min(320px, 82vw);
-  max-height: min(420px, 60vh);
-  overflow-y: auto;
+  /* Wide enough for a row's label beside its state tags. It is as tall as
+     its rows, up to a cap; the user can drag the corner to resize it. It is
+     anchored at the bottom and grows upward, so the cap keeps its top inside
+     the window. */
+  width: 460px;
+  min-width: 280px;
+  max-width: 92vw;
+  max-height: min(480px, 64vh);
+  resize: both;
+  overflow: auto;
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
