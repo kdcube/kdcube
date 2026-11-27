@@ -235,6 +235,10 @@ bundles:
                   # (whose data) + the grant's `delegable_roles` (who may delegate).
                   #
                   # Example 1: the user's own KDCube memories.
+                  # Only for an agent whose Card holds no grantor-scope resource:
+                  # this surface runs under grantor_identity_family, and one Card
+                  # carries one identity scope. Next to the named-services door,
+                  # declare the `mem` namespace there instead (deployment default).
                   # - name: memories
                   #   kind: mcp
                   #   server_id: memories
