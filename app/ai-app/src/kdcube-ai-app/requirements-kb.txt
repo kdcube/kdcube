@@ -13,7 +13,7 @@ psycopg2-binary==2.9.10       # import: psycopg2
 pydantic==2.11.7
 python-dotenv==1.1.1          # import: dotenv
 python-socketio==5.13.0       # import: socketio
-PyJWT[crypto]==2.10.1
+PyJWT[crypto]==2.15.1
 python-multipart==0.0.20
 redis==6.2.0
 requests==2.32.4
