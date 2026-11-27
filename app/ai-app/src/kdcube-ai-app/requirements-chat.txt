@@ -11,16 +11,16 @@ langchain-core==1.8.4
 # langgraph==0.6.1
 # langmem>=0.0.4,<0.1.0
 langgraph==1.0.10
-# Pin split-out prebuilt/checkpoint to versions compatible with langgraph 1.0.5.
+# Pin split-out prebuilt/checkpoint to versions compatible with the pinned langgraph core.
 # Unpinned, a newer langgraph-prebuilt imports ExecutionInfo/ServerInfo from a
-# newer langgraph.runtime than core 1.0.5 ships -> ImportError on create_react_agent.
+# newer langgraph.runtime than the pinned core ships -> ImportError on create_react_agent.
 langgraph-prebuilt==1.0.8
 langgraph-checkpoint==3.0.1
 # langgraph-checkpoint-postgres — the durable Postgres checkpointer (AsyncPostgresSaver)
 # a ported LangGraph agent opens so its per-conversation history survives restarts and
 # is restored when a conversation is reloaded. Pinned to the release compatible with
 # langgraph-checkpoint 3.0.1: unpinned it resolves a newer build that requires
-# langgraph-checkpoint >=4, which conflicts with langgraph 1.0.5's <4.0.0 ceiling.
+# langgraph-checkpoint >=4, which conflicts with the pinned langgraph core's <4.0.0 ceiling.
 # Pulls psycopg-pool transitively. Without it the checkpointer degrades to an in-memory
 # saver (no cross-turn history) — see docs/sdk/solutions/conversation/hosted-agent-conversation-README.md.
 langgraph-checkpoint-postgres==3.0.5
