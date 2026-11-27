@@ -492,3 +492,35 @@ class TestGenericContextVarSnapshotRoundTrip:
         entries, namespaces = contextvars.Context().run(run)
         assert entries == {"object.list"}
         assert namespaces == {"slack"}
+
+
+class TestNamedServiceDenialsWhenTheCallContextIsLost:
+    def test_a_failed_call_context_restore_closes_named_service_calls(self, monkeypatch):
+        """Without the conversation's denials, named-service calls refuse instead of running with none."""
+        import contextvars
+
+        from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import client_tools
+
+        def run():
+            _patch_heavy(monkeypatch)
+
+            def broken(_payload):
+                raise RuntimeError("snapshot unreadable")
+
+            monkeypatch.setattr(_comm_ctx, "restore_ctxvars", broken)
+            _bootstrap_mod.bootstrap_bind_all(_spec_json(), module_names=[], bootstrap_env=False)
+            return client_tools.named_service_denials_unavailable()
+
+        assert contextvars.copy_context().run(run) is True
+
+    def test_a_restored_call_context_leaves_named_service_calls_open(self, monkeypatch):
+        import contextvars
+
+        from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import client_tools
+
+        def run():
+            _patch_heavy(monkeypatch)
+            _bootstrap_mod.bootstrap_bind_all(_spec_json(), module_names=[], bootstrap_env=False)
+            return client_tools.named_service_denials_unavailable()
+
+        assert contextvars.copy_context().run(run) is False

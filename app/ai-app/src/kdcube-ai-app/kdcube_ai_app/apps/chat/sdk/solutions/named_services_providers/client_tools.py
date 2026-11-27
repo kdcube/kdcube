@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -32,6 +34,20 @@ NAMED_SERVICE_DENIALS_CONTEXT_KEY = "named_service_denials"
 
 def _normalize_namespace_key(namespace: Any) -> str:
     return str(namespace or "").strip().lower().rstrip(":")
+
+
+# Set in an isolated runtime whose call context could not be restored: the
+# conversation's denials are unknown there, so named-service calls they govern
+# refuse instead of running with none.
+_DENIALS_UNAVAILABLE = ContextVar("named_service_denials_unavailable", default=False)
+
+
+def mark_named_service_denials_unavailable() -> None:
+    _DENIALS_UNAVAILABLE.set(True)
+
+
+def named_service_denials_unavailable() -> bool:
+    return bool(_DENIALS_UNAVAILABLE.get())
 
 
 def _read_denials() -> Mapping[str, Any]:

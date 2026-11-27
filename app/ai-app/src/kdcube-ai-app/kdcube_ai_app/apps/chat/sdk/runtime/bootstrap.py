@@ -59,6 +59,17 @@ except Exception:  # pragma: no cover
 _LEGACY_ENVELOPE_KINDS = frozenset({"json", "pickle_b64", "repr"})
 
 
+
+def _mark_named_service_denials_unavailable() -> None:
+    """The conversation's named-service denials did not reach this runtime."""
+    try:
+        from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+            mark_named_service_denials_unavailable,
+        )
+        mark_named_service_denials_unavailable()
+    except Exception:
+        print("named-service denials could not be marked unavailable", file=sys.stderr)
+
 def _decode_value(packed: Any) -> Any:
     """Decode one generic ContextVar snapshot value.
 
@@ -457,6 +468,7 @@ def bootstrap_bind_all(spec_json: str, *,
             _comm_ctx.restore_ctxvars(spec.contextvars["comm_ctx"])
     except Exception:
         print("comm_ctx restore failed", file=sys.stderr)
+        _mark_named_service_denials_unavailable()
 
     # 4) make services/registry once
     try:
@@ -601,6 +613,7 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
             print(f"comm_ctx restore done")
     except Exception:
         print(f"comm_ctx restore failed {traceback.format_exc()}", file=sys.stderr)
+        _mark_named_service_denials_unavailable()
 
     # 4) Build services/registry/integrations; bind into tool module
     try:
