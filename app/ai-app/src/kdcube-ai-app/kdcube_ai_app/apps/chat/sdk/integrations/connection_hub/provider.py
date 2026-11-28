@@ -348,6 +348,47 @@ class ConnectionsProviderBase(NamedServiceProvider):
             object=result,
         )
 
+    async def agent_capability_publish(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+    ) -> NamedServiceResponse:
+        """The application's deployment publishes one agent's shared descriptor Control."""
+
+        payload = dict(request.payload or {})
+        missing = [key for key in ("application", "agent_id", "descriptor_revision")
+                   if not str(payload.get(key) or "").strip()]
+        missing += [key for key in ("descriptor_payload", "capability_authority")
+                    if not isinstance(payload.get(key), Mapping)]
+        if missing:
+            return self._error(
+                "connections_agent_capability_args_required",
+                f"Required capability publication fields are missing or invalid: {', '.join(missing)}",
+                status=400,
+            )
+        try:
+            result = dict(await self.publish_agent_capabilities(ctx, payload=payload) or {})
+        except Exception:
+            result = {"ok": False, "error": "connections_agent_capability_publish_failed", "retryable": True,
+                      "status": 503}
+        if result.get("ok") is not True:
+            from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
+
+            failure = capability_sync_failure(result, code="connections_agent_capability_publish_failed")
+            return NamedServiceResponse.error_response(
+                code=failure["error"],
+                message=failure["error"],
+                status=failure["status"],
+                details=failure,
+                provider=self.provider_identity(),
+                namespace=NAMESPACE,
+            )
+        return NamedServiceResponse.ok_response(
+            provider=self.provider_identity(),
+            namespace=NAMESPACE,
+            object=result,
+        )
+
     # ── error helper ─────────────────────────────────────────────────────────
 
     def _error(self, code: str, message: str, *, status: int = 500) -> NamedServiceResponse:
@@ -443,6 +484,21 @@ class ConnectionsProviderBase(NamedServiceProvider):
         return {
             "ok": False,
             "error": "agent_capability_sync_not_supported",
+            "status": 501,
+        }
+
+    async def publish_agent_capabilities(
+        self,
+        ctx: NamedServiceContext,
+        *,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Only the Connection Hub host publishes a shared descriptor Control."""
+
+        del ctx, payload
+        return {
+            "ok": False,
+            "error": "agent_capability_publish_not_supported",
             "status": 501,
         }
 

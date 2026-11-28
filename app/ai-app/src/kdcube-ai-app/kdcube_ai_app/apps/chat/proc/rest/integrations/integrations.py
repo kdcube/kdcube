@@ -59,6 +59,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery im
     RedisNamedServiceDiscovery,
     bind_named_service_discovery,
 )
+from kdcube_ai_app.apps.chat.proc.app_deployment.descriptor_controls import make_descriptor_control_publisher
+from kdcube_ai_app.apps.chat.sdk.infra.descriptor_control_publisher import bind_descriptor_control_publisher
+from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.delegated_credentials.catalog.assembly import (
+    CONNECTION_HUB_BUNDLE_ID,
+)
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
     BUNDLE_OPERATION_CALLER_NOT_ALLOWED,
     bind_peer_caller_bundle_id,
@@ -6679,6 +6684,14 @@ async def _call_bundle_op_phases(
             bind_bundle_operation_caller(_call_peer_bundle_operation),
             bind_bundle_operation_stream_caller(_call_peer_bundle_operation_stream),
             bind_peer_caller_bundle_id(peer_caller_bundle_id),
+            # Only Connection Hub may ask for an agent's descriptor Control to be
+            # published now; every other application sees the port unbound.
+            bind_descriptor_control_publisher(
+                make_descriptor_control_publisher(
+                    tenant=tenant_id, project=project_id, redis=peer_redis,
+                    pg_pool=lambda: _get_app_pg_pool(request))
+                if spec_resolved.id == CONNECTION_HUB_BUNDLE_ID else None
+            ),
         ):
             _mark_peer_phase(phases, "prep")
             result = await _invoke_bundle_callable(fn, **extra)

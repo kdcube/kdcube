@@ -57,12 +57,14 @@ APP + AGENT DESCRIPTOR
   capability_metadata                   labels, descriptions, presentation
   delegated_catalog operation grants    service-operation -> grant vocabulary
               |
-              v  agent_capability.sync
-STABLE CREDENTIALLESS CONTROL CARD
+              v  agent_capability.publish (the app's deployment)
+STABLE CREDENTIALLESS CONTROL CARD, ONE PER AGENT
   exact resource urn:kdcube:app:<tenant>:<project>:<app>:<agent>
+  held by the application, shared by every user of the agent
   current descriptor authority; composition = AND
               |
               | linked when the user's stable Agent Card is created
+              | (agent_capability.sync reads it, never writes it)
               v
 STABLE AGENT CARD
   positive defaults explicitly selected for this user and agent
@@ -81,7 +83,8 @@ EFFECTIVE PROJECTION
               +-- picker state for the same catalog rows
 ```
 
-`agent_capability.sync` resolves the current Control Card and Agent Card. On
+`agent_capability.sync` reads the current shared Control Card and resolves the
+user's Agent Card; it never writes the Control. On
 the first materialized read for a conversation, KDCube stores the Agent Card
 selection as both provenance and the conversation's initial selection. The
 Agent Card is a default, not a second ceiling: that conversation can later
@@ -215,8 +218,10 @@ The descriptor can offer these user-selectable families:
 
 ## Creation, edits, and descriptor changes
 
-The Control Card id is deterministic for the grantor, descriptor issuer kind,
-and exact app/agent resource. The Agent Card id is deterministic for
+The Control Card id is deterministic for the application holder
+(`application-authority:<digest>` of tenant, project and application),
+descriptor issuer kind, and exact app/agent resource: one Control per agent,
+for every user. The Agent Card id is deterministic for
 the grantor and `kdcube-agent:<app>:<agent>` caller profile. Neither id includes
 the selected capability set.
 
@@ -242,27 +247,26 @@ containers. See
 [Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md)
 for that Card read-model contract.
 
-A platform administrator's Control Card save writes through to the exact
-application and agent entry in descriptor-owned bundle properties before the
-live Card update is reported successful. It carries the reviewed defaults,
-resource authority, named-service operations and bounded metadata under
-`agent_capability_control_overrides`. Changing the source descriptor and then
-synchronizing revises the same Control projection in the other direction.
-The active descriptor remains the outer ceiling in both cases.
-
-The concrete write path is:
-
-1. Connection Hub's `DelegatedAccessPanel.tsx` calls `mergeBundleProps()` in
-   `src/api/client.ts` for the exact application and agent.
-2. The administrator-only request reaches KDCube
-   `apps/chat/proc/rest/integrations/integrations.py::set_bundle_props`.
-3. KDCube persists the merge through
-   `infra/plugin/bundle_store.py::_put_bundle_props_locked`, which owns the
-   authoritative descriptor-backed application properties.
-
-Only after that request succeeds does Connection Hub submit the corresponding
-revision-checked Control Card update. A descriptor-write refusal therefore
-leaves the live Card unchanged.
+The Control has exactly two writers. The application's deployment publishes
+it with `agent_capability.publish`: when the app deploys (from the props
+re-read under the deployment's shared lock) and, as a fallback, when a user's
+sync answers `agent_descriptor_control_not_published` or
+`agent_descriptor_control_not_current` (only when that runtime's descriptor
+equals the props authority's, then the sync runs once more). At deploy, an
+unreachable or busy Hub is retried in the background and the app becomes ready
+meanwhile; a final refusal (a non-retryable answer) keeps the app not ready,
+retrying, as a failed widget declaration does, until its descriptor is fixed.
+The app's lifecycle state then reads `descriptor_control_refused:
+application=<id> ... agent=<agent> error=<code> reason=<reason>
+status=<status>` for each refused agent; only the Hub's codes cross back,
+never its message. A platform
+administrator edits it in the Connection Hub Card editor; the Save is one
+revision-checked Control Card update, recorded with the administrator as actor,
+and reaches every user's next governed call at once. Neither writes
+descriptor-owned bundle properties. A user's sync, picker save or consent never
+writes the Control; an Agent Card write is checked against the live Control and
+re-pins to it. See
+[Delegated Access Cards](https://github.com/elenaviter/app-ecosystem/blob/main/docs/connection-hub/package/delegated-cards.md#one-descriptor-control-per-agent).
 
 Both Card editors group child tools and operations beneath their tool group,
 MCP server, named service, or resource, and show declared descriptions in the

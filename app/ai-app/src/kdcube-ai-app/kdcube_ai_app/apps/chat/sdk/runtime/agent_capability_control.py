@@ -1484,43 +1484,158 @@ async def _sync_agent_capability_projection(
     if replace_selection:
         payload["replace_selection"] = True
 
-    from connection_hub.contract import AGENT_CAPABILITY_SYNC, NAMESPACE
-    from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
-        call_bundle_named_service,
-    )
-    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.connection_edges import (
-        connection_hub_bundle_id_from_entrypoint,
-    )
-    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
-        NamedServiceResponse,
-    )
-
-    try:
-        result = await call_bundle_named_service(
-            bundle_id=connection_hub_bundle_id_from_entrypoint(entrypoint),
-            request={
-                "namespace": NAMESPACE,
-                "operation": AGENT_CAPABILITY_SYNC,
-                "payload": payload,
-            },
-            tenant=tenant,
-            project=project,
-        )
-        response = NamedServiceResponse.coerce(result.value)
-    except Exception:
-        raise AgentCapabilityControlUnavailable("agent_capability_transport_unavailable") from None
+    response = await _call_connection_hub(entrypoint, "sync", payload, tenant=tenant, project=project)
+    if not response.ok and _error_code(response) in PUBLICATION_REFUSALS:
+        # The deployment publishes the shared Control; this runtime may
+        # publish too, but only a descriptor that equals the props authority's,
+        # so an instance holding older props never overwrites a newer one.
+        if await _descriptor_matches_authority(entrypoint, payload, catalog=catalog, identity=identity):
+            # The descriptor's own default seeds the Control, never this user's picks.
+            published = await publish_agent_capability_control(entrypoint, catalog=catalog, agent_id=agent_id)
+            # This publication ran outside the deployment's lock. If the
+            # authority moved meanwhile, this runtime is now the older one: stop
+            # here; the next sync of a current runtime (or the deployment)
+            # publishes the newer descriptor again.
+            if published.get("ok") is True and await _descriptor_matches_authority(
+                    entrypoint, payload, catalog=catalog, identity=identity):
+                response = await _call_connection_hub(entrypoint, "sync", payload, tenant=tenant, project=project)
     if not response.ok:
-        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
-
-        failure = capability_sync_failure({**dict(getattr(response.error, "details", {}) or {}),
-            "error": getattr(response.error, "code", "agent_capability_sync_failed"), "status": response.status})
-        raise AgentCapabilityControlUnavailable(failure["error"], reason=failure["reason"],
-            retryable=failure["retryable"], status=failure["status"],
-            control_committed=failure.get("control_committed"), card_committed=failure.get("card_committed"))
+        _raise_sync_failure(response)
     projection = response.object
     if not isinstance(projection.get("projection"), Mapping):
         raise AgentCapabilityControlUnavailable("agent_capability_projection_missing")
     return projection
+
+
+# A user's sync never writes the shared descriptor Control; these say the
+# deployment has not published this descriptor revision yet.
+PUBLICATION_REFUSALS = frozenset({
+    "agent_descriptor_control_not_published",
+    "agent_descriptor_control_not_current",
+})
+_PUBLICATION_KEYS = (
+    "application", "agent_id", "descriptor_revision", "descriptor_payload", "capability_authority",
+    "capability_metadata", "capability_catalog", "selected_capabilities", "conversation_target_resources",
+    "resource_grants", "resource_operations", "named_service_operations", "properties", "issuer_label",
+    "manage_url",
+)
+
+
+def _publication_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The descriptor part of a sync payload: never a user's selection replacement."""
+    return {key: copy.deepcopy(payload[key]) for key in _PUBLICATION_KEYS if key in payload}
+
+
+def _error_code(response: Any) -> str:
+    return str(getattr(getattr(response, "error", None), "code", "") or "")
+
+
+def _raise_sync_failure(response: Any) -> None:
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import capability_sync_failure
+
+    failure = capability_sync_failure({**dict(getattr(response.error, "details", {}) or {}),
+        "error": getattr(response.error, "code", "agent_capability_sync_failed"), "status": response.status})
+    raise AgentCapabilityControlUnavailable(failure["error"], reason=failure["reason"],
+        retryable=failure["retryable"], status=failure["status"],
+        control_committed=failure.get("control_committed"), card_committed=failure.get("card_committed"))
+
+
+async def _call_connection_hub(
+    entrypoint: Any, kind: str, payload: Mapping[str, Any], *, tenant: str, project: str,
+) -> Any:
+    from connection_hub.contract import AGENT_CAPABILITY_PUBLISH, AGENT_CAPABILITY_SYNC, NAMESPACE
+    from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_named_service
+    from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.connection_edges import (
+        connection_hub_bundle_id_from_entrypoint,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceResponse
+
+    operation = AGENT_CAPABILITY_PUBLISH if kind == "publish" else AGENT_CAPABILITY_SYNC
+    try:
+        result = await call_bundle_named_service(
+            bundle_id=connection_hub_bundle_id_from_entrypoint(entrypoint),
+            request={"namespace": NAMESPACE, "operation": operation, "payload": dict(payload)},
+            tenant=tenant,
+            project=project,
+        )
+        return NamedServiceResponse.coerce(result.value)
+    except Exception:
+        raise AgentCapabilityControlUnavailable("agent_capability_transport_unavailable") from None
+
+
+def _merge_props(entrypoint: Any, base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    merger = getattr(entrypoint, "_deep_merge_props", None)
+    if callable(merger):
+        return dict(merger(copy.deepcopy(dict(base or {})), dict(override or {})))
+    out = copy.deepcopy(dict(base or {}))
+    for key, value in dict(override or {}).items():
+        out[key] = (_merge_props(entrypoint, out[key], value)
+                    if isinstance(value, Mapping) and isinstance(out.get(key), Mapping) else copy.deepcopy(value))
+    return out
+
+
+async def _descriptor_matches_authority(
+    entrypoint: Any, payload: Mapping[str, Any], *, catalog: Mapping[str, Any], identity: Mapping[str, str],
+) -> bool:
+    """Whether this runtime's descriptor for the agent is the props authority's right now."""
+    from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props_from_authority
+
+    tenant, project = _text(identity.get("tenant")), _text(identity.get("project"))
+    application = _text(identity.get("bundle_id"))
+    try:
+        authority = await get_bundle_props_from_authority(tenant=tenant, project=project, bundle_id=application) or {}
+        defaults = getattr(entrypoint, "bundle_props_defaults", None) or {}
+        current = descriptor_capability_payload(
+            bundle_props=_merge_props(entrypoint, defaults, authority), catalog=catalog, tenant=tenant,
+            project=project, application=application, agent_id=_text(payload.get("agent_id")))
+    except Exception:
+        return False
+    return current.get("descriptor_revision") == payload.get("descriptor_revision")
+
+
+async def publish_agent_capability_control(
+    entrypoint: Any,
+    *,
+    catalog: Mapping[str, Any],
+    agent_id: str,
+    bundle_props: Mapping[str, Any] | None = None,
+    identity: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Publish one agent's shared descriptor Control as the application's deployment.
+
+    ``bundle_props`` are the props read from the authority under the
+    deployment's shared lock; the publication that commits last therefore
+    carries the newest descriptor. Returns the Hub's answer; a refusal comes
+    back as ``{"ok": False, "error", "reason", "retryable", "status"}`` and is
+    never raised.
+    """
+
+    # The deployment names its own scope; a request derives it from its context.
+    identity = identity or agent_capability_identity(entrypoint)
+    tenant, project = _text(identity.get("tenant")), _text(identity.get("project"))
+    application = _text(identity.get("bundle_id"))
+    if not tenant or not project or not application or not agent_id:
+        return {"ok": False, "error": "agent_capability_identity_missing"}
+    props = bundle_props if bundle_props is not None else getattr(entrypoint, "bundle_props", None)
+    payload = descriptor_capability_payload(bundle_props=props, catalog=catalog, tenant=tenant, project=project,
+                                            application=application, agent_id=agent_id)
+    if payload.get("descriptor_payload", {}).get("standard_authority_overridden"):
+        payload["selected_capabilities"] = copy.deepcopy(payload["capability_defaults"])
+    else:
+        payload["selected_capabilities"] = selected_capabilities_from_disabled(
+            authority=payload["capability_authority"], catalog=catalog, disabled={})
+    response = await _call_connection_hub(entrypoint, "publish", _publication_payload(payload),
+                                          tenant=tenant, project=project)
+    if not response.ok:
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import (
+            capability_sync_failure,
+        )
+
+        # Codes, status and retryability only; the Hub's message never crosses back.
+        return capability_sync_failure({**dict(getattr(response.error, "details", {}) or {}),
+            "error": _error_code(response) or "agent_capability_publish_failed", "status": response.status},
+            code="agent_capability_publish_failed")
+    return dict(response.object or {})
 
 
 __all__ = [
@@ -1535,6 +1650,7 @@ __all__ = [
     "disabled_from_projection",
     "intersect_capability_projections",
     "missing_control_capabilities",
+    "publish_agent_capability_control",
     "replace_capability_preferences",
     "selected_capabilities_from_disabled",
     "sync_agent_capability_projection",
