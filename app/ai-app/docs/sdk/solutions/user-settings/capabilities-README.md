@@ -252,7 +252,14 @@ it with `agent_capability.publish`: when the app deploys (from the props
 re-read under the deployment's shared lock) and, as a fallback, when a user's
 sync answers `agent_descriptor_control_not_published` or
 `agent_descriptor_control_not_current` (only when that runtime's descriptor
-equals the props authority's, then the sync runs once more). A platform
+equals the props authority's, then the sync runs once more). At deploy, an
+unreachable or busy Hub is retried in the background and the app becomes ready
+meanwhile; a final refusal (a non-retryable answer) keeps the app not ready,
+retrying, as a failed widget declaration does, until its descriptor is fixed.
+The app's lifecycle state then reads `descriptor_control_refused:
+application=<id> ... agent=<agent> error=<code> reason=<reason>
+status=<status>` for each refused agent; only the Hub's codes cross back,
+never its message. A platform
 administrator edits it in the Connection Hub Card editor; the Save is one
 revision-checked Control Card update, recorded with the administrator as actor,
 and reaches every user's next governed call at once. Neither writes

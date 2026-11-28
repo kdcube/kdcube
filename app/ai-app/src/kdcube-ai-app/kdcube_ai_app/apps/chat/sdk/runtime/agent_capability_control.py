@@ -1605,8 +1605,9 @@ async def publish_agent_capability_control(
 
     ``bundle_props`` are the props read from the authority under the
     deployment's shared lock; the publication that commits last therefore
-    carries the newest descriptor. Returns the Hub's answer; never raises for a
-    refused publication, which the caller logs.
+    carries the newest descriptor. Returns the Hub's answer; a refusal comes
+    back as ``{"ok": False, "error", "reason", "retryable", "status"}`` and is
+    never raised.
     """
 
     # The deployment names its own scope; a request derives it from its context.
@@ -1626,8 +1627,14 @@ async def publish_agent_capability_control(
     response = await _call_connection_hub(entrypoint, "publish", _publication_payload(payload),
                                           tenant=tenant, project=project)
     if not response.ok:
-        return {"ok": False, "error": _error_code(response) or "agent_capability_publish_failed",
-                "status": response.status}
+        from kdcube_ai_app.apps.chat.sdk.integrations.connection_hub.capability_errors import (
+            capability_sync_failure,
+        )
+
+        # Codes, status and retryability only; the Hub's message never crosses back.
+        return capability_sync_failure({**dict(getattr(response.error, "details", {}) or {}),
+            "error": _error_code(response) or "agent_capability_publish_failed", "status": response.status},
+            code="agent_capability_publish_failed")
     return dict(response.object or {})
 
 

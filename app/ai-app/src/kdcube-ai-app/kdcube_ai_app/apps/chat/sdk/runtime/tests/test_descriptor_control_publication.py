@@ -155,3 +155,29 @@ async def test_an_authority_that_moves_during_the_publication_stops_the_retry(au
         bundle_store.get_bundle_props_from_authority = saved
     assert [c["operation"] for c in calls] == [SYNC, PUBLISH]
     assert caught.value.code == "agent_descriptor_control_not_published"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_publication_returns_codes_and_retryability_never_the_hub_message() -> None:
+    async def call(request):
+        return BundleNamedServiceResult(value=NamedServiceResponse.error_response(
+            code="agent_descriptor_invalid", message="internal detail /srv/secret-path", status=422,
+            details={"reason": "unknown_operation", "path": "/srv/secret-path"}))
+
+    with bind_bundle_named_service_caller(call):
+        answer = await publish_agent_capability_control(_owner(), catalog=_catalog(), agent_id=AGENT,
+                                                        bundle_props=_props())
+    assert answer == {"ok": False, "error": "agent_descriptor_invalid", "reason": "unknown_operation",
+                      "retryable": False, "status": 422}
+
+
+@pytest.mark.asyncio
+async def test_a_busy_hub_answer_is_retryable() -> None:
+    async def call(request):
+        return BundleNamedServiceResult(value=NamedServiceResponse.error_response(
+            code="card_lock_busy", message="busy", status=503))
+
+    with bind_bundle_named_service_caller(call):
+        answer = await publish_agent_capability_control(_owner(), catalog=_catalog(), agent_id=AGENT,
+                                                        bundle_props=_props())
+    assert answer["ok"] is False and answer["retryable"] is True and answer["error"] == "card_lock_busy"

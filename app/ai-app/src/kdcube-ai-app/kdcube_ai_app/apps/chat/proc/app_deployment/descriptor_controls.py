@@ -16,8 +16,11 @@ resource-phase lock; an on-demand publication takes only this one.
 - A deployment that cannot reach Connection Hub (not loaded yet, or failing)
   retries in the background and does not hold the application back: a user's
   first sync of a new revision publishes it too.
-- A refusal by Connection Hub fails the deployment's resource phase, so no
-  generation is recorded as done with an unpublished descriptor.
+- A refusal by Connection Hub (a final answer, not a busy or failing one)
+  fails the deployment's resource phase, so no generation is recorded as done
+  with an unpublished descriptor. The application is not ready until its
+  descriptor is fixed; its lifecycle state names each refused agent with the
+  Hub's code, reason and status.
 - Connection Hub may ask for an on-demand publication of one agent (when an
   administrator opens that agent's Control) through
   ``sdk/infra/descriptor_control_publisher.py``; the platform answers it with
@@ -75,12 +78,30 @@ _RETRIES: set[asyncio.Task] = set()
 
 
 class DescriptorControlRefused(RuntimeError):
-    """Connection Hub refused a deployment's descriptor Control publication."""
+    """Connection Hub refused a deployment's descriptor Control publication.
 
-    def __init__(self, outcomes: Mapping[str, str]) -> None:
-        super().__init__("descriptor_control_refused: " + ", ".join(
-            f"{agent}={outcome}" for agent, outcome in sorted(outcomes.items())))
+    Its text is what the application's lifecycle state shows: the application,
+    each refused agent with the Hub's code, reason and status, and what to do.
+    """
+
+    def __init__(self, outcomes: Mapping[str, str], *, bundle_id: str = "",
+                 failures: Mapping[str, Mapping[str, Any]] | None = None) -> None:
+        failures = dict(failures or {})
+        rows = []
+        for agent, outcome in sorted(outcomes.items()):
+            failure = failures.get(agent) or {}
+            reason, status = failure.get("reason"), failure.get("status")
+            row = f"agent={agent} error={outcome.removeprefix('refused:')}"
+            if reason and reason != outcome.removeprefix("refused:"):
+                row += f" reason={reason}"
+            if status:
+                row += f" status={status}"
+            rows.append(row)
+        scope = f" application={bundle_id}" if bundle_id else ""
+        super().__init__(f"descriptor_control_refused:{scope} Connection Hub refused the descriptor Control of "
+                         + "; ".join(rows) + ". Fix the agent's descriptor, then reload the application.")
         self.outcomes = dict(outcomes)
+        self.failures = failures
 
 
 def _current(outcome: str) -> bool:
@@ -104,7 +125,8 @@ async def descriptor_control_publish_lock(storage_root: Any, *, bundle_id: str,
 
 
 async def _publish_agents(*, workflow: Any, tenant: str, project: str, bundle_id: str, agents: Sequence[str],
-                          props: Mapping[str, Any], redis: Any, pg_pool: Any) -> dict[str, str]:
+                          props: Mapping[str, Any], redis: Any, pg_pool: Any,
+                          failures: dict[str, Mapping[str, Any]] | None = None) -> dict[str, str]:
     """Publish ``agents`` as the application: its own context and a caller built for it, never a request's."""
     from kdcube_ai_app.apps.chat.sdk.runtime.agent_capability_control import publish_agent_capability_control
     from kdcube_ai_app.apps.chat.sdk.runtime.agent_inventory import agent_capabilities_catalog
@@ -126,8 +148,12 @@ async def _publish_agents(*, workflow: Any, tenant: str, project: str, bundle_id
                 continue
             if answer.get("ok") is True:
                 outcomes[agent_id] = "published" if answer.get("control_changed") else "unchanged"
-            else:
-                outcomes[agent_id] = f"refused:{answer.get('error') or 'unknown'}"
+                continue
+            code = answer.get("error") or "unknown"
+            # A busy or failing Hub answers too: only a final answer is a refusal.
+            outcomes[agent_id] = f"failed:{code}" if answer.get("retryable") is True else f"refused:{code}"
+            if failures is not None:
+                failures[agent_id] = answer
     return outcomes
 
 
@@ -155,20 +181,24 @@ async def publish_agent_descriptor_controls(
     if not agents:
         return {}
 
-    async def _once(current: Mapping[str, Any], names: Sequence[str]) -> dict[str, str]:
+    async def _once(current: Mapping[str, Any], names: Sequence[str],
+                    failures: dict[str, Mapping[str, Any]] | None = None) -> dict[str, str]:
         if storage_root is None:
             return await _publish_agents(workflow=workflow, tenant=tenant, project=project, bundle_id=bundle_id,
-                                         agents=names, props=current, redis=redis, pg_pool=pg_pool)
+                                         agents=names, props=current, redis=redis, pg_pool=pg_pool,
+                                         failures=failures)
         async with descriptor_control_publish_lock(storage_root, bundle_id=bundle_id,
                                                    wait_seconds=DEPLOY_LOCK_WAIT_SECONDS):
             return await _publish_agents(workflow=workflow, tenant=tenant, project=project, bundle_id=bundle_id,
-                                         agents=names, props=current, redis=redis, pg_pool=pg_pool)
+                                         agents=names, props=current, redis=redis, pg_pool=pg_pool,
+                                         failures=failures)
 
-    outcomes = await _once(props, agents)
+    failures: dict[str, Mapping[str, Any]] = {}
+    outcomes = await _once(props, agents, failures)
     _log(logger, f"[bundle.deploy.descriptor-controls] bundle={bundle_id} outcomes={outcomes}", "INFO")
     refused = {agent: outcome for agent, outcome in outcomes.items() if outcome.startswith("refused:")}
     if refused:
-        raise DescriptorControlRefused(refused)
+        raise DescriptorControlRefused(refused, bundle_id=bundle_id, failures=failures)
     unreached = [agent for agent, outcome in outcomes.items() if not _current(outcome)]
     if unreached:
         task = asyncio.ensure_future(_retry(_once, reread=reread, props=props, agents=unreached,

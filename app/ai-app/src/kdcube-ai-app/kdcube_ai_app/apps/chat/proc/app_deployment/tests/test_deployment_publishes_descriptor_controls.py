@@ -5,8 +5,8 @@
 The publication runs in the application's own identity-free context (as a
 headless bundle job's), so the Connection Hub host sees the calling app as the
 platform-bound source. It uses the props the deployment re-read under its
-lock. An unreachable Hub is retried in the background; a refusal fails the
-resource phase. Connection Hub can ask for one agent's publication now, for an
+lock. An unreachable or busy Hub is retried in the background; a final
+refusal fails the resource phase, and its text names each refused agent. Connection Hub can ask for one agent's publication now, for an
 application that is ready in this process.
 """
 
@@ -71,7 +71,8 @@ async def test_a_refusal_fails_the_deployment_and_an_unreachable_hub_is_retried(
     async def publish(workflow, *, catalog, agent_id, bundle_props, identity):
         if agent_id == "main":
             raise RuntimeError("hub unavailable")
-        return {"ok": False, "error": "issuer_managed_card"}
+        return {"ok": False, "error": "issuer_managed_card", "reason": "issuer_managed_card",
+                "retryable": False, "status": 409}
 
     monkeypatch.setattr(agent_capability_control, "publish_agent_capability_control", publish)
     monkeypatch.setattr(agent_inventory, "agent_capabilities_catalog", lambda *a, **k: {})
@@ -80,6 +81,67 @@ async def test_a_refusal_fails_the_deployment_and_an_unreachable_hub_is_retried(
             workflow=SimpleNamespace(), tenant="t", project="p", bundle_id="app@1-0", props=PROPS,
             redis=None, pg_pool=None)
     assert refused.value.outcomes == {"helper": "refused:issuer_managed_card"}
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_text_names_the_application_each_agent_and_the_hub_codes(monkeypatch) -> None:
+    from kdcube_ai_app.infra.plugin.app_readiness import (
+        ApplicationLifecycleState,
+        ApplicationReadinessRegistry,
+        DesiredApplicationState,
+    )
+
+    async def publish(workflow, *, catalog, agent_id, bundle_props, identity):
+        return {"ok": False, "error": "agent_descriptor_invalid", "reason": "unknown_operation",
+                "retryable": False, "status": 422}
+
+    monkeypatch.setattr(agent_capability_control, "publish_agent_capability_control", publish)
+    monkeypatch.setattr(agent_inventory, "agent_capabilities_catalog", lambda *a, **k: {})
+    with pytest.raises(descriptor_controls.DescriptorControlRefused) as refused:
+        await descriptor_controls.publish_agent_descriptor_controls(
+            workflow=SimpleNamespace(), tenant="t", project="p", bundle_id="app@1-0",
+            props={"surfaces": {"as_consumer": {"agents": {"main": {}}}}}, redis=None, pg_pool=None)
+    text = str(refused.value)
+    assert text == ("descriptor_control_refused: application=app@1-0 Connection Hub refused the descriptor "
+                    "Control of agent=main error=agent_descriptor_invalid reason=unknown_operation status=422. "
+                    "Fix the agent's descriptor, then reload the application.")
+
+    registry = ApplicationReadinessRegistry()
+    registry.replace_desired(tenant="t", project="p",
+                             applications={"app@1-0": DesiredApplicationState(generation="g1")})
+    registry.transition(tenant="t", project="p", application_id="app@1-0", generation="g1",
+                        state=ApplicationLifecycleState.RETRYING, attempt=1, error=refused.value)
+    snapshot = registry.snapshot(tenant="t", project="p", application_id="app@1-0")
+    assert snapshot.error_code == "DescriptorControlRefused" and snapshot.error_message == text
+
+
+@pytest.mark.asyncio
+async def test_a_busy_hub_answer_is_retried_and_never_fails_the_deployment(monkeypatch) -> None:
+    import asyncio
+
+    answers = [{"ok": False, "error": "card_lock_busy", "retryable": True, "status": 503},
+               {"ok": True, "control_changed": True}]
+
+    async def publish(workflow, *, catalog, agent_id, bundle_props, identity):
+        return answers.pop(0)
+
+    props = {"surfaces": {"as_consumer": {"agents": {"main": {}}}}}
+
+    async def reread():
+        return props
+
+    monkeypatch.setattr(agent_capability_control, "publish_agent_capability_control", publish)
+    monkeypatch.setattr(agent_inventory, "agent_capabilities_catalog", lambda *a, **k: {})
+    monkeypatch.setattr(descriptor_controls, "RETRY_DELAYS_SECONDS", (0.0,))
+    outcomes = await descriptor_controls.publish_agent_descriptor_controls(
+        workflow=SimpleNamespace(), tenant="t", project="p", bundle_id="app@1-0", props=props,
+        redis=None, pg_pool=None, reread=reread)
+    assert outcomes == {"main": "failed:card_lock_busy"}
+    for _ in range(50):
+        if not answers:
+            break
+        await asyncio.sleep(0.01)
+    assert answers == []
 
 
 @pytest.mark.asyncio
