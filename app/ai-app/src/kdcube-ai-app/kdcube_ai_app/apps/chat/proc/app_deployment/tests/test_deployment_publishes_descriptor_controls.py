@@ -5,11 +5,14 @@
 The publication runs in the application's own identity-free context (as a
 headless bundle job's), so the Connection Hub host sees the calling app as the
 platform-bound source. It uses the props the deployment re-read under its
-lock, and a refusal or failure never fails the deployment.
+lock. An unreachable Hub is retried in the background; a refusal fails the
+resource phase. Connection Hub can ask for one agent's publication now, for an
+application that is ready in this process.
 """
 
 from __future__ import annotations
 
+import pathlib
 from types import SimpleNamespace
 
 import pytest
@@ -64,7 +67,7 @@ async def test_each_agent_is_published_as_the_application_with_the_reread_props(
 
 
 @pytest.mark.asyncio
-async def test_a_refused_or_failing_publication_never_fails_the_deployment(monkeypatch) -> None:
+async def test_a_refusal_fails_the_deployment_and_an_unreachable_hub_is_retried(monkeypatch) -> None:
     async def publish(workflow, *, catalog, agent_id, bundle_props, identity):
         if agent_id == "main":
             raise RuntimeError("hub unavailable")
@@ -72,12 +75,43 @@ async def test_a_refused_or_failing_publication_never_fails_the_deployment(monke
 
     monkeypatch.setattr(agent_capability_control, "publish_agent_capability_control", publish)
     monkeypatch.setattr(agent_inventory, "agent_capabilities_catalog", lambda *a, **k: {})
+    with pytest.raises(descriptor_controls.DescriptorControlRefused) as refused:
+        await descriptor_controls.publish_agent_descriptor_controls(
+            workflow=SimpleNamespace(), tenant="t", project="p", bundle_id="app@1-0", props=PROPS,
+            redis=None, pg_pool=None)
+    assert refused.value.outcomes == {"helper": "refused:issuer_managed_card"}
 
+
+@pytest.mark.asyncio
+async def test_an_unreachable_hub_retries_in_the_background_from_the_reread_props(monkeypatch) -> None:
+    import asyncio
+
+    calls = {"n": 0}
+
+    async def publish(workflow, *, catalog, agent_id, bundle_props, identity):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("hub not loaded yet")
+        return {"ok": True, "control_changed": True}
+
+    rereads = []
+
+    async def reread():
+        rereads.append(1)
+        return {"surfaces": {"as_consumer": {"agents": {"main": {}}}}}
+
+    monkeypatch.setattr(agent_capability_control, "publish_agent_capability_control", publish)
+    monkeypatch.setattr(agent_inventory, "agent_capabilities_catalog", lambda *a, **k: {})
+    monkeypatch.setattr(descriptor_controls, "RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
     outcomes = await descriptor_controls.publish_agent_descriptor_controls(
-        workflow=SimpleNamespace(), tenant="t", project="p", bundle_id="app@1-0", props=PROPS,
-        redis=None, pg_pool=None)
-
-    assert outcomes == {"helper": "refused:issuer_managed_card", "main": "failed:RuntimeError"}
+        workflow=SimpleNamespace(), tenant="t", project="p", bundle_id="app@1-0",
+        props={"surfaces": {"as_consumer": {"agents": {"main": {}}}}}, redis=None, pg_pool=None, reread=reread)
+    assert outcomes == {"main": "failed:RuntimeError"}, "the deployment goes on"
+    for _ in range(50):
+        if calls["n"] >= 3:
+            break
+        await asyncio.sleep(0.01)
+    assert calls["n"] == 3 and len(rereads) == 2
 
 
 @pytest.mark.asyncio
@@ -134,3 +168,124 @@ async def test_the_app_deployment_publishes_from_the_props_reread_under_its_lock
     call = published[0]
     assert (call["tenant"], call["project"], call["bundle_id"]) == ("tenant-a", "project-a", "app@1-0")
     assert call["props"]["surfaces"]["as_consumer"]["agents"]["main"]["revision"] == reads["count"] > 1
+
+
+class _Workflow(SimpleNamespace):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_an_on_demand_publication_is_the_applications_even_inside_an_administrators_request(
+        monkeypatch, tmp_path) -> None:
+    from kdcube_ai_app.apps.chat.sdk.protocol import (
+        ExternalEventActor, ExternalEventPayload, ExternalEventRouting, ExternalEventUser,
+    )
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+
+    seen = []
+
+    async def publish(workflow, *, catalog, agent_id, bundle_props, identity):
+        context = get_current_request_context()
+        seen.append((agent_id, context.routing.bundle_id, context.user.user_type))
+        return {"ok": True, "control_changed": False}
+
+    monkeypatch.setattr(agent_capability_control, "publish_agent_capability_control", publish)
+    monkeypatch.setattr(agent_inventory, "agent_capabilities_catalog", lambda *a, **k: {})
+    admin = ExternalEventPayload(actor=ExternalEventActor(tenant_id="t", project_id="p"),
+                                 routing=ExternalEventRouting(bundle_id="connection-hub@1-0", session_id="s"),
+                                 user=ExternalEventUser(user_type="privileged", user_id="admin-1"))
+    with bind_current_request_context(admin, comm=None):
+        outcome = await descriptor_controls.publish_agent_descriptor_control_now(
+            workflow=_Workflow(), tenant="t", project="p", bundle_id="app@1-0", agent_id="main", props=PROPS,
+            redis=None, pg_pool=None, storage_root=tmp_path)
+    assert outcome == "unchanged"
+    assert seen == [("main", "app@1-0", "anonymous")], "published as the application, never as the administrator"
+
+
+@pytest.mark.asyncio
+async def test_an_on_demand_publication_refuses_an_agent_the_application_no_longer_declares(tmp_path) -> None:
+    outcome = await descriptor_controls.publish_agent_descriptor_control_now(
+        workflow=_Workflow(), tenant="t", project="p", bundle_id="app@1-0", agent_id="gone", props=PROPS,
+        redis=None, pg_pool=None, storage_root=tmp_path)
+    assert outcome == "refused:agent_not_declared"
+
+
+@pytest.mark.asyncio
+async def test_an_on_demand_publication_is_busy_while_a_deployment_publishes(monkeypatch, tmp_path) -> None:
+    async def publish(*_a, **_k):
+        raise AssertionError("must not publish while the deployment holds the lock")
+
+    monkeypatch.setattr(agent_capability_control, "publish_agent_capability_control", publish)
+    async with descriptor_controls.descriptor_control_publish_lock(tmp_path, bundle_id="app@1-0", wait_seconds=1):
+        outcome = await descriptor_controls.publish_agent_descriptor_control_now(
+            workflow=_Workflow(), tenant="t", project="p", bundle_id="app@1-0", agent_id="main", props=PROPS,
+            redis=None, pg_pool=None, storage_root=tmp_path, wait_seconds=0.2)
+    assert outcome == "busy"
+
+
+@pytest.mark.asyncio
+async def test_the_publisher_never_loads_an_application_that_is_not_ready(monkeypatch) -> None:
+    from kdcube_ai_app.infra.plugin import app_readiness, bundle_loader
+
+    async def load(*_a, **_k):
+        raise AssertionError("an editor request must not load an application")
+
+    monkeypatch.setattr(bundle_loader, "get_workflow_instance_async", load)
+    monkeypatch.setattr(app_readiness.application_readiness_registry, "snapshot", lambda **_k: None)
+    publisher = descriptor_controls.make_descriptor_control_publisher(tenant="t", project="p", redis=None,
+                                                                      pg_pool=None)
+    assert await publisher("app@1-0", "main") == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_the_publisher_reads_the_props_the_deployment_reads(monkeypatch, tmp_path) -> None:
+    """Code defaults merged through the loaded instance: an agent declared only there is published too."""
+    from kdcube_ai_app.apps.chat.proc.app_deployment import coordinator
+    from kdcube_ai_app.infra.plugin import app_readiness, bundle_loader, bundle_store
+    from kdcube_ai_app.infra.service_hub import inventory
+
+    workflow = _Workflow(bundle_props_defaults={"surfaces": {"as_consumer": {"agents": {"coded": {}}}}},
+                         bundle_storage_root=lambda: tmp_path)
+
+    async def load(*_a, **_k):
+        return workflow, None
+
+    async def authority(**_k):
+        return {"surfaces": {"as_consumer": {"agents": {"main": {}}}}}
+
+    async def spec(*_a, **_k):
+        return SimpleNamespace(id="app@1-0", path="/bundles/app", module="entrypoint", singleton=False)
+
+    async def secrets(request, **_k):
+        return request
+
+    published = []
+
+    async def publish(workflow, *, catalog, agent_id, bundle_props, identity):
+        published.append((agent_id, sorted(bundle_props["surfaces"]["as_consumer"]["agents"])))
+        return {"ok": True, "control_changed": True}
+
+    monkeypatch.setattr(app_readiness.application_readiness_registry, "snapshot",
+                        lambda **_k: SimpleNamespace(ready=True))
+    monkeypatch.setattr(bundle_loader, "get_workflow_instance_async", load)
+    monkeypatch.setattr(bundle_store, "resolve_bundle_spec_from_store", spec)
+    monkeypatch.setattr(inventory, "resolve_config_request_secrets", secrets)
+    monkeypatch.setattr(inventory, "create_workflow_config", lambda request: SimpleNamespace())
+    monkeypatch.setattr(coordinator, "get_bundle_props_from_authority", authority)
+    monkeypatch.setattr(agent_capability_control, "publish_agent_capability_control", publish)
+    monkeypatch.setattr(agent_inventory, "agent_capabilities_catalog", lambda *a, **k: {})
+    publisher = descriptor_controls.make_descriptor_control_publisher(tenant="t", project="p", redis=None,
+                                                                      pg_pool=None)
+    assert await publisher("app@1-0", "coded") == "published"
+    assert published == [("coded", ["coded", "main"])]
+
+
+def test_only_connection_hub_requests_get_a_publisher() -> None:
+    from kdcube_ai_app.apps.chat.sdk.infra.descriptor_control_publisher import (
+        get_current_descriptor_control_publisher,
+    )
+
+    assert get_current_descriptor_control_publisher() is None
+    source = (pathlib.Path(descriptor_controls.__file__).parents[1] / "rest" / "integrations"
+              / "integrations.py").read_text()
+    assert "if spec_resolved.id == CONNECTION_HUB_BUNDLE_ID else None" in source

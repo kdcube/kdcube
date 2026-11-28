@@ -196,6 +196,32 @@ def apply_effective_props(workflow: Any, descriptor_props: Mapping[str, Any]) ->
     return dict(getattr(workflow, "bundle_props", None) or effective)
 
 
+async def effective_props_now(
+    workflow: Any,
+    *,
+    tenant: str,
+    project: str,
+    bundle_id: str,
+    transform: Callable[[dict[str, Any]], Mapping[str, Any] | Awaitable[Mapping[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """The application's effective props as the authority holds them right now.
+
+    The authority's props, merged with the application's code defaults through
+    its loaded ``workflow``, then the application's own ``transform`` when it
+    has one. A deployment and an on-demand publication read props this one way.
+    """
+    fresh = await get_bundle_props_from_authority(tenant=tenant, project=project, bundle_id=bundle_id) or {}
+    reread = apply_effective_props(workflow, fresh)
+    if transform is not None:
+        transformed = transform(copy.deepcopy(reread))
+        if inspect.isawaitable(transformed):
+            transformed = await transformed
+        if not isinstance(transformed, Mapping):
+            raise TypeError("effective_props_transform must return a mapping")
+        reread = apply_effective_props(workflow, transformed)
+    return reread
+
+
 def select_hook_kwargs(hook: Any, provided: dict[str, Any]) -> dict[str, Any]:
     try:
         signature = inspect.signature(hook)
@@ -374,20 +400,8 @@ async def deploy_loaded_bundle_app_resources(
         have moved between this reconcile reading them and the hook acquiring
         that lock.
         """
-        fresh = await get_bundle_props_from_authority(
-            tenant=tenant,
-            project=project,
-            bundle_id=bundle_id,
-        ) or {}
-        reread = apply_effective_props(workflow, fresh)
-        if effective_props_transform is not None:
-            transformed = effective_props_transform(copy.deepcopy(reread))
-            if inspect.isawaitable(transformed):
-                transformed = await transformed
-            if not isinstance(transformed, Mapping):
-                raise TypeError("effective_props_transform must return a mapping")
-            reread = apply_effective_props(workflow, transformed)
-        return reread
+        return await effective_props_now(workflow, tenant=tenant, project=project, bundle_id=bundle_id,
+                                         transform=effective_props_transform)
 
     async def _deploy_app_resources() -> None:
         await _invoke_on_app_deploy(
@@ -407,14 +421,21 @@ async def deploy_loaded_bundle_app_resources(
         # The application's agents' shared descriptor Controls, published
         # from the props re-read under this lock (never a user's sync).
         from kdcube_ai_app.apps.chat.proc.app_deployment.descriptor_controls import (
+            DescriptorControlRefused,
             publish_agent_descriptor_controls,
         )
 
+        # An unreachable Hub retries in the background and never holds the
+        # application back; a refusal fails this phase, so no generation is
+        # recorded as done with an unpublished descriptor.
         try:
             await publish_agent_descriptor_controls(
                 workflow=workflow, tenant=tenant, project=project, bundle_id=bundle_id,
-                props=await _reread_effective_props(), redis=redis, pg_pool=pg_pool, logger=logger)
-        except Exception as exc:  # the Controls never block the app's deployment
+                props=await _reread_effective_props(), redis=redis, pg_pool=pg_pool, logger=logger,
+                storage_root=storage_root, reread=_reread_effective_props)
+        except DescriptorControlRefused:
+            raise
+        except Exception as exc:  # noqa: BLE001 - e.g. the publication lock: the next deployment or sync publishes
             logger.log(f"[bundle.deploy.descriptor-controls] skipped bundle={bundle_id}: {type(exc).__name__}",
                        "WARNING")
 
