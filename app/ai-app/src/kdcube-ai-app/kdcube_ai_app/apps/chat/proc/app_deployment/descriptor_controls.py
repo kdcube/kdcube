@@ -259,10 +259,14 @@ def make_descriptor_control_publisher(*, tenant: str, project: str, redis: Any, 
 
     It publishes only for an application that is ready in this process, from
     that application's loaded instance and its effective props; it never
-    loads an application.
+    loads an application. ``pg_pool`` may be a callable resolved only when a
+    publication runs, so binding the publisher never requires a pool.
     """
 
     async def publish(application_id: str, agent_id: str) -> str:
+        nonlocal pg_pool
+        if callable(pg_pool):
+            pg_pool = pg_pool()
         from kdcube_ai_app.apps.chat.proc.app_deployment.coordinator import effective_props_now
         from kdcube_ai_app.infra.plugin.app_readiness import application_readiness_registry
         from kdcube_ai_app.infra.plugin.bundle_loader import BundleSpec, get_workflow_instance_async

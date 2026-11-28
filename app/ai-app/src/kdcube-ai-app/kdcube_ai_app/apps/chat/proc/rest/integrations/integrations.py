@@ -6688,7 +6688,8 @@ async def _call_bundle_op_phases(
             # published now; every other application sees the port unbound.
             bind_descriptor_control_publisher(
                 make_descriptor_control_publisher(
-                    tenant=tenant_id, project=project_id, redis=peer_redis, pg_pool=_get_app_pg_pool(request))
+                    tenant=tenant_id, project=project_id, redis=peer_redis,
+                    pg_pool=lambda: _get_app_pg_pool(request))
                 if spec_resolved.id == CONNECTION_HUB_BUNDLE_ID else None
             ),
         ):
